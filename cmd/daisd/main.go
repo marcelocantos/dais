@@ -90,6 +90,15 @@ Messages arrive in this format:
 Respond to all events that need a response. If multiple events arrive
 together, address them in a natural conversational flow.
 
+## Directory Layout
+
+All repos live under ` + "`~/work/github.com/<org>/<repo>`" + `. For example:
+- ` + "`~/work/github.com/marcelocantos/dais`" + `
+- ` + "`~/work/github.com/squz/multimaze`" + `
+- ` + "`~/work/github.com/minicadesmobile/kart-stars`" + `
+
+When creating workers for a repo, set the workdir accordingly.
+
 ## Tool Restrictions
 
 You may ONLY use the Bash tool to run ` + "`dais-ctl`" + ` commands.
@@ -136,8 +145,14 @@ func main() {
 		slog.Error("cannot create shepherd workdir", "err", err)
 		os.Exit(1)
 	}
+	// Build shepherd CLAUDE.md, injecting managed-repos if available.
+	shepContent := shepherdCLAUDEMD
+	reposFile := filepath.Join(homeDir, ".claude", "managed-repos.md")
+	if data, err := os.ReadFile(reposFile); err == nil {
+		shepContent += "\n## User's Repositories\n\n" + string(data)
+	}
 	claudeMD := filepath.Join(shepDir, "CLAUDE.md")
-	if err := os.WriteFile(claudeMD, []byte(shepherdCLAUDEMD), 0o644); err != nil {
+	if err := os.WriteFile(claudeMD, []byte(shepContent), 0o644); err != nil {
 		slog.Error("cannot write shepherd CLAUDE.md", "err", err)
 		os.Exit(1)
 	}
@@ -178,26 +193,30 @@ func main() {
 	srv.RegisterRoutes(mux)
 	ctl.RegisterRoutes(mux)
 
-	// Start shepherd event loop.
-	go shep.Run(sigCtx())
-
-	listenAddr := fmt.Sprintf(":%d", *port)
-	slog.Info("daisd starting", "addr", listenAddr, "version", version,
-		"shepherd_model", shepModel, "worker_model", *model)
-	if err := http.ListenAndServe(listenAddr, mux); err != nil {
-		slog.Error("server failed", "err", err)
-		os.Exit(1)
-	}
-}
-
-func sigCtx() context.Context {
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	// Start shepherd event loop.
+	go shep.Run(ctx)
+
+	listenAddr := fmt.Sprintf(":%d", *port)
+	httpSrv := &http.Server{Addr: listenAddr, Handler: mux}
+
+	// Graceful shutdown on signal.
 	go func() {
 		sig := <-sigCh
 		slog.Info("shutting down", "signal", sig)
 		cancel()
+		httpSrv.Close()
 	}()
-	return ctx
+
+	slog.Info("daisd starting", "addr", listenAddr, "version", version,
+		"shepherd_model", shepModel, "worker_model", *model)
+	if err := httpSrv.ListenAndServe(); err != http.ErrServerClosed {
+		slog.Error("server failed", "err", err)
+		os.Exit(1)
+	}
 }

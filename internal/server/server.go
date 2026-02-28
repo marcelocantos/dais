@@ -15,13 +15,21 @@ import (
 	"github.com/marcelocantos/dais/internal/shepherd"
 )
 
+// TranscriptEntry is a single turn in the conversation log.
+type TranscriptEntry struct {
+	Role string `json:"role"` // "user" or "shepherd"
+	Text string `json:"text"`
+}
+
 // Server is the daisd HTTP/WebSocket server.
 type Server struct {
 	shepherd *shepherd.Shepherd
 	version  string
 
-	mu     sync.Mutex
-	remote *websocket.Conn
+	mu         sync.Mutex
+	remote     *websocket.Conn
+	transcript []TranscriptEntry
+	turnBuf    string // accumulates shepherd text for current turn
 }
 
 // New creates a Server with the given shepherd and version string.
@@ -79,12 +87,28 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 	// Wire shepherd output to this connection.
 	ctx := r.Context()
 	s.shepherd.SetOutput(func(text string) {
+		s.mu.Lock()
+		s.turnBuf += text
+		s.mu.Unlock()
+
 		s.writeJSON(conn, ctx, map[string]any{
 			"type":    "text",
 			"content": text,
 		})
 	})
 	s.shepherd.SetStatus(func(state string) {
+		if state == "idle" {
+			s.mu.Lock()
+			if s.turnBuf != "" {
+				s.transcript = append(s.transcript, TranscriptEntry{
+					Role: "shepherd",
+					Text: s.turnBuf,
+				})
+				s.turnBuf = ""
+			}
+			s.mu.Unlock()
+		}
+
 		s.writeJSON(conn, ctx, map[string]any{
 			"type":  "status",
 			"state": state,
@@ -96,6 +120,19 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 		"type":    "init",
 		"version": s.version,
 	})
+
+	// Send transcript history.
+	s.mu.Lock()
+	hist := make([]TranscriptEntry, len(s.transcript))
+	copy(hist, s.transcript)
+	s.mu.Unlock()
+
+	if len(hist) > 0 {
+		s.writeJSON(conn, ctx, map[string]any{
+			"type":    "history",
+			"entries": hist,
+		})
+	}
 
 	// Read loop: process messages from remote.
 	for {
@@ -121,6 +158,13 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 		switch msg.Type {
 		case "message":
 			if msg.Text != "" {
+				s.mu.Lock()
+				s.transcript = append(s.transcript, TranscriptEntry{
+					Role: "user",
+					Text: msg.Text,
+				})
+				s.mu.Unlock()
+
 				s.shepherd.Enqueue(shepherd.Event{
 					Kind: shepherd.EventUserMessage,
 					Text: msg.Text,

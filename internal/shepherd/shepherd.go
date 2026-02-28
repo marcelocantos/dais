@@ -133,9 +133,11 @@ func (s *Shepherd) invoke(ctx context.Context, prompt string) error {
 
 	args := []string{
 		"-p",
+		"--verbose",
 		"--output-format", "stream-json",
 		"--include-partial-messages",
 		"--permission-mode", "bypassPermissions",
+		"--allowed-tools", "Bash(dais-ctl:*)",
 	}
 
 	s.mu.Lock()
@@ -150,12 +152,13 @@ func (s *Shepherd) invoke(ctx context.Context, prompt string) error {
 		args = append(args, "--model", s.cfg.Model)
 	}
 
-	args = append(args, prompt)
-
+	// Pass prompt via stdin (not positional arg) because --allowed-tools
+	// is variadic and would consume the prompt.
 	slog.Debug("spawning shepherd claude", "args", args)
 
 	cmd := exec.CommandContext(invokeCtx, "claude", args...)
 	cmd.Dir = s.cfg.WorkDir
+	cmd.Stdin = strings.NewReader(prompt)
 
 	// Set up environment: remove CLAUDECODE, add DAIS_CTL_ADDR, ensure
 	// dais-ctl is on PATH.
