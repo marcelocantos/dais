@@ -209,7 +209,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.draft = ""
 			addHistory(text)
 
-			m.log.WriteString(m.renderUserMsg(text) + "\n\n")
+			m.appendToLog(m.renderUserMsg(text))
 			m.markdown = ""
 			m.rendered = ""
 			m.updateViewport()
@@ -280,7 +280,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = "idle"
 		m.backoff = 100 * time.Millisecond
 		m.log.Reset()
-		m.log.WriteString(statusStyle.Render(fmt.Sprintf("Connected to daisd %s", m.version)) + "\n\n")
+		m.appendToLog(statusStyle.Render(fmt.Sprintf("Connected to daisd %s", m.version)))
 		m.updateViewport()
 		return m, m.readWS()
 
@@ -288,14 +288,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, entry := range msg {
 			switch entry.Role {
 			case "user":
-				m.log.WriteString(m.renderUserMsg(entry.Text) + "\n\n")
+				m.appendToLog(m.renderUserMsg(entry.Text))
 			case "shepherd":
 				if m.renderer != nil {
 					if r, err := m.renderer.Render(entry.Text); err == nil {
-						m.log.WriteString(strings.TrimRight(r, "\n") + "\n")
+						m.appendToLog(r)
 					}
 				} else {
-					m.log.WriteString(entry.Text + "\n")
+					m.appendToLog(entry.Text)
 				}
 			}
 		}
@@ -305,7 +305,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case disconnectedMsg:
 		m.conn = nil
 		m.status = "disconnected"
-		m.log.WriteString(statusStyle.Render(fmt.Sprintf("Disconnected: %v", msg.err)) + "\n")
+		m.appendToLog(statusStyle.Render(fmt.Sprintf("Disconnected: %v", msg.err)))
 		m.updateViewport()
 		return m, m.reconnectAfter()
 
@@ -320,7 +320,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.status == "idle" && m.markdown != "" {
 			// Turn complete — finalize and append to log.
 			m.renderMarkdown()
-			m.log.WriteString(m.rendered + "\n")
+			m.appendToLog(m.rendered)
 			m.markdown = ""
 			m.rendered = ""
 		}
@@ -328,7 +328,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.readWS()
 
 	case errorMsg:
-		m.log.WriteString(errorStyle.Render("Error: "+string(msg)) + "\n\n")
+		m.appendToLog(errorStyle.Render("Error: " + string(msg)))
 		m.updateViewport()
 		return m, m.readWS()
 	}
@@ -373,18 +373,23 @@ func (m *model) renderUserMsg(text string) string {
 	rendered := text
 	if m.renderer != nil {
 		if r, err := m.renderer.Render("***" + text + "***"); err == nil {
-			rendered = strings.TrimRight(r, "\n")
+			rendered = strings.TrimSpace(r)
 		}
 	}
 	lines := strings.Split(rendered, "\n")
 	for i, l := range lines {
+		l = strings.TrimLeft(l, " ")
 		if i == 0 {
-			lines[i] = "💬 " + l
+			lines[i] = "💬" + l
 		} else {
 			lines[i] = "   " + l
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (m *model) appendToLog(s string) {
+	m.log.WriteString(strings.TrimSpace(s) + "\n\n")
 }
 
 func (m *model) renderMarkdown() {
@@ -393,7 +398,7 @@ func (m *model) renderMarkdown() {
 	}
 	rendered, err := m.renderer.Render(m.markdown)
 	if err == nil {
-		m.rendered = strings.TrimRight(rendered, "\n")
+		m.rendered = strings.TrimSpace(rendered)
 	}
 }
 

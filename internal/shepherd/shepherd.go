@@ -16,10 +16,11 @@ import (
 
 // Config holds shepherd configuration.
 type Config struct {
-	WorkDir string // working directory (contains CLAUDE.md)
-	Model   string // model for shepherd (e.g. "opus", "sonnet")
-	CtlAddr string // address of daisd's ctl API (e.g. "http://localhost:8080")
-	CtlBin  string // path to dais-ctl binary
+	WorkDir  string // working directory (contains CLAUDE.md)
+	Model    string // model for shepherd (e.g. "opus", "sonnet")
+	CtlAddr  string // address of daisd's ctl API (e.g. "http://localhost:8080")
+	CtlBin   string // path to dais-ctl binary
+	ClaudeID string // restored claude session ID for --resume
 }
 
 // OutputFunc receives text from the shepherd to stream to the user.
@@ -30,9 +31,10 @@ type StatusFunc func(state string)
 
 // Shepherd coordinates between the user and Claude Code workers.
 type Shepherd struct {
-	cfg      Config
-	onOutput OutputFunc
-	onStatus StatusFunc
+	cfg        Config
+	onOutput   OutputFunc
+	onStatus   StatusFunc
+	onClaudeID ClaudeIDFunc
 
 	mu       sync.Mutex
 	queue    []Event
@@ -41,11 +43,15 @@ type Shepherd struct {
 	running  bool
 }
 
+// ClaudeIDFunc is called when the shepherd's claude session ID changes.
+type ClaudeIDFunc func(id string)
+
 // New creates a Shepherd with the given config.
 func New(cfg Config) *Shepherd {
 	return &Shepherd{
-		cfg:    cfg,
-		notify: make(chan struct{}, 1),
+		cfg:      cfg,
+		claudeID: cfg.ClaudeID,
+		notify:   make(chan struct{}, 1),
 	}
 }
 
@@ -61,6 +67,14 @@ func (s *Shepherd) SetStatus(fn StatusFunc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onStatus = fn
+}
+
+// SetClaudeIDCallback sets the callback for when the shepherd's claude
+// session ID is first captured.
+func (s *Shepherd) SetClaudeIDCallback(fn ClaudeIDFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onClaudeID = fn
 }
 
 // Enqueue adds an event to the shepherd's queue. If the shepherd is idle,
@@ -214,11 +228,16 @@ func (s *Shepherd) invoke(ctx context.Context, prompt string) error {
 			switch ev.Type {
 			case session.EventInit:
 				s.mu.Lock()
-				if s.claudeID == "" {
+				isNew := s.claudeID == ""
+				if isNew {
 					s.claudeID = ev.SessionID
 					slog.Info("shepherd session established", "claude_id", ev.SessionID)
 				}
+				fn := s.onClaudeID
 				s.mu.Unlock()
+				if isNew && fn != nil {
+					fn(ev.SessionID)
+				}
 
 			case session.EventText:
 				s.mu.Lock()
@@ -234,7 +253,12 @@ func (s *Shepherd) invoke(ctx context.Context, prompt string) error {
 
 			case session.EventResult:
 				slog.Debug("shepherd turn complete",
-					"duration_ms", ev.DurationMs, "cost_usd", ev.CostUSD)
+					"duration_ms", ev.DurationMs,
+					"cost_usd", ev.CostUSD,
+					"input_tokens", ev.Usage.InputTokens,
+					"output_tokens", ev.Usage.OutputTokens,
+					"cache_creation", ev.Usage.CacheCreationInputTokens,
+					"cache_read", ev.Usage.CacheReadInputTokens)
 
 			case session.EventError:
 				slog.Warn("shepherd error", "msg", ev.ErrorMsg)

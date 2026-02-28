@@ -26,6 +26,14 @@ const (
 	EventError   EventType = "error"
 )
 
+// Usage holds token counts from a result event.
+type Usage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+}
+
 // Event is a parsed event from the Claude stream-json output.
 type Event struct {
 	Type       EventType
@@ -36,6 +44,7 @@ type Event struct {
 	SessionID  string  // for init events
 	DurationMs float64 // for result events
 	CostUSD    float64 // for result events
+	Usage      Usage   // for result events
 	IsError    bool    // true if result is an error
 	ErrorMsg   string  // error message if IsError
 }
@@ -52,10 +61,11 @@ const (
 
 // Config holds the configuration for creating a session.
 type Config struct {
-	ID      string // unique session ID (ULID)
-	Name    string // human-readable name
-	WorkDir string // working directory for claude process
-	Model   string // model name (e.g. "opus", "sonnet"); empty = default
+	ID       string // unique session ID (ULID)
+	Name     string // human-readable name
+	WorkDir  string // working directory for claude process
+	Model    string // model name (e.g. "opus", "sonnet"); empty = default
+	ClaudeID string // claude session ID for --resume (empty = new session)
 }
 
 // Session wraps a single Claude Code conversation.
@@ -70,6 +80,7 @@ type Session struct {
 	cancel     context.CancelFunc
 	status     Status
 	lastResult string // final result text from the most recent command
+	claudeID   string // claude session ID for --resume
 }
 
 // New creates a Session from a Config.
@@ -80,6 +91,7 @@ func New(cfg Config) *Session {
 		workDir: cfg.WorkDir,
 		model:   cfg.Model,
 		status:  StatusIdle,
+		claudeID: cfg.ClaudeID,
 	}
 }
 
@@ -101,6 +113,20 @@ func (s *Session) LastResult() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.lastResult
+}
+
+// ClaudeID returns the Claude session ID (for --resume).
+func (s *Session) ClaudeID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.claudeID
+}
+
+// SetLastResult sets the last result (used when restoring from DB).
+func (s *Session) SetLastResult(r string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastResult = r
 }
 
 // Run sends a prompt to the session and returns a channel of events.
@@ -126,6 +152,14 @@ func (s *Session) Run(ctx context.Context, prompt string) (<-chan Event, error) 
 		"--output-format", "stream-json",
 		"--include-partial-messages",
 		"--dangerously-skip-permissions",
+	}
+
+	s.mu.Lock()
+	cid := s.claudeID
+	s.mu.Unlock()
+
+	if cid != "" {
+		args = append(args, "--resume", cid)
 	}
 	if s.model != "" {
 		args = append(args, "--model", s.model)
@@ -212,8 +246,15 @@ func (s *Session) Run(ctx context.Context, prompt string) (<-chan Event, error) 
 
 			events := ParseLine(line)
 			for _, ev := range events {
-				// Capture final result/error for LastResult().
 				switch ev.Type {
+				case EventInit:
+					s.mu.Lock()
+					if s.claudeID == "" {
+						s.claudeID = ev.SessionID
+						slog.Info("worker session established",
+							"worker", s.id, "claude_id", ev.SessionID)
+					}
+					s.mu.Unlock()
 				case EventResult:
 					s.mu.Lock()
 					s.lastResult = ev.Content
@@ -347,6 +388,7 @@ func parseResult(line []byte) []Event {
 		Result       string  `json:"result"`
 		DurationMs   float64 `json:"duration_ms"`
 		TotalCostUSD float64 `json:"total_cost_usd"`
+		Usage        Usage   `json:"usage"`
 		Errors       []struct {
 			Message string `json:"message"`
 		} `json:"errors"`
@@ -361,6 +403,7 @@ func parseResult(line []byte) []Event {
 			Content:    msg.Result,
 			DurationMs: msg.DurationMs,
 			CostUSD:    msg.TotalCostUSD,
+			Usage:      msg.Usage,
 		}}
 	}
 

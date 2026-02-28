@@ -122,6 +122,12 @@ func TestParseResultSuccess(t *testing.T) {
 		"result":         "Done!",
 		"duration_ms":    1234.5,
 		"total_cost_usd": 0.05,
+		"usage": map[string]any{
+			"input_tokens":                4,
+			"output_tokens":               12,
+			"cache_creation_input_tokens": 12582,
+			"cache_read_input_tokens":     4802,
+		},
 	}
 	line, _ := json.Marshal(msg)
 	events := ParseLine(line)
@@ -144,6 +150,18 @@ func TestParseResultSuccess(t *testing.T) {
 	}
 	if ev.IsError {
 		t.Error("expected IsError false")
+	}
+	if ev.Usage.InputTokens != 4 {
+		t.Errorf("expected input_tokens 4, got %d", ev.Usage.InputTokens)
+	}
+	if ev.Usage.OutputTokens != 12 {
+		t.Errorf("expected output_tokens 12, got %d", ev.Usage.OutputTokens)
+	}
+	if ev.Usage.CacheCreationInputTokens != 12582 {
+		t.Errorf("expected cache_creation 12582, got %d", ev.Usage.CacheCreationInputTokens)
+	}
+	if ev.Usage.CacheReadInputTokens != 4802 {
+		t.Errorf("expected cache_read 4802, got %d", ev.Usage.CacheReadInputTokens)
 	}
 }
 

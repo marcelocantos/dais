@@ -174,19 +174,25 @@ func main() {
 	defer database.Close()
 
 	// Create components.
-	mgr := manager.New(*model, *workDir)
+	mgr := manager.New(*model, *workDir, database)
 
 	shep := shepherd.New(shepherd.Config{
-		WorkDir: shepDir,
-		Model:   shepModel,
-		CtlAddr: addr,
-		CtlBin:  ctlBin,
+		WorkDir:  shepDir,
+		Model:    shepModel,
+		CtlAddr:  addr,
+		CtlBin:   ctlBin,
+		ClaudeID: database.Get("shepherd_claude_id"),
+	})
+	shep.SetClaudeIDCallback(func(id string) {
+		if err := database.Set("shepherd_claude_id", id); err != nil {
+			slog.Error("failed to persist shepherd claude ID", "err", err)
+		}
 	})
 
 	srv := server.New(shep, database, version)
 
 	// Wire ctlapi with shepherd event callback.
-	ctl := ctlapi.New(mgr, *workDir, func(workerID, workerName, result string, failed bool) {
+	ctl := ctlapi.New(mgr, database, *workDir, func(workerID, workerName, result string, failed bool) {
 		kind := shepherd.EventWorkerCompleted
 		if failed {
 			kind = shepherd.EventWorkerFailed
