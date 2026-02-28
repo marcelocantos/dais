@@ -1,6 +1,6 @@
 // Package server implements the HTTP/WebSocket server for daisd,
-// handling API endpoints and real-time communication with remote
-// clients across multiple Claude Code sessions.
+// handling the remote client connection and routing messages through
+// the shepherd coordinator.
 package server
 
 import (
@@ -12,31 +12,30 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/marcelocantos/dais/internal/manager"
-	"github.com/marcelocantos/dais/internal/session"
+	"github.com/marcelocantos/dais/internal/shepherd"
 )
 
 // Server is the daisd HTTP/WebSocket server.
 type Server struct {
-	mgr     *manager.Manager
-	version string
+	shepherd *shepherd.Shepherd
+	version  string
 
 	mu     sync.Mutex
 	remote *websocket.Conn
 }
 
-// New creates a Server with the given manager and version string.
-func New(mgr *manager.Manager, version string) *Server {
+// New creates a Server with the given shepherd and version string.
+func New(shep *shepherd.Shepherd, version string) *Server {
 	return &Server{
-		mgr:     mgr,
-		version: version,
+		shepherd: shep,
+		version:  version,
 	}
 }
 
-// RegisterRoutes adds all HTTP and WebSocket routes to the mux.
+// RegisterRoutes adds HTTP and WebSocket routes to the mux.
+// Additional routes (e.g. ctlapi) should be registered separately.
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /health", s.handleHealth)
-	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("/ws/remote", s.handleRemote)
 }
 
@@ -45,13 +44,6 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"status":  "ok",
 		"version": s.version,
-	})
-}
-
-func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"sessions": s.mgr.List(),
 	})
 }
 
@@ -84,14 +76,28 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("remote connected")
 
+	// Wire shepherd output to this connection.
+	ctx := r.Context()
+	s.shepherd.SetOutput(func(text string) {
+		s.writeJSON(conn, ctx, map[string]any{
+			"type":    "text",
+			"content": text,
+		})
+	})
+	s.shepherd.SetStatus(func(state string) {
+		s.writeJSON(conn, ctx, map[string]any{
+			"type":  "status",
+			"state": state,
+		})
+	})
+
 	// Send init message.
-	s.writeJSON(conn, r.Context(), map[string]any{
+	s.writeJSON(conn, ctx, map[string]any{
 		"type":    "init",
 		"version": s.version,
 	})
 
 	// Read loop: process messages from remote.
-	ctx := r.Context()
 	for {
 		mt, data, err := conn.Read(ctx)
 		if err != nil {
@@ -105,146 +111,23 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var msg struct {
-			Type      string `json:"type"`
-			SessionID string `json:"session_id,omitempty"`
-			Text      string `json:"text,omitempty"`
-			Name      string `json:"name,omitempty"`
-			Model     string `json:"model,omitempty"`
+			Type string `json:"type"`
+			Text string `json:"text,omitempty"`
 		}
 		if err := json.Unmarshal(data, &msg); err != nil {
 			continue
 		}
 
 		switch msg.Type {
-		case "create_session":
-			s.handleCreateSession(ctx, conn, msg.Name, msg.Model)
-
-		case "command":
-			s.handleCommand(ctx, conn, msg.SessionID, msg.Text)
-
-		case "cancel":
-			s.handleCancel(msg.SessionID)
-
-		case "kill_session":
-			s.handleKillSession(ctx, conn, msg.SessionID)
-
-		case "list_sessions":
-			s.writeJSON(conn, ctx, map[string]any{
-				"type":     "session_list",
-				"sessions": s.mgr.List(),
-			})
+		case "message":
+			if msg.Text != "" {
+				s.shepherd.Enqueue(shepherd.Event{
+					Kind: shepherd.EventUserMessage,
+					Text: msg.Text,
+				})
+			}
 		}
 	}
-}
-
-func (s *Server) handleCreateSession(ctx context.Context, conn *websocket.Conn, name, model string) {
-	sess := s.mgr.Create(manager.CreateConfig{
-		Name:  name,
-		Model: model,
-	})
-
-	s.writeJSON(conn, ctx, map[string]any{
-		"type":       "session_created",
-		"session_id": sess.ID(),
-		"name":       sess.Name(),
-	})
-}
-
-func (s *Server) handleCommand(ctx context.Context, conn *websocket.Conn, sessionID, text string) {
-	sess := s.mgr.Get(sessionID)
-	if sess == nil {
-		s.writeJSON(conn, ctx, map[string]any{
-			"type":       "error",
-			"session_id": sessionID,
-			"message":    "session not found",
-		})
-		return
-	}
-
-	s.writeJSON(conn, ctx, map[string]any{
-		"type":       "status",
-		"session_id": sessionID,
-		"state":      "running",
-	})
-
-	events, err := sess.Run(ctx, text)
-	if err != nil {
-		s.writeJSON(conn, ctx, map[string]any{
-			"type":       "error",
-			"session_id": sessionID,
-			"message":    err.Error(),
-		})
-		s.writeJSON(conn, ctx, map[string]any{
-			"type":       "status",
-			"session_id": sessionID,
-			"state":      "idle",
-		})
-		return
-	}
-
-	for ev := range events {
-		switch ev.Type {
-		case session.EventText:
-			s.writeJSON(conn, ctx, map[string]any{
-				"type":       "text",
-				"session_id": sessionID,
-				"content":    ev.Content,
-			})
-		case session.EventToolUse:
-			s.writeJSON(conn, ctx, map[string]any{
-				"type":       "tool_use",
-				"session_id": sessionID,
-				"id":         ev.ToolID,
-				"name":       ev.ToolName,
-				"input":      ev.ToolInput,
-			})
-		case session.EventResult:
-			s.writeJSON(conn, ctx, map[string]any{
-				"type":        "done",
-				"session_id":  sessionID,
-				"duration_ms": ev.DurationMs,
-				"cost_usd":    ev.CostUSD,
-			})
-		case session.EventError:
-			s.writeJSON(conn, ctx, map[string]any{
-				"type":       "error",
-				"session_id": sessionID,
-				"message":    ev.ErrorMsg,
-			})
-		}
-	}
-
-	s.writeJSON(conn, ctx, map[string]any{
-		"type":       "status",
-		"session_id": sessionID,
-		"state":      string(sess.Status()),
-	})
-}
-
-func (s *Server) handleCancel(sessionID string) {
-	sess := s.mgr.Get(sessionID)
-	if sess == nil {
-		return
-	}
-	if err := sess.Cancel(); err != nil {
-		slog.Warn("cancel failed", "session", sessionID, "err", err)
-	}
-}
-
-func (s *Server) handleKillSession(ctx context.Context, conn *websocket.Conn, sessionID string) {
-	if err := s.mgr.Kill(sessionID); err != nil {
-		s.writeJSON(conn, ctx, map[string]any{
-			"type":       "error",
-			"session_id": sessionID,
-			"message":    err.Error(),
-		})
-		return
-	}
-	s.writeJSON(conn, ctx, map[string]any{
-		"type":       "status",
-		"session_id": sessionID,
-		"state":      "stopped",
-	})
 }
 
 func (s *Server) writeJSON(conn *websocket.Conn, ctx context.Context, v any) {

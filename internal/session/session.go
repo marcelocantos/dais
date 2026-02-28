@@ -65,10 +65,11 @@ type Session struct {
 	workDir string
 	model   string
 
-	mu     sync.Mutex
-	cmd    *exec.Cmd
-	cancel context.CancelFunc
-	status Status
+	mu         sync.Mutex
+	cmd        *exec.Cmd
+	cancel     context.CancelFunc
+	status     Status
+	lastResult string // final result text from the most recent command
 }
 
 // New creates a Session from a Config.
@@ -93,6 +94,13 @@ func (s *Session) Status() Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.status
+}
+
+// LastResult returns the final result text from the most recent command.
+func (s *Session) LastResult() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastResult
 }
 
 // Run sends a prompt to the session and returns a channel of events.
@@ -204,6 +212,18 @@ func (s *Session) Run(ctx context.Context, prompt string) (<-chan Event, error) 
 
 			events := ParseLine(line)
 			for _, ev := range events {
+				// Capture final result/error for LastResult().
+				switch ev.Type {
+				case EventResult:
+					s.mu.Lock()
+					s.lastResult = ev.Content
+					s.mu.Unlock()
+				case EventError:
+					s.mu.Lock()
+					s.lastResult = "error: " + ev.ErrorMsg
+					s.mu.Unlock()
+				}
+
 				select {
 				case ch <- ev:
 				case <-ctx.Done():

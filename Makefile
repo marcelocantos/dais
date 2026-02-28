@@ -25,7 +25,7 @@ COMPILE_DB_DEPS += $(SRC) Makefile
 
 # ── Default target ───────────────────────────────────
 .PHONY: all
-all: $(APP) daisd remote
+all: $(APP) daisd dais-ctl remote
 
 # ── C++ binary ───────────────────────────────────────
 $(APP): $(OBJ) $(ge/SESSION_WIRE_OBJ) $(ge/LIB) $(ge/FRAMEWORK_LIBS)
@@ -50,6 +50,14 @@ daisd: bin/daisd
 bin/daisd: $(shell find cmd internal -name '*.go' 2>/dev/null)
 	@mkdir -p bin
 	go build -o bin/daisd ./cmd/daisd
+
+# ── Worker management helper ─────────────────────────
+.PHONY: dais-ctl
+dais-ctl: bin/dais-ctl
+
+bin/dais-ctl: $(shell find cmd/dais-ctl -name '*.go' 2>/dev/null)
+	@mkdir -p bin
+	go build -o bin/dais-ctl ./cmd/dais-ctl
 
 # ── Terminal remote ──────────────────────────────────
 .PHONY: remote
