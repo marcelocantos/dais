@@ -29,11 +29,15 @@ type OutputFunc func(text string)
 // StatusFunc receives shepherd status changes.
 type StatusFunc func(state string)
 
+// RawLogFunc receives raw NDJSON lines from the Claude process.
+type RawLogFunc func(line []byte)
+
 // Shepherd coordinates between the user and Claude Code workers.
 type Shepherd struct {
 	cfg        Config
 	onOutput   OutputFunc
 	onStatus   StatusFunc
+	onRawLog   RawLogFunc
 	onClaudeID ClaudeIDFunc
 
 	mu       sync.Mutex
@@ -67,6 +71,13 @@ func (s *Shepherd) SetStatus(fn StatusFunc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onStatus = fn
+}
+
+// SetRawLog sets the callback for raw NDJSON lines from the Claude process.
+func (s *Shepherd) SetRawLog(fn RawLogFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onRawLog = fn
 }
 
 // SetClaudeIDCallback sets the callback for when the shepherd's claude
@@ -221,6 +232,13 @@ func (s *Shepherd) invoke(ctx context.Context, prompt string) error {
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
+		}
+
+		s.mu.Lock()
+		rawFn := s.onRawLog
+		s.mu.Unlock()
+		if rawFn != nil {
+			rawFn(line)
 		}
 
 		events := session.ParseLine(line)

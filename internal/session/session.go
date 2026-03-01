@@ -68,6 +68,9 @@ type Config struct {
 	ClaudeID string // claude session ID for --resume (empty = new session)
 }
 
+// RawLogFunc receives raw NDJSON lines from the Claude process.
+type RawLogFunc func(line []byte)
+
 // Session wraps a single Claude Code conversation.
 type Session struct {
 	id      string
@@ -81,6 +84,7 @@ type Session struct {
 	status     Status
 	lastResult string // final result text from the most recent command
 	claudeID   string // claude session ID for --resume
+	onRawLog   RawLogFunc
 }
 
 // New creates a Session from a Config.
@@ -120,6 +124,13 @@ func (s *Session) ClaudeID() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.claudeID
+}
+
+// SetRawLog sets the callback for raw NDJSON lines from the Claude process.
+func (s *Session) SetRawLog(fn RawLogFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onRawLog = fn
 }
 
 // SetLastResult sets the last result (used when restoring from DB).
@@ -242,6 +253,13 @@ func (s *Session) Run(ctx context.Context, prompt string) (<-chan Event, error) 
 			line := scanner.Bytes()
 			if len(line) == 0 {
 				continue
+			}
+
+			s.mu.Lock()
+			rawFn := s.onRawLog
+			s.mu.Unlock()
+			if rawFn != nil {
+				rawFn(line)
 			}
 
 			events := ParseLine(line)

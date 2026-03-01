@@ -64,6 +64,7 @@ func New(defaultModel, defaultDir string, database *db.DB) *Manager {
 				ClaudeID: w.ClaudeID,
 			})
 			s.SetLastResult(w.LastResult)
+			s.SetRawLog(m.rawLogFunc(w.ID))
 			m.sessions[w.ID] = s
 
 			// Track highest ID for nextID.
@@ -107,6 +108,7 @@ func (m *Manager) Create(cfg CreateConfig) *session.Session {
 		WorkDir: workDir,
 		Model:   model,
 	})
+	s.SetRawLog(m.rawLogFunc(id))
 	m.sessions[id] = s
 	slog.Info("session created", "id", id, "name", name, "model", model)
 
@@ -140,6 +142,14 @@ func (m *Manager) List() []SessionSummary {
 		})
 	}
 	return result
+}
+
+func (m *Manager) rawLogFunc(sessionID string) session.RawLogFunc {
+	return func(line []byte) {
+		if err := m.db.AppendRawLog(sessionID, string(line)); err != nil {
+			slog.Error("failed to persist raw log", "session", sessionID, "err", err)
+		}
+	}
 }
 
 // Kill stops a session and removes it from the manager.

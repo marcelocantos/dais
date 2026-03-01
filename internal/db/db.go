@@ -47,6 +47,12 @@ func Open(path string) (*DB, error) {
 			claude_id TEXT NOT NULL DEFAULT '',
 			last_result TEXT NOT NULL DEFAULT ''
 		)`,
+		`CREATE TABLE IF NOT EXISTS raw_log (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			source     TEXT NOT NULL,
+			line       TEXT NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
 	} {
 		if _, err := sqlDB.Exec(ddl); err != nil {
 			sqlDB.Close()
@@ -83,6 +89,15 @@ func (d *DB) LoadTranscript() ([]TranscriptEntry, error) {
 		entries = append(entries, e)
 	}
 	return entries, rows.Err()
+}
+
+// AppendRawLog inserts a raw NDJSON line from a Claude process.
+func (d *DB) AppendRawLog(source, line string) error {
+	_, err := d.db.Exec(
+		`INSERT INTO raw_log (source, line) VALUES (?, ?)`,
+		source, line,
+	)
+	return err
 }
 
 // Get returns a value from the kv table, or "" if not found.

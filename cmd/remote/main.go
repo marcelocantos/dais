@@ -15,11 +15,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/table"
 	"github.com/coder/websocket"
 	"github.com/peterh/liner"
 )
@@ -32,17 +34,29 @@ type (
 	statusMsg       string // shepherd status change
 	errorMsg        string // error from server
 	historyMsg      []historyEntry
+	userBroadcastMsg struct {
+		Text      string    `json:"text"`
+		Timestamp time.Time `json:"timestamp"`
+	}
 )
 
 type historyEntry struct {
-	Role string `json:"role"`
-	Text string `json:"text"`
+	Role      string    `json:"role"`
+	Text      string    `json:"text"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// logEntry is a structured conversation entry, stored raw and
+// re-rendered on demand (for resize support).
+type logEntry struct {
+	kind      string    // "user", "shepherd", "status", "error"
+	text      string    // raw text (markdown for chat, plain for status/error)
+	timestamp time.Time
 }
 
 var (
 	statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	errorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
-	promptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
 )
 
 func main() {
@@ -128,23 +142,24 @@ func addHistory(line string) {
 // --- Model ---
 
 type model struct {
-	url      string
-	conn     *websocket.Conn
-	ctx      context.Context
-	cancel   context.CancelFunc
+	url    string
+	conn   *websocket.Conn
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	viewport viewport.Model
 	input    textarea.Model
 	renderer *glamour.TermRenderer
 
 	// Shepherd state.
-	markdown string // accumulated markdown for current turn
-	rendered string // glamour-rendered output
-	status   string // "idle", "thinking", "disconnected"
-	version  string
+	markdown  string    // accumulated markdown for current turn
+	rendered  string    // glamour-rendered output (for streaming display)
+	status    string    // "idle", "thinking", "disconnected"
+	version   string
+	turnStart time.Time // when the current shepherd turn began
 
-	// Conversation log (rendered turns).
-	log strings.Builder
+	// Conversation log (structured entries, re-rendered on demand).
+	entries []logEntry
 
 	// Reconnect state.
 	backoff time.Duration
@@ -157,6 +172,10 @@ type model struct {
 	width  int
 	height int
 	ready  bool
+
+	// Unread tracking (when scrolled away from bottom).
+	unread    int
+	lastCount int // entry count at last scroll-to-bottom
 }
 
 func newModel(url string) *model {
@@ -209,11 +228,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.draft = ""
 			addHistory(text)
 
-			m.appendToLog(m.renderUserMsg(text))
-			m.markdown = ""
-			m.rendered = ""
-			m.updateViewport()
-
 			return m, m.send(text)
 
 		case "ctrl+p":
@@ -255,6 +269,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.ready {
 			m.viewport = viewport.New(msg.Width, msg.Height-inputHeight-statusHeight)
 			m.viewport.SetContent("")
+			// Keep arrow/pgup/pgdn but drop vi aliases (j/k/d/u/f/b/h/l)
+			// that conflict with typing in the textarea.
+			m.viewport.KeyMap = viewport.KeyMap{
+				PageDown:     key.NewBinding(key.WithKeys("pgdown")),
+				PageUp:       key.NewBinding(key.WithKeys("pgup")),
+				HalfPageUp:   key.NewBinding(key.WithKeys("ctrl+u")),
+				HalfPageDown: key.NewBinding(key.WithKeys("ctrl+d")),
+				Up:           key.NewBinding(key.WithKeys("up")),
+				Down:         key.NewBinding(key.WithKeys("down")),
+				Left:         key.NewBinding(key.WithKeys("left")),
+				Right:        key.NewBinding(key.WithKeys("right")),
+			}
 			m.ready = true
 		} else {
 			m.viewport.Width = msg.Width
@@ -263,10 +289,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.input.SetWidth(msg.Width - 2)
 
-		// Recreate renderer with correct width.
+		// Recreate renderer with wrap width for content column.
 		r, err := glamour.NewTermRenderer(
 			glamour.WithStandardStyle("light"),
-			glamour.WithWordWrap(msg.Width-4),
+			glamour.WithWordWrap(msg.Width-14),
 		)
 		if err == nil {
 			m.renderer = r
@@ -279,25 +305,22 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.version = string(msg)
 		m.status = "idle"
 		m.backoff = 100 * time.Millisecond
-		m.log.Reset()
-		m.appendToLog(statusStyle.Render(fmt.Sprintf("Connected to daisd %s", m.version)))
+		m.entries = nil
+		m.entries = append(m.entries, logEntry{
+			kind:      "status",
+			text:      fmt.Sprintf("Connected to daisd %s", m.version),
+			timestamp: time.Now(),
+		})
 		m.updateViewport()
 		return m, m.readWS()
 
 	case historyMsg:
 		for _, entry := range msg {
-			switch entry.Role {
-			case "user":
-				m.appendToLog(m.renderUserMsg(entry.Text))
-			case "shepherd":
-				if m.renderer != nil {
-					if r, err := m.renderer.Render(entry.Text); err == nil {
-						m.appendToLog(r)
-					}
-				} else {
-					m.appendToLog(entry.Text)
-				}
-			}
+			m.entries = append(m.entries, logEntry{
+				kind:      entry.Role,
+				text:      entry.Text,
+				timestamp: entry.Timestamp,
+			})
 		}
 		m.updateViewport()
 		return m, m.readWS()
@@ -305,7 +328,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case disconnectedMsg:
 		m.conn = nil
 		m.status = "disconnected"
-		m.appendToLog(statusStyle.Render(fmt.Sprintf("Disconnected: %v", msg.err)))
+		m.entries = append(m.entries, logEntry{
+			kind:      "status",
+			text:      fmt.Sprintf("Disconnected: %v", msg.err),
+			timestamp: time.Now(),
+		})
 		m.updateViewport()
 		return m, m.reconnectAfter()
 
@@ -318,9 +345,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case statusMsg:
 		m.status = string(msg)
 		if m.status == "idle" && m.markdown != "" {
-			// Turn complete — finalize and append to log.
-			m.renderMarkdown()
-			m.appendToLog(m.rendered)
+			// Turn complete — store raw markdown as a log entry.
+			m.entries = append(m.entries, logEntry{
+				kind:      "shepherd",
+				text:      m.markdown,
+				timestamp: m.turnStart,
+			})
 			m.markdown = ""
 			m.rendered = ""
 		}
@@ -328,7 +358,22 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.readWS()
 
 	case errorMsg:
-		m.appendToLog(errorStyle.Render("Error: " + string(msg)))
+		m.entries = append(m.entries, logEntry{
+			kind: "error",
+			text: string(msg),
+		})
+		m.updateViewport()
+		return m, m.readWS()
+
+	case userBroadcastMsg:
+		m.entries = append(m.entries, logEntry{
+			kind:      "user",
+			text:      msg.Text,
+			timestamp: msg.Timestamp,
+		})
+		m.turnStart = msg.Timestamp
+		m.markdown = ""
+		m.rendered = ""
 		m.updateViewport()
 		return m, m.readWS()
 	}
@@ -342,6 +387,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.viewport, cmd = m.viewport.Update(msg)
 	cmds = append(cmds, cmd)
 
+	if m.viewport.AtBottom() {
+		m.unread = 0
+		m.lastCount = len(m.entries)
+	}
+
 	return m, tea.Batch(cmds...)
 }
 
@@ -354,42 +404,163 @@ func (m *model) View() string {
 	return m.viewport.View() + "\n" + status + "\n" + m.input.View()
 }
 
+var (
+	ruleStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241"))
+	badgeStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("230")).
+			Background(lipgloss.Color("63")).
+			Bold(true).
+			Padding(0, 1)
+	thinkingBadgeStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("230")).
+				Background(lipgloss.Color("241")).
+				Padding(0, 1)
+	disconnectedBadgeStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("230")).
+				Background(lipgloss.Color("196")).
+				Bold(true).
+				Padding(0, 1)
+)
+
 func (m *model) statusLine() string {
-	var s string
-	switch m.status {
-	case "idle":
-		s = "Ready"
-	case "thinking":
-		s = "Thinking..."
-	case "disconnected":
-		s = "Disconnected — reconnecting..."
-	default:
-		s = m.status
+	if m.width == 0 {
+		return ""
 	}
-	return statusStyle.Render(s)
-}
 
-func (m *model) renderUserMsg(text string) string {
-	rendered := text
-	if m.renderer != nil {
-		if r, err := m.renderer.Render("***" + text + "***"); err == nil {
-			rendered = strings.TrimSpace(r)
-		}
+	// Determine badge text.
+	var badge string
+	switch {
+	case m.status == "disconnected":
+		badge = disconnectedBadgeStyle.Render("Disconnected")
+	case m.status == "thinking":
+		badge = thinkingBadgeStyle.Render("Thinking…")
 	}
-	lines := strings.Split(rendered, "\n")
-	for i, l := range lines {
-		l = strings.TrimLeft(l, " ")
-		if i == 0 {
-			lines[i] = "💬" + l
+
+	// Scrolled-up indicator (shown alongside or instead of status badge).
+	if !m.viewport.AtBottom() {
+		scrollBadge := "↓"
+		if m.unread > 0 {
+			scrollBadge = fmt.Sprintf("↓ %d new", m.unread)
+		}
+		if badge != "" {
+			// Append scroll indicator after status badge.
+			badge += " " + badgeStyle.Render(scrollBadge)
 		} else {
-			lines[i] = "   " + l
+			badge = badgeStyle.Render(scrollBadge)
 		}
 	}
-	return strings.Join(lines, "\n")
+
+	if badge == "" {
+		return ruleStyle.Render(strings.Repeat("─", m.width))
+	}
+
+	// Center badge on a full-width ─ rule.
+	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, badge,
+		lipgloss.WithWhitespaceChars("─"),
+		lipgloss.WithWhitespaceForeground(lipgloss.Color("241")),
+	)
 }
 
-func (m *model) appendToLog(s string) {
-	m.log.WriteString(strings.TrimSpace(s) + "\n\n")
+// --- Rendering ---
+
+// newTable creates a lipgloss table with the standard 3-column layout:
+// time │ icon │ content.
+func (m *model) newTable() *table.Table {
+	return table.New().
+		Border(lipgloss.NormalBorder()).
+		BorderTop(false).
+		BorderBottom(false).
+		BorderLeft(false).
+		BorderRight(false).
+		BorderRow(false).
+		BorderHeader(false).
+		BorderColumn(true).
+		BorderStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("241"))).
+		Width(m.width).
+		StyleFunc(m.tableStyle)
+}
+
+func (m *model) tableStyle(row, col int) lipgloss.Style {
+	s := lipgloss.NewStyle().PaddingBottom(1)
+	switch col {
+	case 0:
+		return s.Width(5)
+	case 1:
+		return s.Width(2)
+	default:
+		return s
+	}
+}
+
+// renderLog builds the full conversation log as a table string.
+func (m *model) renderLog() string {
+	if len(m.entries) == 0 || m.width == 0 {
+		return ""
+	}
+
+	t := m.newTable()
+
+	for _, entry := range m.entries {
+		ts := ""
+		if !entry.timestamp.IsZero() {
+			ts = statusStyle.Render(entry.timestamp.Format("15:04"))
+		}
+
+		switch entry.kind {
+		case "user":
+			t.Row(ts, "💬", m.renderBold(entry.text))
+		case "shepherd":
+			t.Row(ts, "", m.glamourRender(entry.text))
+		case "status":
+			t.Row(ts, "", statusStyle.Render(entry.text))
+		case "error":
+			t.Row(ts, "", errorStyle.Render(entry.text))
+		}
+	}
+
+	return t.String()
+}
+
+// renderStreamingRow renders the in-progress shepherd response as a
+// single-row table with the same column layout as the log.
+func (m *model) renderStreamingRow() string {
+	if m.width == 0 || m.rendered == "" {
+		return ""
+	}
+
+	ts := ""
+	if !m.turnStart.IsZero() {
+		ts = statusStyle.Render(m.turnStart.Format("15:04"))
+	}
+
+	t := m.newTable()
+	t.Row(ts, "", m.rendered)
+	return t.String()
+}
+
+// renderBold renders text as bold italic via glamour.
+func (m *model) renderBold(text string) string {
+	if m.renderer == nil {
+		return text
+	}
+	r, err := m.renderer.Render("***" + text + "***")
+	if err != nil {
+		return text
+	}
+	return strings.TrimSpace(r)
+}
+
+// glamourRender renders markdown via glamour.
+func (m *model) glamourRender(text string) string {
+	if m.renderer == nil {
+		return text
+	}
+	r, err := m.renderer.Render(text)
+	if err != nil {
+		return text
+	}
+	return strings.TrimSpace(r)
 }
 
 func (m *model) renderMarkdown() {
@@ -406,12 +577,19 @@ func (m *model) updateViewport() {
 	if !m.ready {
 		return
 	}
-	content := m.log.String()
+	content := m.renderLog()
 	if m.rendered != "" {
-		content += m.rendered
+		content += m.renderStreamingRow()
 	}
+	atBottom := m.viewport.AtBottom()
 	m.viewport.SetContent(content)
-	m.viewport.GotoBottom()
+	if atBottom {
+		m.viewport.GotoBottom()
+		m.unread = 0
+		m.lastCount = len(m.entries)
+	} else {
+		m.unread = len(m.entries) - m.lastCount
+	}
 }
 
 // --- WebSocket commands ---
@@ -481,6 +659,10 @@ func (m *model) readWS() tea.Cmd {
 			}
 			json.Unmarshal(data, &full)
 			return historyMsg(full.Entries)
+		case "user_message":
+			var um userBroadcastMsg
+			json.Unmarshal(data, &um)
+			return um
 		}
 
 		// Unknown message type — keep reading.
