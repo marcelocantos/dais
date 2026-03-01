@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/marcelocantos/dais/internal/cli"
+
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -61,7 +63,20 @@ var (
 
 func main() {
 	addr := flag.String("addr", "localhost:8080", "daisd address")
+	showVersion := flag.Bool("version", false, "print version and exit")
+	helpAgent := flag.Bool("help-agent", false, "print agent guide and exit")
 	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("remote", cli.Version)
+		os.Exit(0)
+	}
+	if *helpAgent {
+		flag.PrintDefaults()
+		fmt.Println()
+		fmt.Print(cli.AgentGuide)
+		os.Exit(0)
+	}
 
 	url := fmt.Sprintf("ws://%s/ws/remote", *addr)
 

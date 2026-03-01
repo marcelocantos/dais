@@ -43,29 +43,35 @@ $(BUILD_DIR)/src/%.o: src/%.cpp
 .PHONY: player
 player: $(ge/PLAYER)
 
-# ── Go coordinator ───────────────────────────────────
+# ── Go binaries ─────────────────────────────────────
+VERSION  ?= dev
+LDFLAGS  := -ldflags "-X github.com/marcelocantos/dais/internal/cli.Version=$(VERSION)"
+GO_SRC   := $(shell find cmd internal -name '*.go' 2>/dev/null)
+EMBED_GUIDE := internal/cli/help_agent.md
+
+$(EMBED_GUIDE): agents-guide.md
+	cp $< $@
+
 .PHONY: daisd
 daisd: bin/daisd
 
-bin/daisd: $(shell find cmd internal -name '*.go' 2>/dev/null)
+bin/daisd: $(GO_SRC) $(EMBED_GUIDE)
 	@mkdir -p bin
-	go build -o bin/daisd ./cmd/daisd
+	go build $(LDFLAGS) -o bin/daisd ./cmd/daisd
 
-# ── Worker management helper ─────────────────────────
 .PHONY: dais-ctl
 dais-ctl: bin/dais-ctl
 
-bin/dais-ctl: $(shell find cmd/dais-ctl -name '*.go' 2>/dev/null)
+bin/dais-ctl: $(GO_SRC) $(EMBED_GUIDE)
 	@mkdir -p bin
-	go build -o bin/dais-ctl ./cmd/dais-ctl
+	go build $(LDFLAGS) -o bin/dais-ctl ./cmd/dais-ctl
 
-# ── Terminal remote ──────────────────────────────────
 .PHONY: remote
 remote: bin/remote
 
-bin/remote: $(shell find cmd/remote -name '*.go' 2>/dev/null)
+bin/remote: $(GO_SRC) $(EMBED_GUIDE)
 	@mkdir -p bin
-	go build -o bin/remote ./cmd/remote
+	go build $(LDFLAGS) -o bin/remote ./cmd/remote
 
 # ── Run ──────────────────────────────────────────────
 .PHONY: run run-app run-daisd run-remote

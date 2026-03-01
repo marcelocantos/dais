@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/marcelocantos/dais/internal/cli"
 )
 
 func main() {
@@ -19,6 +21,14 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	case "--version":
+		fmt.Println("dais-ctl", cli.Version)
+		os.Exit(0)
+	case "--help-agent":
+		fmt.Print(usageText)
+		fmt.Println()
+		fmt.Print(cli.AgentGuide)
+		os.Exit(0)
 	case "create":
 		doCreate(os.Args[2:])
 	case "list":
@@ -41,8 +51,7 @@ func main() {
 	}
 }
 
-func usage() {
-	fmt.Fprintf(os.Stderr, `Usage: dais-ctl <command> [args]
+const usageText = `Usage: dais-ctl <command> [args]
 
 Commands:
   create [--name NAME] [--workdir DIR] [--model MODEL]
@@ -62,7 +71,13 @@ Commands:
 
   kill <worker-id>
       Terminate a worker session.
-`)
+
+  --version       Print version and exit.
+  --help-agent    Print agent guide and exit.
+`
+
+func usage() {
+	fmt.Fprint(os.Stderr, usageText)
 	os.Exit(1)
 }
 

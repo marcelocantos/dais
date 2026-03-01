@@ -11,14 +11,13 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/marcelocantos/dais/internal/cli"
 	"github.com/marcelocantos/dais/internal/ctlapi"
 	"github.com/marcelocantos/dais/internal/db"
 	"github.com/marcelocantos/dais/internal/manager"
 	"github.com/marcelocantos/dais/internal/server"
 	"github.com/marcelocantos/dais/internal/shepherd"
 )
-
-var version = "dev"
 
 // shepherdCLAUDEMD is the CLAUDE.md template written to the shepherd's workdir.
 const shepherdCLAUDEMD = `# Dais Shepherd
@@ -114,10 +113,17 @@ func main() {
 	shepherdModel := flag.String("shepherd-model", "", "model for the shepherd (default: same as --model)")
 	debug := flag.Bool("debug", false, "enable debug logging")
 	showVersion := flag.Bool("version", false, "print version and exit")
+	helpAgent := flag.Bool("help-agent", false, "print agent guide and exit")
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Println("daisd", version)
+		fmt.Println("daisd", cli.Version)
+		os.Exit(0)
+	}
+	if *helpAgent {
+		flag.PrintDefaults()
+		fmt.Println()
+		fmt.Print(cli.AgentGuide)
 		os.Exit(0)
 	}
 
@@ -189,7 +195,7 @@ func main() {
 		}
 	})
 
-	srv := server.New(shep, database, version)
+	srv := server.New(shep, database, cli.Version)
 
 	// Wire ctlapi with shepherd event callback.
 	ctl := ctlapi.New(mgr, database, *workDir, func(workerID, workerName, result string, failed bool) {
@@ -229,7 +235,7 @@ func main() {
 		httpSrv.Close()
 	}()
 
-	slog.Info("daisd starting", "addr", listenAddr, "version", version,
+	slog.Info("daisd starting", "addr", listenAddr, "version", cli.Version,
 		"shepherd_model", shepModel, "worker_model", *model)
 	if err := httpSrv.ListenAndServe(); err != http.ErrServerClosed {
 		slog.Error("server failed", "err", err)

@@ -23,5 +23,8 @@ Thumbs.db
 .env
 .env.local
 
+# Generated embedded files
+internal/cli/help_agent.md
+
 # Claude Code local settings
 .claude/
