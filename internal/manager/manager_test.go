@@ -3,11 +3,22 @@ package manager
 import (
 	"testing"
 
+	"github.com/marcelocantos/dais/internal/db"
 	"github.com/marcelocantos/dais/internal/session"
 )
 
+func testDB(t *testing.T) *db.DB {
+	t.Helper()
+	d, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	return d
+}
+
 func TestCreateAndGet(t *testing.T) {
-	m := New("opus", "/tmp")
+	m := New("opus", "/tmp", testDB(t))
 	s := m.Create(CreateConfig{Name: "test session"})
 
 	if s.ID() == "" {
@@ -27,7 +38,7 @@ func TestCreateAndGet(t *testing.T) {
 }
 
 func TestCreateDefaultName(t *testing.T) {
-	m := New("opus", "/tmp")
+	m := New("opus", "/tmp", testDB(t))
 	s := m.Create(CreateConfig{})
 	if s.Name() == "" {
 		t.Error("expected auto-generated name")
@@ -35,7 +46,7 @@ func TestCreateDefaultName(t *testing.T) {
 }
 
 func TestCreateMultiple(t *testing.T) {
-	m := New("opus", "/tmp")
+	m := New("opus", "/tmp", testDB(t))
 	s1 := m.Create(CreateConfig{Name: "first"})
 	s2 := m.Create(CreateConfig{Name: "second"})
 
@@ -50,7 +61,7 @@ func TestCreateMultiple(t *testing.T) {
 }
 
 func TestKill(t *testing.T) {
-	m := New("opus", "/tmp")
+	m := New("opus", "/tmp", testDB(t))
 	s := m.Create(CreateConfig{Name: "doomed"})
 	id := s.ID()
 
@@ -66,14 +77,14 @@ func TestKill(t *testing.T) {
 }
 
 func TestKillNotFound(t *testing.T) {
-	m := New("opus", "/tmp")
+	m := New("opus", "/tmp", testDB(t))
 	if err := m.Kill("nonexistent"); err == nil {
 		t.Error("expected error killing nonexistent session")
 	}
 }
 
 func TestModelOverride(t *testing.T) {
-	m := New("opus", "/tmp")
+	m := New("opus", "/tmp", testDB(t))
 	s := m.Create(CreateConfig{Model: "haiku"})
 	// The model is stored internally; verify session was created.
 	if s.Status() != session.StatusIdle {
@@ -82,7 +93,7 @@ func TestModelOverride(t *testing.T) {
 }
 
 func TestList(t *testing.T) {
-	m := New("opus", "/tmp")
+	m := New("opus", "/tmp", testDB(t))
 	m.Create(CreateConfig{Name: "a"})
 	m.Create(CreateConfig{Name: "b"})
 

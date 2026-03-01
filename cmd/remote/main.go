@@ -1,226 +1,688 @@
+// remote is a terminal client for daisd. It connects to the shepherd
+// and sends text messages, displaying streamed responses with markdown
+// rendering. Reconnects automatically with exponential backoff.
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
-	"sync"
+	"path/filepath"
+	"strings"
 	"syscall"
+	"time"
 
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/table"
 	"github.com/coder/websocket"
+	"github.com/peterh/liner"
+)
+
+// Message types for bubbletea.
+type (
+	connectedMsg    string // server version
+	disconnectedMsg struct{ err error }
+	textMsg         string // incremental text from shepherd
+	statusMsg       string // shepherd status change
+	errorMsg        string // error from server
+	historyMsg      []historyEntry
+	userBroadcastMsg struct {
+		Text      string    `json:"text"`
+		Timestamp time.Time `json:"timestamp"`
+	}
+)
+
+type historyEntry struct {
+	Role      string    `json:"role"`
+	Text      string    `json:"text"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+// logEntry is a structured conversation entry, stored raw and
+// re-rendered on demand (for resize support).
+type logEntry struct {
+	kind      string    // "user", "shepherd", "status", "error"
+	text      string    // raw text (markdown for chat, plain for status/error)
+	timestamp time.Time
+}
+
+var (
+	statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	errorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
 )
 
 func main() {
 	addr := flag.String("addr", "localhost:8080", "daisd address")
-	sessionName := flag.String("name", "", "session name")
-	model := flag.String("model", "", "model override")
 	flag.Parse()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	url := fmt.Sprintf("ws://%s/ws/remote", *addr)
-	conn, _, err := websocket.Dial(ctx, url, nil)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "connect failed: %v\n", err)
-		os.Exit(1)
-	}
-	defer conn.CloseNow()
 
-	conn.SetReadLimit(1 << 20) // 1 MB
+	p := tea.NewProgram(
+		newModel(url),
+		tea.WithAltScreen(),
+	)
 
-	// Read init message.
-	_, data, err := conn.Read(ctx)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "read init failed: %v\n", err)
-		os.Exit(1)
-	}
-
-	var init struct {
-		Version string `json:"version"`
-	}
-	json.Unmarshal(data, &init)
-	fmt.Fprintf(os.Stderr, "Connected to daisd %s\n", init.Version)
-
-	// Create a session.
-	createMsg, _ := json.Marshal(map[string]string{
-		"type":  "create_session",
-		"name":  *sessionName,
-		"model": *model,
-	})
-	if err := conn.Write(ctx, websocket.MessageText, createMsg); err != nil {
-		fmt.Fprintf(os.Stderr, "create session failed: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Read session_created response.
-	_, data, err = conn.Read(ctx)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "read session_created failed: %v\n", err)
-		os.Exit(1)
-	}
-
-	var created struct {
-		SessionID string `json:"session_id"`
-		Name      string `json:"name"`
-	}
-	json.Unmarshal(data, &created)
-	sessionID := created.SessionID
-	fmt.Fprintf(os.Stderr, "Session: %s (%s)\n", created.Name, sessionID)
-
-	// commandDone signals when a command completes.
-	var commandMu sync.Mutex
-	commandDone := make(chan struct{}, 1)
-	inCommand := false
-
-	// Handle Ctrl-C: first press cancels current command, second exits.
+	// Handle Ctrl-C outside bubbletea (backup).
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT)
 	go func() {
-		for range sigCh {
-			commandMu.Lock()
-			active := inCommand
-			commandMu.Unlock()
-
-			if active {
-				msg, _ := json.Marshal(map[string]string{
-					"type":       "cancel",
-					"session_id": sessionID,
-				})
-				_ = conn.Write(ctx, websocket.MessageText, msg)
-			} else {
-				fmt.Fprintln(os.Stderr, "\nBye.")
-				conn.Close(websocket.StatusNormalClosure, "user exit")
-				os.Exit(0)
-			}
-		}
+		<-sigCh
+		p.Quit()
 	}()
 
-	// Response reader goroutine.
-	go func() {
-		for {
-			_, data, err := conn.Read(ctx)
-			if err != nil {
-				if ctx.Err() == nil {
-					fmt.Fprintf(os.Stderr, "\nDisconnected: %v\n", err)
-				}
-				cancel()
-				return
-			}
-
-			var msg struct {
-				Type       string  `json:"type"`
-				SessionID  string  `json:"session_id,omitempty"`
-				Content    string  `json:"content,omitempty"`
-				Name       string  `json:"name,omitempty"`
-				Message    string  `json:"message,omitempty"`
-				State      string  `json:"state,omitempty"`
-				DurationMs float64 `json:"duration_ms,omitempty"`
-				CostUSD    float64 `json:"cost_usd,omitempty"`
-			}
-			json.Unmarshal(data, &msg)
-
-			// Only process events for our session.
-			if msg.SessionID != "" && msg.SessionID != sessionID {
-				continue
-			}
-
-			switch msg.Type {
-			case "text":
-				fmt.Print(msg.Content)
-			case "tool_use":
-				fmt.Fprintf(os.Stderr, "\n[tool: %s]\n", msg.Name)
-			case "done":
-				fmt.Println()
-				if msg.DurationMs > 0 || msg.CostUSD > 0 {
-					fmt.Fprintf(os.Stderr, "[%.1fs, $%.4f]\n", msg.DurationMs/1000, msg.CostUSD)
-				}
-				commandMu.Lock()
-				inCommand = false
-				commandMu.Unlock()
-				select {
-				case commandDone <- struct{}{}:
-				default:
-				}
-			case "error":
-				fmt.Fprintf(os.Stderr, "\nError: %s\n", msg.Message)
-				commandMu.Lock()
-				inCommand = false
-				commandMu.Unlock()
-				select {
-				case commandDone <- struct{}{}:
-				default:
-				}
-			case "status":
-				// Could show a spinner here.
-			}
-		}
-	}()
-
-	// Detect interactive vs piped stdin.
-	interactive := isTerminal(os.Stdin)
-
-	// REPL: read stdin lines, send as commands.
-	scanner := bufio.NewScanner(os.Stdin)
-	if interactive {
-		fmt.Print("> ")
-	}
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
-			if interactive {
-				fmt.Print("> ")
-			}
-			continue
-		}
-
-		commandMu.Lock()
-		inCommand = true
-		commandMu.Unlock()
-
-		msg, _ := json.Marshal(map[string]string{
-			"type":       "command",
-			"session_id": sessionID,
-			"text":       line,
-		})
-		if err := conn.Write(ctx, websocket.MessageText, msg); err != nil {
-			fmt.Fprintf(os.Stderr, "send failed: %v\n", err)
-			break
-		}
-
-		// Wait for done/error before next prompt.
-		select {
-		case <-commandDone:
-		case <-ctx.Done():
-			return
-		}
-		if interactive {
-			fmt.Print("> ")
-		}
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 
-	// If stdin was piped and a command is still in flight, wait for it.
-	if !interactive {
-		commandMu.Lock()
-		active := inCommand
-		commandMu.Unlock()
-		if active {
-			select {
-			case <-commandDone:
-			case <-ctx.Done():
+	// Save history on exit.
+	saveHistory(nil)
+}
+
+// --- History management ---
+
+var history []string
+
+func historyPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(home, ".dais")
+	os.MkdirAll(dir, 0o755)
+	return filepath.Join(dir, "remote_history")
+}
+
+func loadHistory() {
+	hp := historyPath()
+	if hp == "" {
+		return
+	}
+	l := liner.NewLiner()
+	defer l.Close()
+	if f, err := os.Open(hp); err == nil {
+		l.ReadHistory(f)
+		f.Close()
+	}
+	// liner doesn't expose history directly, so we store our own.
+	if data, err := os.ReadFile(hp); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if line != "" {
+				history = append(history, line)
 			}
 		}
 	}
 }
 
-func isTerminal(f *os.File) bool {
-	fi, err := f.Stat()
-	if err != nil {
-		return false
+func saveHistory(extra []string) {
+	history = append(history, extra...)
+	hp := historyPath()
+	if hp == "" {
+		return
 	}
-	return fi.Mode()&os.ModeCharDevice != 0
+	// Keep last 1000 lines.
+	if len(history) > 1000 {
+		history = history[len(history)-1000:]
+	}
+	os.WriteFile(hp, []byte(strings.Join(history, "\n")+"\n"), 0o644)
+}
+
+func addHistory(line string) {
+	history = append(history, line)
+}
+
+// --- Model ---
+
+type model struct {
+	url    string
+	conn   *websocket.Conn
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	viewport viewport.Model
+	input    textarea.Model
+	renderer *glamour.TermRenderer
+
+	// Shepherd state.
+	markdown  string    // accumulated markdown for current turn
+	rendered  string    // glamour-rendered output (for streaming display)
+	status    string    // "idle", "thinking", "disconnected"
+	version   string
+	turnStart time.Time // when the current shepherd turn began
+
+	// Conversation log (structured entries, re-rendered on demand).
+	entries []logEntry
+
+	// Reconnect state.
+	backoff time.Duration
+
+	// History navigation.
+	histIdx int // -1 = editing new input
+	draft   string
+
+	// Layout.
+	width  int
+	height int
+	ready  bool
+
+	// Unread tracking (when scrolled away from bottom).
+	unread    int
+	lastCount int // entry count at last scroll-to-bottom
+}
+
+func newModel(url string) *model {
+	loadHistory()
+
+	ti := textarea.New()
+	ti.Placeholder = "Type a message..."
+	ti.Focus()
+	ti.SetHeight(1)
+	ti.ShowLineNumbers = false
+	ti.KeyMap.InsertNewline.SetEnabled(false)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	return &model{
+		url:     url,
+		ctx:     ctx,
+		cancel:  cancel,
+		input:   ti,
+		status:  "disconnected",
+		backoff: 100 * time.Millisecond,
+		histIdx: -1,
+	}
+}
+
+func (m *model) Init() tea.Cmd {
+	return tea.Batch(
+		textarea.Blink,
+		m.connect(),
+	)
+}
+
+func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "ctrl+c":
+			m.cancel()
+			return m, tea.Quit
+
+		case "enter":
+			text := strings.TrimSpace(m.input.Value())
+			if text == "" || m.status != "idle" {
+				break
+			}
+			m.input.Reset()
+			m.histIdx = -1
+			m.draft = ""
+			addHistory(text)
+
+			return m, m.send(text)
+
+		case "ctrl+p":
+			// History: previous.
+			if len(history) == 0 {
+				break
+			}
+			if m.histIdx == -1 {
+				m.draft = m.input.Value()
+				m.histIdx = len(history) - 1
+			} else if m.histIdx > 0 {
+				m.histIdx--
+			}
+			m.input.SetValue(history[m.histIdx])
+			return m, nil
+
+		case "ctrl+n":
+			// History: next.
+			if m.histIdx == -1 {
+				break
+			}
+			if m.histIdx < len(history)-1 {
+				m.histIdx++
+				m.input.SetValue(history[m.histIdx])
+			} else {
+				m.histIdx = -1
+				m.input.SetValue(m.draft)
+			}
+			return m, nil
+		}
+
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+
+		inputHeight := 3 // textarea + border
+		statusHeight := 1
+
+		if !m.ready {
+			m.viewport = viewport.New(msg.Width, msg.Height-inputHeight-statusHeight)
+			m.viewport.SetContent("")
+			// Keep arrow/pgup/pgdn but drop vi aliases (j/k/d/u/f/b/h/l)
+			// that conflict with typing in the textarea.
+			m.viewport.KeyMap = viewport.KeyMap{
+				PageDown:     key.NewBinding(key.WithKeys("pgdown")),
+				PageUp:       key.NewBinding(key.WithKeys("pgup")),
+				HalfPageUp:   key.NewBinding(key.WithKeys("ctrl+u")),
+				HalfPageDown: key.NewBinding(key.WithKeys("ctrl+d")),
+				Up:           key.NewBinding(key.WithKeys("up")),
+				Down:         key.NewBinding(key.WithKeys("down")),
+				Left:         key.NewBinding(key.WithKeys("left")),
+				Right:        key.NewBinding(key.WithKeys("right")),
+			}
+			m.ready = true
+		} else {
+			m.viewport.Width = msg.Width
+			m.viewport.Height = msg.Height - inputHeight - statusHeight
+		}
+
+		m.input.SetWidth(msg.Width - 2)
+
+		// Recreate renderer with wrap width for content column.
+		r, err := glamour.NewTermRenderer(
+			glamour.WithStandardStyle("light"),
+			glamour.WithWordWrap(msg.Width-14),
+		)
+		if err == nil {
+			m.renderer = r
+		}
+
+		m.updateViewport()
+		return m, nil
+
+	case connectedMsg:
+		m.version = string(msg)
+		m.status = "idle"
+		m.backoff = 100 * time.Millisecond
+		m.entries = nil
+		m.entries = append(m.entries, logEntry{
+			kind:      "status",
+			text:      fmt.Sprintf("Connected to daisd %s", m.version),
+			timestamp: time.Now(),
+		})
+		m.updateViewport()
+		return m, m.readWS()
+
+	case historyMsg:
+		for _, entry := range msg {
+			m.entries = append(m.entries, logEntry{
+				kind:      entry.Role,
+				text:      entry.Text,
+				timestamp: entry.Timestamp,
+			})
+		}
+		m.updateViewport()
+		return m, m.readWS()
+
+	case disconnectedMsg:
+		m.conn = nil
+		m.status = "disconnected"
+		m.entries = append(m.entries, logEntry{
+			kind:      "status",
+			text:      fmt.Sprintf("Disconnected: %v", msg.err),
+			timestamp: time.Now(),
+		})
+		m.updateViewport()
+		return m, m.reconnectAfter()
+
+	case textMsg:
+		m.markdown += string(msg)
+		m.renderMarkdown()
+		m.updateViewport()
+		return m, m.readWS()
+
+	case statusMsg:
+		m.status = string(msg)
+		if m.status == "idle" && m.markdown != "" {
+			// Turn complete — store raw markdown as a log entry.
+			m.entries = append(m.entries, logEntry{
+				kind:      "shepherd",
+				text:      m.markdown,
+				timestamp: m.turnStart,
+			})
+			m.markdown = ""
+			m.rendered = ""
+		}
+		m.updateViewport()
+		return m, m.readWS()
+
+	case errorMsg:
+		m.entries = append(m.entries, logEntry{
+			kind: "error",
+			text: string(msg),
+		})
+		m.updateViewport()
+		return m, m.readWS()
+
+	case userBroadcastMsg:
+		m.entries = append(m.entries, logEntry{
+			kind:      "user",
+			text:      msg.Text,
+			timestamp: msg.Timestamp,
+		})
+		m.turnStart = msg.Timestamp
+		m.markdown = ""
+		m.rendered = ""
+		m.updateViewport()
+		return m, m.readWS()
+	}
+
+	// Update textarea.
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	cmds = append(cmds, cmd)
+
+	// Update viewport.
+	m.viewport, cmd = m.viewport.Update(msg)
+	cmds = append(cmds, cmd)
+
+	if m.viewport.AtBottom() {
+		m.unread = 0
+		m.lastCount = len(m.entries)
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+func (m *model) View() string {
+	if !m.ready {
+		return "Connecting..."
+	}
+
+	status := m.statusLine()
+	return m.viewport.View() + "\n" + status + "\n" + m.input.View()
+}
+
+var (
+	ruleStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241"))
+	badgeStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("230")).
+			Background(lipgloss.Color("63")).
+			Bold(true).
+			Padding(0, 1)
+	thinkingBadgeStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("230")).
+				Background(lipgloss.Color("241")).
+				Padding(0, 1)
+	disconnectedBadgeStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("230")).
+				Background(lipgloss.Color("196")).
+				Bold(true).
+				Padding(0, 1)
+)
+
+func (m *model) statusLine() string {
+	if m.width == 0 {
+		return ""
+	}
+
+	// Determine badge text.
+	var badge string
+	switch {
+	case m.status == "disconnected":
+		badge = disconnectedBadgeStyle.Render("Disconnected")
+	case m.status == "thinking":
+		badge = thinkingBadgeStyle.Render("Thinking…")
+	}
+
+	// Scrolled-up indicator (shown alongside or instead of status badge).
+	if !m.viewport.AtBottom() {
+		scrollBadge := "↓"
+		if m.unread > 0 {
+			scrollBadge = fmt.Sprintf("↓ %d new", m.unread)
+		}
+		if badge != "" {
+			// Append scroll indicator after status badge.
+			badge += " " + badgeStyle.Render(scrollBadge)
+		} else {
+			badge = badgeStyle.Render(scrollBadge)
+		}
+	}
+
+	if badge == "" {
+		return ruleStyle.Render(strings.Repeat("─", m.width))
+	}
+
+	// Center badge on a full-width ─ rule.
+	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, badge,
+		lipgloss.WithWhitespaceChars("─"),
+		lipgloss.WithWhitespaceForeground(lipgloss.Color("241")),
+	)
+}
+
+// --- Rendering ---
+
+// newTable creates a lipgloss table with the standard 3-column layout:
+// time │ icon │ content.
+func (m *model) newTable() *table.Table {
+	return table.New().
+		Border(lipgloss.NormalBorder()).
+		BorderTop(false).
+		BorderBottom(false).
+		BorderLeft(false).
+		BorderRight(false).
+		BorderRow(false).
+		BorderHeader(false).
+		BorderColumn(true).
+		BorderStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("241"))).
+		Width(m.width).
+		StyleFunc(m.tableStyle)
+}
+
+func (m *model) tableStyle(row, col int) lipgloss.Style {
+	s := lipgloss.NewStyle().PaddingBottom(1)
+	switch col {
+	case 0:
+		return s.Width(5)
+	case 1:
+		return s.Width(2)
+	default:
+		return s
+	}
+}
+
+// renderLog builds the full conversation log as a table string.
+func (m *model) renderLog() string {
+	if len(m.entries) == 0 || m.width == 0 {
+		return ""
+	}
+
+	t := m.newTable()
+
+	for _, entry := range m.entries {
+		ts := ""
+		if !entry.timestamp.IsZero() {
+			ts = statusStyle.Render(entry.timestamp.Format("15:04"))
+		}
+
+		switch entry.kind {
+		case "user":
+			t.Row(ts, "💬", m.renderBold(entry.text))
+		case "shepherd":
+			t.Row(ts, "", m.glamourRender(entry.text))
+		case "status":
+			t.Row(ts, "", statusStyle.Render(entry.text))
+		case "error":
+			t.Row(ts, "", errorStyle.Render(entry.text))
+		}
+	}
+
+	return t.String()
+}
+
+// renderStreamingRow renders the in-progress shepherd response as a
+// single-row table with the same column layout as the log.
+func (m *model) renderStreamingRow() string {
+	if m.width == 0 || m.rendered == "" {
+		return ""
+	}
+
+	ts := ""
+	if !m.turnStart.IsZero() {
+		ts = statusStyle.Render(m.turnStart.Format("15:04"))
+	}
+
+	t := m.newTable()
+	t.Row(ts, "", m.rendered)
+	return t.String()
+}
+
+// renderBold renders text as bold italic via glamour.
+func (m *model) renderBold(text string) string {
+	if m.renderer == nil {
+		return text
+	}
+	r, err := m.renderer.Render("***" + text + "***")
+	if err != nil {
+		return text
+	}
+	return strings.TrimSpace(r)
+}
+
+// glamourRender renders markdown via glamour.
+func (m *model) glamourRender(text string) string {
+	if m.renderer == nil {
+		return text
+	}
+	r, err := m.renderer.Render(text)
+	if err != nil {
+		return text
+	}
+	return strings.TrimSpace(r)
+}
+
+func (m *model) renderMarkdown() {
+	if m.renderer == nil || m.markdown == "" {
+		return
+	}
+	rendered, err := m.renderer.Render(m.markdown)
+	if err == nil {
+		m.rendered = strings.TrimSpace(rendered)
+	}
+}
+
+func (m *model) updateViewport() {
+	if !m.ready {
+		return
+	}
+	content := m.renderLog()
+	if m.rendered != "" {
+		content += m.renderStreamingRow()
+	}
+	atBottom := m.viewport.AtBottom()
+	m.viewport.SetContent(content)
+	if atBottom {
+		m.viewport.GotoBottom()
+		m.unread = 0
+		m.lastCount = len(m.entries)
+	} else {
+		m.unread = len(m.entries) - m.lastCount
+	}
+}
+
+// --- WebSocket commands ---
+
+func (m *model) connect() tea.Cmd {
+	return func() tea.Msg {
+		conn, _, err := websocket.Dial(m.ctx, m.url, nil)
+		if err != nil {
+			return disconnectedMsg{err: err}
+		}
+		conn.SetReadLimit(1 << 20)
+
+		// Read init message.
+		_, data, err := conn.Read(m.ctx)
+		if err != nil {
+			conn.CloseNow()
+			return disconnectedMsg{err: err}
+		}
+
+		var init struct {
+			Version string `json:"version"`
+		}
+		json.Unmarshal(data, &init)
+
+		m.conn = conn
+		return connectedMsg(init.Version)
+	}
+}
+
+func (m *model) reconnectAfter() tea.Cmd {
+	delay := m.backoff
+	m.backoff = min(m.backoff*2, 5*time.Second)
+	return tea.Tick(delay, func(time.Time) tea.Msg {
+		return m.connect()()
+	})
+}
+
+func (m *model) readWS() tea.Cmd {
+	return func() tea.Msg {
+		if m.conn == nil {
+			return disconnectedMsg{err: fmt.Errorf("no connection")}
+		}
+
+		_, data, err := m.conn.Read(m.ctx)
+		if err != nil {
+			return disconnectedMsg{err: err}
+		}
+
+		var msg struct {
+			Type    string `json:"type"`
+			Content string `json:"content,omitempty"`
+			State   string `json:"state,omitempty"`
+			Message string `json:"message,omitempty"`
+		}
+		json.Unmarshal(data, &msg)
+
+		switch msg.Type {
+		case "text":
+			return textMsg(msg.Content)
+		case "status":
+			return statusMsg(msg.State)
+		case "error":
+			return errorMsg(msg.Message)
+		case "history":
+			var full struct {
+				Entries []historyEntry `json:"entries"`
+			}
+			json.Unmarshal(data, &full)
+			return historyMsg(full.Entries)
+		case "user_message":
+			var um userBroadcastMsg
+			json.Unmarshal(data, &um)
+			return um
+		}
+
+		// Unknown message type — keep reading.
+		return m.readWS()()
+	}
+}
+
+func (m *model) send(text string) tea.Cmd {
+	return func() tea.Msg {
+		if m.conn == nil {
+			return disconnectedMsg{err: fmt.Errorf("not connected")}
+		}
+
+		data, _ := json.Marshal(map[string]string{
+			"type": "message",
+			"text": text,
+		})
+		if err := m.conn.Write(m.ctx, websocket.MessageText, data); err != nil {
+			return disconnectedMsg{err: err}
+		}
+		return nil
+	}
 }
