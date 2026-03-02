@@ -14,6 +14,7 @@ import (
 	"github.com/marcelocantos/dais/internal/cli"
 	"github.com/marcelocantos/dais/internal/ctlapi"
 	"github.com/marcelocantos/dais/internal/db"
+	"github.com/marcelocantos/dais/internal/discovery"
 	"github.com/marcelocantos/dais/internal/manager"
 	"github.com/marcelocantos/dais/internal/server"
 	"github.com/marcelocantos/dais/internal/shepherd"
@@ -180,7 +181,8 @@ func main() {
 	defer database.Close()
 
 	// Create components.
-	mgr := manager.New(*model, *workDir, database)
+	scanner := discovery.NewScanner(filepath.Join(homeDir, ".claude", "projects"))
+	mgr := manager.New(*model, *workDir, database, scanner)
 
 	shep := shepherd.New(shepherd.Config{
 		WorkDir:  shepDir,
@@ -198,7 +200,7 @@ func main() {
 	srv := server.New(shep, database, cli.Version)
 
 	// Wire ctlapi with shepherd event callback.
-	ctl := ctlapi.New(mgr, database, *workDir, func(workerID, workerName, result string, failed bool) {
+	ctl := ctlapi.New(mgr, *workDir, func(workerID, workerName, result string, failed bool) {
 		kind := shepherd.EventWorkerCompleted
 		if failed {
 			kind = shepherd.EventWorkerFailed

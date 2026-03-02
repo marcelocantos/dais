@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/marcelocantos/dais/internal/db"
 	"github.com/marcelocantos/dais/internal/manager"
 	"github.com/marcelocantos/dais/internal/session"
 )
@@ -20,16 +19,14 @@ type EventCallback func(workerID, workerName, result string, failed bool)
 // Handler provides REST endpoints for dais-ctl.
 type Handler struct {
 	mgr      *manager.Manager
-	db       *db.DB
 	onDone   EventCallback
 	workerWD string // default working directory for workers
 }
 
-// New creates a Handler with the given manager, database, and callback.
-func New(mgr *manager.Manager, database *db.DB, workerWD string, onDone EventCallback) *Handler {
+// New creates a Handler with the given manager and callback.
+func New(mgr *manager.Manager, workerWD string, onDone EventCallback) *Handler {
 	return &Handler{
 		mgr:      mgr,
-		db:       database,
 		onDone:   onDone,
 		workerWD: workerWD,
 	}
@@ -60,11 +57,16 @@ func (h *Handler) createWorker(w http.ResponseWriter, r *http.Request) {
 		workDir = h.workerWD
 	}
 
-	sess := h.mgr.Create(manager.CreateConfig{
+	sess, err := h.mgr.Create(manager.CreateConfig{
 		Name:    body.Name,
 		WorkDir: workDir,
 		Model:   body.Model,
 	})
+	if err != nil {
+		slog.Error("failed to create worker", "err", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
@@ -74,8 +76,9 @@ func (h *Handler) createWorker(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) listWorkers(w http.ResponseWriter, r *http.Request) {
+	all := r.URL.Query().Get("all") == "true"
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(h.mgr.List())
+	json.NewEncoder(w).Encode(h.mgr.List(all))
 }
 
 type workerDetail struct {
@@ -104,6 +107,13 @@ func (h *Handler) getWorker(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) sendCommand(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+
+	// Refuse to touch sessions that are open in another claude process.
+	if h.mgr.IsExternallyActive(id) {
+		http.Error(w, "session is in use by another claude process", http.StatusConflict)
+		return
+	}
+
 	sess := h.mgr.Get(id)
 	if sess == nil {
 		http.Error(w, "worker not found", http.StatusNotFound)
@@ -155,16 +165,6 @@ func (h *Handler) runAndNotify(id string, sess *session.Session, text string) {
 	const maxResult = 2000
 	if len(result) > maxResult {
 		result = result[:maxResult] + "\n... (truncated)"
-	}
-
-	// Persist updated worker state (claudeID, lastResult).
-	if err := h.db.SaveWorker(db.WorkerRow{
-		ID:         id,
-		Name:       sess.Name(),
-		ClaudeID:   sess.ClaudeID(),
-		LastResult: result,
-	}); err != nil {
-		slog.Error("failed to persist worker state", "worker", id, "err", err)
 	}
 
 	failed := strings.HasPrefix(result, "error: ")
