@@ -3,11 +3,14 @@
 package manager
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/marcelocantos/dais/internal/db"
+	"github.com/marcelocantos/dais/internal/discovery"
 	"github.com/marcelocantos/dais/internal/session"
 )
 
@@ -19,9 +22,12 @@ type SessionEvent struct {
 
 // SessionSummary is a lightweight view of a session for listing.
 type SessionSummary struct {
-	ID     string         `json:"id"`
-	Name   string         `json:"name"`
-	Status session.Status `json:"status"`
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	Status    session.Status `json:"status"`
+	WorkDir   string         `json:"workdir,omitempty"`
+	ModTime   time.Time      `json:"mod_time,omitempty"`
+	Active    bool           `json:"active,omitempty"`
 }
 
 // CreateConfig holds parameters for creating a new session.
@@ -36,59 +42,26 @@ type Manager struct {
 	defaultModel string
 	defaultDir   string
 	db           *db.DB
+	scanner      *discovery.Scanner
 
 	mu       sync.RWMutex
-	sessions map[string]*session.Session
-	nextID   int
+	sessions map[string]*session.Session // keyed by UUID
 }
 
 // New creates a Manager with default configuration.
-func New(defaultModel, defaultDir string, database *db.DB) *Manager {
-	m := &Manager{
+func New(defaultModel, defaultDir string, database *db.DB, scanner *discovery.Scanner) *Manager {
+	return &Manager{
 		defaultModel: defaultModel,
 		defaultDir:   defaultDir,
 		db:           database,
+		scanner:      scanner,
 		sessions:     make(map[string]*session.Session),
 	}
-
-	// Restore workers from database.
-	if workers, err := database.LoadWorkers(); err != nil {
-		slog.Error("failed to load workers", "err", err)
-	} else {
-		for _, w := range workers {
-			s := session.New(session.Config{
-				ID:       w.ID,
-				Name:     w.Name,
-				WorkDir:  w.WorkDir,
-				Model:    w.Model,
-				ClaudeID: w.ClaudeID,
-			})
-			s.SetLastResult(w.LastResult)
-			s.SetRawLog(m.rawLogFunc(w.ID))
-			m.sessions[w.ID] = s
-
-			// Track highest ID for nextID.
-			var n int
-			if _, err := fmt.Sscanf(w.ID, "s%d", &n); err == nil && n >= m.nextID {
-				m.nextID = n
-			}
-		}
-		if len(m.sessions) > 0 {
-			slog.Info("restored workers from database", "count", len(m.sessions))
-		}
-	}
-
-	return m
 }
 
-// Create creates a new session and returns it.
-func (m *Manager) Create(cfg CreateConfig) *session.Session {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.nextID++
-	id := fmt.Sprintf("s%d", m.nextID)
-
+// Create creates a new session by running claude to establish a session ID.
+// The JSONL file Claude creates becomes the persistent record.
+func (m *Manager) Create(cfg CreateConfig) (*session.Session, error) {
 	model := cfg.Model
 	if model == "" {
 		model = m.defaultModel
@@ -99,48 +72,138 @@ func (m *Manager) Create(cfg CreateConfig) *session.Session {
 	}
 	name := cfg.Name
 	if name == "" {
-		name = fmt.Sprintf("Session %d", m.nextID)
+		name = workDir
 	}
 
+	// Create a temporary session without a UUID — Run() will capture
+	// the session ID from the init event.
+	tmpID := fmt.Sprintf("creating-%d", time.Now().UnixNano())
 	s := session.New(session.Config{
-		ID:      id,
+		ID:      tmpID,
 		Name:    name,
 		WorkDir: workDir,
 		Model:   model,
 	})
-	s.SetRawLog(m.rawLogFunc(id))
-	m.sessions[id] = s
-	slog.Info("session created", "id", id, "name", name, "model", model)
+	s.SetRawLog(m.rawLogFunc(tmpID))
 
-	if err := m.db.SaveWorker(db.WorkerRow{
-		ID: id, Name: name, WorkDir: workDir, Model: model,
-	}); err != nil {
-		slog.Error("failed to persist worker", "id", id, "err", err)
+	events, err := s.Run(context.Background(), "Ready.")
+	if err != nil {
+		return nil, fmt.Errorf("create session: %w", err)
 	}
 
+	// Drain events to find the init event with the session UUID.
+	var uuid string
+	for ev := range events {
+		if ev.Type == session.EventInit && ev.SessionID != "" {
+			uuid = ev.SessionID
+		}
+	}
+
+	if uuid == "" {
+		return nil, fmt.Errorf("no session ID received from claude")
+	}
+
+	// Re-register under the real UUID.
+	m.mu.Lock()
+	s.SetRawLog(m.rawLogFunc(uuid))
+	m.sessions[uuid] = s
+	m.mu.Unlock()
+
+	slog.Info("session created", "uuid", uuid, "name", name, "model", model)
+	return s, nil
+}
+
+// Get returns a session by UUID. If the UUID is not in the active sessions
+// map, it attempts to discover it from the filesystem and lazily activate it.
+func (m *Manager) Get(id string) *session.Session {
+	m.mu.RLock()
+	if s, ok := m.sessions[id]; ok {
+		m.mu.RUnlock()
+		return s
+	}
+	m.mu.RUnlock()
+
+	// Try to discover the session from the filesystem.
+	if !discovery.IsUUID(id) {
+		return nil
+	}
+	info, err := m.scanner.Get(id)
+	if err != nil || info == nil {
+		return nil
+	}
+
+	model := m.defaultModel
+	s := session.New(session.Config{
+		ID:       id,
+		Name:     info.WorkDir,
+		WorkDir:  info.WorkDir,
+		Model:    model,
+		ClaudeID: id,
+	})
+	s.SetRawLog(m.rawLogFunc(id))
+
+	m.mu.Lock()
+	// Double-check under write lock.
+	if existing, ok := m.sessions[id]; ok {
+		m.mu.Unlock()
+		return existing
+	}
+	m.sessions[id] = s
+	m.mu.Unlock()
+
+	slog.Info("session activated from discovery", "uuid", id, "workdir", info.WorkDir)
 	return s
 }
 
-// Get returns a session by ID, or nil if not found.
-func (m *Manager) Get(id string) *session.Session {
+// List returns a summary of all sessions, merging active in-memory sessions
+// with discovered sessions from the filesystem. If all is true, no age
+// filter is applied; otherwise only sessions modified in the last 7 days.
+func (m *Manager) List(all bool) []SessionSummary {
+	maxAge := 7 * 24 * time.Hour
+	if all {
+		maxAge = 0
+	}
+
+	discovered, err := m.scanner.Scan(maxAge)
+	if err != nil {
+		slog.Error("discovery scan failed", "err", err)
+	}
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.sessions[id]
-}
 
-// List returns a summary of all sessions.
-func (m *Manager) List() []SessionSummary {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	// Build result from discovered sessions, overlaying active status.
+	seen := make(map[string]bool)
+	result := make([]SessionSummary, 0, len(discovered))
 
-	result := make([]SessionSummary, 0, len(m.sessions))
-	for _, s := range m.sessions {
+	for _, d := range discovered {
+		seen[d.UUID] = true
+		status := session.StatusIdle
+		if s, ok := m.sessions[d.UUID]; ok {
+			status = s.Status()
+		}
 		result = append(result, SessionSummary{
-			ID:     s.ID(),
+			ID:      d.UUID,
+			Name:    d.WorkDir,
+			Status:  status,
+			WorkDir: d.WorkDir,
+			ModTime: d.ModTime,
+			Active:  d.Active,
+		})
+	}
+
+	// Add any active sessions not found by discovery (e.g., just created).
+	for id, s := range m.sessions {
+		if seen[id] {
+			continue
+		}
+		result = append(result, SessionSummary{
+			ID:     id,
 			Name:   s.Name(),
 			Status: s.Status(),
 		})
 	}
+
 	return result
 }
 
@@ -152,21 +215,33 @@ func (m *Manager) rawLogFunc(sessionID string) session.RawLogFunc {
 	}
 }
 
-// Kill stops a session and removes it from the manager.
+// IsExternallyActive checks whether a session's JSONL file is currently
+// open by another claude process (i.e., not managed by this daisd instance).
+func (m *Manager) IsExternallyActive(id string) bool {
+	// If we're managing this session and it's running, it's us — not external.
+	m.mu.RLock()
+	if s, ok := m.sessions[id]; ok && s.Status() == session.StatusRunning {
+		m.mu.RUnlock()
+		return false
+	}
+	m.mu.RUnlock()
+
+	return m.scanner.IsActive(id)
+}
+
+// Kill stops a session and removes it from the active sessions map.
+// The JSONL file remains on disk (session is still discoverable).
 func (m *Manager) Kill(id string) error {
 	m.mu.Lock()
 	s, ok := m.sessions[id]
 	if !ok {
 		m.mu.Unlock()
-		return fmt.Errorf("session %q not found", id)
+		return fmt.Errorf("session %q not found (not active)", id)
 	}
 	delete(m.sessions, id)
 	m.mu.Unlock()
 
 	s.Stop()
-	if err := m.db.DeleteWorker(id); err != nil {
-		slog.Error("failed to delete worker from db", "id", id, "err", err)
-	}
 	slog.Info("session killed", "id", id)
 	return nil
 }

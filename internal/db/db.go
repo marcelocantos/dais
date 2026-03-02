@@ -39,14 +39,6 @@ func Open(path string) (*DB, error) {
 			key   TEXT PRIMARY KEY,
 			value TEXT NOT NULL
 		)`,
-		`CREATE TABLE IF NOT EXISTS workers (
-			id       TEXT PRIMARY KEY,
-			name     TEXT NOT NULL,
-			workdir  TEXT NOT NULL,
-			model    TEXT NOT NULL DEFAULT '',
-			claude_id TEXT NOT NULL DEFAULT '',
-			last_result TEXT NOT NULL DEFAULT ''
-		)`,
 		`CREATE TABLE IF NOT EXISTS raw_log (
 			id         INTEGER PRIMARY KEY AUTOINCREMENT,
 			source     TEXT NOT NULL,
@@ -114,56 +106,6 @@ func (d *DB) Set(key, value string) error {
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 		key, value,
 	)
-	return err
-}
-
-// WorkerRow represents a persisted worker.
-type WorkerRow struct {
-	ID         string
-	Name       string
-	WorkDir    string
-	Model      string
-	ClaudeID   string
-	LastResult string
-}
-
-// SaveWorker upserts a worker row.
-func (d *DB) SaveWorker(w WorkerRow) error {
-	_, err := d.db.Exec(
-		`INSERT INTO workers (id, name, workdir, model, claude_id, last_result)
-		 VALUES (?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(id) DO UPDATE SET
-		   name = excluded.name,
-		   claude_id = excluded.claude_id,
-		   last_result = excluded.last_result`,
-		w.ID, w.Name, w.WorkDir, w.Model, w.ClaudeID, w.LastResult,
-	)
-	return err
-}
-
-// LoadWorkers returns all persisted workers.
-func (d *DB) LoadWorkers() ([]WorkerRow, error) {
-	rows, err := d.db.Query(
-		`SELECT id, name, workdir, model, claude_id, last_result FROM workers`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var workers []WorkerRow
-	for rows.Next() {
-		var w WorkerRow
-		if err := rows.Scan(&w.ID, &w.Name, &w.WorkDir, &w.Model, &w.ClaudeID, &w.LastResult); err != nil {
-			return nil, err
-		}
-		workers = append(workers, w)
-	}
-	return workers, rows.Err()
-}
-
-// DeleteWorker removes a worker row.
-func (d *DB) DeleteWorker(id string) error {
-	_, err := d.db.Exec(`DELETE FROM workers WHERE id = ?`, id)
 	return err
 }
 

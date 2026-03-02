@@ -32,7 +32,7 @@ func main() {
 	case "create":
 		doCreate(os.Args[2:])
 	case "list":
-		doList()
+		doList(os.Args[2:])
 	case "status":
 		requireArg(2, "worker ID")
 		doStatus(os.Args[2])
@@ -57,8 +57,9 @@ Commands:
   create [--name NAME] [--workdir DIR] [--model MODEL]
       Create a new worker session.
 
-  list
-      List all workers and their status.
+  list [--all]
+      List workers and their status. By default shows sessions
+      modified in the last 7 days. Use --all to show all sessions.
 
   status <worker-id>
       Show detailed status and recent output of a worker.
@@ -74,6 +75,8 @@ Commands:
 
   --version       Print version and exit.
   --help-agent    Print agent guide and exit.
+
+Worker IDs are Claude session UUIDs (e.g. 1b55f3b5-f771-42ea-883f-aa8a683ddf75).
 `
 
 func usage() {
@@ -134,16 +137,34 @@ func doCreate(args []string) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		fmt.Fprintf(os.Stderr, "Error: %s\n", strings.TrimSpace(string(body)))
+		os.Exit(1)
+	}
+
 	var result struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	}
 	json.NewDecoder(resp.Body).Decode(&result)
-	fmt.Printf("Created worker %s (%s)\n", result.Name, result.ID)
+	fmt.Printf("Created session %s\n  workdir: %s\n", result.ID, result.Name)
 }
 
-func doList() {
-	resp, err := http.Get(baseURL() + "/ctl/workers")
+func doList(args []string) {
+	all := false
+	for _, a := range args {
+		if a == "--all" {
+			all = true
+		}
+	}
+
+	url := baseURL() + "/ctl/workers"
+	if all {
+		url += "?all=true"
+	}
+
+	resp, err := http.Get(url)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -151,19 +172,29 @@ func doList() {
 	defer resp.Body.Close()
 
 	var workers []struct {
-		ID     string `json:"id"`
-		Name   string `json:"name"`
-		Status string `json:"status"`
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		Status  string `json:"status"`
+		WorkDir string `json:"workdir"`
+		Active  bool   `json:"active"`
 	}
 	json.NewDecoder(resp.Body).Decode(&workers)
 
 	if len(workers) == 0 {
-		fmt.Println("No active workers.")
+		fmt.Println("No sessions found.")
 		return
 	}
 
 	for _, w := range workers {
-		fmt.Printf("  %s  %-20s  %s\n", w.ID, w.Name, w.Status)
+		name := w.WorkDir
+		if name == "" {
+			name = w.Name
+		}
+		status := w.Status
+		if w.Active {
+			status = "ACTIVE"
+		}
+		fmt.Printf("  %-38s  %-8s  %s\n", w.ID, status, name)
 	}
 }
 
