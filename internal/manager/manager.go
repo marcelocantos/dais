@@ -6,6 +6,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
+	"sort"
 	"sync"
 	"time"
 
@@ -14,11 +16,18 @@ import (
 	"github.com/marcelocantos/dais/internal/session"
 )
 
+// Half-life for session relevance decay (1 day).
+var decayLambda = math.Ln2 / (24 * 60 * 60) // per second
+
 // SessionEvent wraps a session event with its source session ID.
 type SessionEvent struct {
 	SessionID string
 	Event     session.Event
 }
+
+// DefaultListLimit is the maximum number of sessions returned by List
+// when not requesting all sessions.
+const DefaultListLimit = 20
 
 // SessionSummary is a lightweight view of a session for listing.
 type SessionSummary struct {
@@ -28,6 +37,7 @@ type SessionSummary struct {
 	WorkDir   string         `json:"workdir,omitempty"`
 	ModTime   time.Time      `json:"mod_time,omitempty"`
 	Active    bool           `json:"active,omitempty"`
+	Score     float64        `json:"score"`
 }
 
 // CreateConfig holds parameters for creating a new session.
@@ -156,18 +166,18 @@ func (m *Manager) Get(id string) *session.Session {
 }
 
 // List returns a summary of all sessions, merging active in-memory sessions
-// with discovered sessions from the filesystem. If all is true, no age
-// filter is applied; otherwise only sessions modified in the last 7 days.
+// with discovered sessions from the filesystem, ranked by relevance.
+// Score = log(size) * exp(-λ * age) with a 1-day half-life.
+// Active sessions are pinned to the top. If all is false, results are
+// capped at DefaultListLimit.
 func (m *Manager) List(all bool) []SessionSummary {
-	maxAge := 7 * 24 * time.Hour
-	if all {
-		maxAge = 0
-	}
-
-	discovered, err := m.scanner.Scan(maxAge)
+	// Scan all sessions — scoring replaces the age filter.
+	discovered, err := m.scanner.Scan(0)
 	if err != nil {
 		slog.Error("discovery scan failed", "err", err)
 	}
+
+	now := time.Now()
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -182,6 +192,7 @@ func (m *Manager) List(all bool) []SessionSummary {
 		if s, ok := m.sessions[d.UUID]; ok {
 			status = s.Status()
 		}
+		score := sessionScore(d.Size, now.Sub(d.ModTime))
 		result = append(result, SessionSummary{
 			ID:      d.UUID,
 			Name:    d.WorkDir,
@@ -189,6 +200,7 @@ func (m *Manager) List(all bool) []SessionSummary {
 			WorkDir: d.WorkDir,
 			ModTime: d.ModTime,
 			Active:  d.Active,
+			Score:   score,
 		})
 	}
 
@@ -201,10 +213,31 @@ func (m *Manager) List(all bool) []SessionSummary {
 			ID:     id,
 			Name:   s.Name(),
 			Status: s.Status(),
+			Score:  math.MaxFloat64, // just-created, pin high
 		})
 	}
 
+	// Sort: active sessions first, then by score descending.
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Active != result[j].Active {
+			return result[i].Active
+		}
+		return result[i].Score > result[j].Score
+	})
+
+	if !all && len(result) > DefaultListLimit {
+		result = result[:DefaultListLimit]
+	}
+
 	return result
+}
+
+// sessionScore computes relevance as log(size) * exp(-λ * age).
+func sessionScore(size int64, age time.Duration) float64 {
+	if size <= 0 {
+		return 0
+	}
+	return math.Log(float64(size)) * math.Exp(-decayLambda*age.Seconds())
 }
 
 func (m *Manager) rawLogFunc(sessionID string) session.RawLogFunc {

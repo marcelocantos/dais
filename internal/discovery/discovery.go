@@ -21,6 +21,7 @@ type SessionInfo struct {
 	WorkDir    string    // working directory (from JSONL cwd field)
 	GitBranch  string    // git branch (from JSONL gitBranch field)
 	ModTime    time.Time // last modification time of the JSONL file
+	Size       int64     // file size in bytes
 	Active     bool      // true if a claude process has this session's JSONL open
 }
 
@@ -101,6 +102,7 @@ func (s *Scanner) Scan(maxAge time.Duration) ([]SessionInfo, error) {
 			if err != nil {
 				continue
 			}
+			info.Size = fi.Size()
 			info.Active = active[uuid]
 			results = append(results, info)
 		}
