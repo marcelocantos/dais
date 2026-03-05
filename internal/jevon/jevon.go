@@ -160,6 +160,10 @@ func (j *Jevon) invoke(ctx context.Context, prompt string) error {
 		"--output-format", "stream-json",
 		"--include-partial-messages",
 		"--permission-mode", "bypassPermissions",
+		"--disallowedTools", "AskUserQuestion,EnterPlanMode,ExitPlanMode," +
+		"Agent,TeamCreate,TeamDelete,SendMessage," +
+		"TaskCreate,TaskUpdate,TaskList,TaskGet,TaskOutput,TaskStop," +
+		"EnterWorktree,Skill,NotebookEdit",
 	}
 
 	j.mu.Lock()
