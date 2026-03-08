@@ -1,6 +1,7 @@
 package db
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 )
@@ -79,5 +80,90 @@ func TestRawLog(t *testing.T) {
 	d := newTestDB(t)
 	if err := d.AppendRawLog("jevon", `{"type":"text"}`); err != nil {
 		t.Fatal(err)
+	}
+	// Multiple sources.
+	if err := d.AppendRawLog("worker-1", `{"type":"result"}`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTranscriptOrder(t *testing.T) {
+	d := newTestDB(t)
+	for i := 0; i < 10; i++ {
+		role := "user"
+		if i%2 == 1 {
+			role = "jevon"
+		}
+		if err := d.AppendTranscript(role, fmt.Sprintf("msg-%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := d.LoadTranscript()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 10 {
+		t.Fatalf("got %d entries, want 10", len(entries))
+	}
+	for i, e := range entries {
+		want := fmt.Sprintf("msg-%d", i)
+		if e.Text != want {
+			t.Errorf("entry[%d].Text = %q, want %q", i, e.Text, want)
+		}
+	}
+}
+
+func TestTranscriptTimestamp(t *testing.T) {
+	d := newTestDB(t)
+	if err := d.AppendTranscript("user", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := d.LoadTranscript()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entries[0].CreatedAt.IsZero() {
+		t.Error("CreatedAt should not be zero")
+	}
+}
+
+func TestKVMultipleKeys(t *testing.T) {
+	d := newTestDB(t)
+	if err := d.Set("a", "1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Set("b", "2"); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Get("a"); got != "1" {
+		t.Errorf("Get(a) = %q, want 1", got)
+	}
+	if got := d.Get("b"); got != "2" {
+		t.Errorf("Get(b) = %q, want 2", got)
+	}
+}
+
+func TestOpenCreatesFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "subdir", "test.db")
+	_, err := Open(path)
+	// Should fail because subdir doesn't exist — verifying we don't
+	// silently create intermediate directories.
+	if err == nil {
+		t.Error("expected error opening DB in nonexistent directory")
+	}
+}
+
+func TestInMemoryDB(t *testing.T) {
+	d, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if err := d.Set("k", "v"); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Get("k"); got != "v" {
+		t.Errorf("Get(k) = %q, want v", got)
 	}
 }

@@ -241,6 +241,65 @@ func TestNewSession(t *testing.T) {
 	}
 }
 
+func TestSetLastResult(t *testing.T) {
+	s := New(Config{ID: "test-789", Name: "test"})
+	if got := s.LastResult(); got != "" {
+		t.Errorf("initial LastResult = %q, want empty", got)
+	}
+	s.SetLastResult("done!")
+	if got := s.LastResult(); got != "done!" {
+		t.Errorf("LastResult = %q, want done!", got)
+	}
+}
+
+func TestClaudeID(t *testing.T) {
+	s := New(Config{ID: "test-abc", Name: "test", ClaudeID: "claude-xyz"})
+	if got := s.ClaudeID(); got != "claude-xyz" {
+		t.Errorf("ClaudeID = %q, want claude-xyz", got)
+	}
+}
+
+func TestClaudeIDEmpty(t *testing.T) {
+	s := New(Config{ID: "test-def", Name: "test"})
+	if got := s.ClaudeID(); got != "" {
+		t.Errorf("ClaudeID = %q, want empty", got)
+	}
+}
+
+func TestCancelNoProcess(t *testing.T) {
+	s := New(Config{ID: "test-cancel", Name: "test"})
+	// Should not panic or error when no process is running.
+	if err := s.Cancel(); err != nil {
+		t.Errorf("Cancel on idle session: %v", err)
+	}
+}
+
+func TestFilterEnv(t *testing.T) {
+	env := []string{
+		"PATH=/usr/bin",
+		"CLAUDECODE=1",
+		"HOME=/home/test",
+	}
+	got := filterEnv(env, "CLAUDECODE")
+	if len(got) != 2 {
+		t.Fatalf("filterEnv: got %d entries, want 2", len(got))
+	}
+	for _, e := range got {
+		if e == "CLAUDECODE=1" {
+			t.Error("filterEnv did not remove CLAUDECODE")
+		}
+	}
+}
+
+func TestFilterEnvPartialMatch(t *testing.T) {
+	// CLAUDECODEOTHER should NOT be filtered.
+	env := []string{"CLAUDECODE=1", "CLAUDECODEOTHER=2"}
+	got := filterEnv(env, "CLAUDECODE")
+	if len(got) != 1 || got[0] != "CLAUDECODEOTHER=2" {
+		t.Errorf("filterEnv partial match: got %v", got)
+	}
+}
+
 func TestStopSession(t *testing.T) {
 	s := New(Config{ID: "test-456", Name: "test"})
 	s.Stop()
