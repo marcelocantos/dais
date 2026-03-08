@@ -1,98 +1,80 @@
 # Convergence Report
 
-Standing invariants: all green. Tests pass (`go test ./...`), on master.
-
-**Recovered from interrupted wrap:** Last session achieved 🎯T4 (trust model documented in `docs/trust-model.md`), added 🎯T5/T6/T7, and anchored gitignore paths. Uncommitted changes remain: `STABILITY.md`, `docs/targets.md`, `docs/trust-model.md`.
+Standing invariants: all green. Tests pass (`go test ./...`), on master (clean).
 
 ## Movement
 
-- 🎯T4: not started → achieved (trust model documented)
-- 🎯T5: blocked → unblocked (T4 achieved)
-- 🎯T6: blocked → unblocked (T4 achieved)
-- 🎯T7: (unchanged)
-- 🎯T1, 🎯T2, 🎯T3: (unchanged — achieved)
+- 🎯T7: not started → converging (Phase 1 committed — SwiftUI chat app with WebSocket, streaming)
+- 🎯T5: (unchanged — identified)
+- 🎯T6: (unchanged — identified)
+- 🎯T1, 🎯T2, 🎯T3, 🎯T4: (unchanged — achieved)
 
 ## Gap Report
 
 ### 🎯T7 Mobile app for Jevon
-Gap: not started
-Weight: 1.0 (value 20 / cost 20). No work started. This is a new app (not the existing ge C++ player). Independent of security targets.
-
-### 🎯T6 Permission model enforced
-Gap: not started
-Weight: 0.6 (value 5 / cost 8), effective: 0.6. `bypassPermissions` still in `internal/jevon/jevon.go`. Now unblocked — trust model (🎯T4) defines the three permission tiers. Effective weight < 1 — consider reframing scope to reduce cost.
+Gap: significant
+Weight: 1.0 (value 20 / cost 20). Phase 1 done: SwiftUI chat app builds for simulator with connect screen, chat view, streaming responses, and WebSocket connection manager. Remaining: QR-based discovery (Phase 2), worker list/management UI (Phase 3), secure channel (depends on 🎯T5), real device testing on Pippa.
 
 ### 🎯T5 Authentication implemented
 Gap: not started
-Weight: 0.6 (value 8 / cost 13), effective: 0.6. `internal/auth` is a stub. Now unblocked. Effective weight < 1 — high cost relative to value; consider phasing.
+Weight: 0.6 (value 8 / cost 13). `internal/auth` is a stub. No mTLS, no QR provisioning. Effective weight < 1 — cost exceeds value; consider phasing (e.g., mTLS first, QR provisioning later).
 
-### 🎯T4 Trust model defined for pre-1.0
-Gap: achieved
-
-### 🎯T1 Jevon's tool surface is locked down
-Gap: achieved
-
-### 🎯T2 Conversational interaction model works end-to-end
-Gap: achieved
-
-### 🎯T3 Test coverage exists for core packages
-Gap: achieved
+### 🎯T6 Permission model enforced
+Gap: not started
+Weight: 0.6 (value 5 / cost 8). `bypassPermissions` still in `internal/jevon/jevon.go`. No confirmation routing. Effective weight < 1 — consider a smaller first step (remove bypass flags, defer WebSocket confirmation routing).
 
 ## Recommendation
 
 Work on: **🎯T7 Mobile app for Jevon**
-Reason: Highest effective weight (1.0) among unblocked targets. T5 and T6 both have effective weight < 1 (cost exceeds value) — they may benefit from reframing or scope reduction before investment. T7 is the core user-facing deliverable.
-
-Note: 🎯T5 (0.6) and 🎯T6 (0.6) have effective weight < 1, suggesting cost exceeds value. Consider reframing — e.g., reducing T5's scope to just mTLS without full QR provisioning, or splitting T6 into a smaller first step (remove `bypassPermissions`, defer WebSocket confirmation routing).
+Reason: Highest effective weight (1.0) among unblocked targets and already converging. Phase 1 is committed; Phase 2 (QR discovery) is the natural next step. T5 and T6 both have weight < 1.
 
 ## Suggested action
 
-First, commit the uncommitted work from last session (trust model, targets update, STABILITY.md). Then begin 🎯T7 by defining the mobile app architecture: read `ge/CLAUDE.md` to understand the engine's wire protocol, review `internal/server/` for the WebSocket interface, and draft a design note in `docs/mobile-app.md` covering: (1) tech stack (native Swift/SwiftUI for iOS), (2) connection model (how the app connects to jevond), (3) core screens (command input, response stream, worker list), (4) how it differs from the ge player.
+Implement Phase 2 of 🎯T7: QR-based server discovery. The iOS app currently requires manual address entry (or auto-connects on simulator). Add QR code scanning so the phone can discover jevond's address by scanning the QR displayed by the desktop app. This involves: (1) adding a QR scanner view in the iOS app using `AVFoundation`, (2) encoding jevond's WebSocket URL in the QR code displayed by the C++ app, and (3) connecting automatically after scan.
 
 Type **go** to execute the suggested action.
 
 <!-- convergence-deps
-evaluated: 2026-03-08T02:00:00Z
-sha: 4a3f935
+evaluated: 2026-03-09T00:00:00Z
+sha: a15511c
 
-🎯T1:
-  gap: achieved
-  assessment: "All disallowed tools present in --disallowedTools flag."
+🎯T7:
+  gap: significant
+  assessment: "Phase 1 committed. QR discovery, worker management, secure channel, and real device testing remain."
   read:
-    - internal/jevon/jevon.go
-
-🎯T2:
-  gap: achieved
-  assessment: "AskUserQuestion disabled, CLAUDE.md template includes conversational guidance."
-  read:
-    - internal/jevon/jevon.go
-
-🎯T3:
-  gap: achieved
-  assessment: "61 tests across 7 packages. All packages with code have tests."
-  read: []
-
-🎯T4:
-  gap: achieved
-  assessment: "Trust model documented in docs/trust-model.md with three permission tiers."
-  read:
-    - docs/trust-model.md
-    - docs/targets.md
-    - STABILITY.md
+    - ios/Jevon/JevonApp.swift
+    - ios/Jevon/Views/ConnectView.swift
+    - ios/Jevon/Views/ChatView.swift
+    - ios/Jevon/Models/Connection.swift
 
 🎯T5:
   gap: not started
-  assessment: "internal/auth is a stub. No mTLS, no QR provisioning. Now unblocked."
+  assessment: "internal/auth is a stub. No mTLS, no QR provisioning."
   read: []
 
 🎯T6:
   gap: not started
-  assessment: "bypassPermissions still in jevon.go. No confirmation routing. Now unblocked."
+  assessment: "bypassPermissions still in jevon.go. No confirmation routing."
   read:
     - internal/jevon/jevon.go
 
-🎯T7:
-  gap: not started
-  assessment: "No mobile app exists. Independent of security targets."
+🎯T1:
+  gap: achieved
+  assessment: "All disallowed tools present."
+  read: []
+
+🎯T2:
+  gap: achieved
+  assessment: "AskUserQuestion disabled."
+  read: []
+
+🎯T3:
+  gap: achieved
+  assessment: "Tests exist for all packages with code."
+  read: []
+
+🎯T4:
+  gap: achieved
+  assessment: "Trust model documented."
   read: []
 -->

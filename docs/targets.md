@@ -4,8 +4,8 @@
 
 ### 🎯T5 Authentication implemented
 
-- **Weight**: 1 (value 8 / cost 13)
-- **Estimated-cost**: 13
+- **Value**: 8
+- **Cost**: 13
 - **Status**: identified
 - **Discovered**: 2026-03-08
 
@@ -22,8 +22,8 @@ surfaces. The `internal/auth` package is fully implemented.
 
 ### 🎯T6 Permission model enforced
 
-- **Weight**: 1 (value 5 / cost 8)
-- **Estimated-cost**: 8
+- **Value**: 5
+- **Cost**: 8
 - **Status**: identified
 - **Discovered**: 2026-03-08
 
@@ -40,9 +40,9 @@ bypass. Permission tiers from the trust model (🎯T4) are enforced.
 
 ### 🎯T7 Mobile app for Jevon
 
-- **Weight**: 1 (value 20 / cost 20)
-- **Estimated-cost**: 20
-- **Status**: converging — Phase 1 (SwiftUI chat app) builds for simulator. Connect screen, chat view with streaming, WebSocket connection manager implemented. QR discovery and worker list deferred to Phase 2/3.
+- **Value**: 20
+- **Cost**: 20
+- **Status**: converging — Phase 1 (chat app) and Phase 2 (QR discovery) done. jevond prints QR code at startup with `jevon://` URL; iOS app has camera-based QR scanner. Worker list (Phase 3) not started.
 - **Discovered**: 2026-03-08
 
 **Desired state:** A phone app provides a UI for interacting with

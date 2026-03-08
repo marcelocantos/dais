@@ -17,6 +17,7 @@ import (
 	"github.com/marcelocantos/jevon/internal/jevon"
 	"github.com/marcelocantos/jevon/internal/manager"
 	"github.com/marcelocantos/jevon/internal/mcpserver"
+	"github.com/marcelocantos/jevon/internal/qr"
 	"github.com/marcelocantos/jevon/internal/server"
 )
 
@@ -237,6 +238,14 @@ func main() {
 
 	slog.Info("jevond starting", "addr", listenAddr, "version", cli.Version,
 		"jevon_model", jevModel, "worker_model", *model)
+
+	// Print QR code for mobile app discovery.
+	if url, err := qr.ServerURL(*port); err == nil {
+		qr.Print(os.Stderr, url)
+	} else {
+		slog.Warn("cannot generate QR code", "err", err)
+	}
+
 	if err := httpSrv.ListenAndServe(); err != http.ErrServerClosed {
 		slog.Error("server failed", "err", err)
 		os.Exit(1)
