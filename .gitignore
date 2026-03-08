@@ -7,7 +7,7 @@
 *.d
 
 # Compile database
-compile_commands.json
+/compile_commands.json
 
 # IDE
 .vscode/
@@ -25,7 +25,7 @@ Thumbs.db
 .env.local
 
 # Generated embedded files
-internal/cli/help_agent.md
+/internal/cli/help_agent.md
 
 # Claude Code local settings
-.claude/
+/.claude/
