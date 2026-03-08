@@ -1,7 +1,7 @@
 # Build artifacts
-build/
-bin/
-jevond
+/build/
+/bin/
+/jevond
 *.o
 *.a
 *.d
