@@ -11,6 +11,11 @@ struct JevonApp: App {
         WindowGroup {
             ContentView()
                 .environment(connection)
+                .task {
+                    #if targetEnvironment(simulator)
+                    connection.connect(to: "localhost", port: 8080)
+                    #endif
+                }
         }
     }
 }

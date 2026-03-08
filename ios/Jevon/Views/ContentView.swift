@@ -7,14 +7,20 @@ struct ContentView: View {
     @Environment(Connection.self) private var connection
 
     var body: some View {
-        Group {
-            switch connection.state {
-            case .disconnected, .error:
-                ConnectView()
-            case .connecting:
-                ProgressView("Connecting...")
-            case .connected:
+        switch connection.state {
+        case .disconnected:
+            ConnectView()
+        case .connecting:
+            ProgressView("Connecting...")
+        case .connected:
+            ChatView()
+        case .error:
+            // Show chat view if we were previously connected (reconnecting),
+            // otherwise show connect view.
+            if connection.hasConnected {
                 ChatView()
+            } else {
+                ConnectView()
             }
         }
     }

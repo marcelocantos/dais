@@ -18,6 +18,8 @@ final class Connection {
     private(set) var state: State = .disconnected
     private(set) var messages: [ChatMessage] = []
     private(set) var serverState: ServerMessage.ServerState = .idle
+    /// True once a successful connection has been established at least once.
+    private(set) var hasConnected: Bool = false
 
     /// Text being streamed from the current Jevon response.
     private var streamingText: String = ""
@@ -49,6 +51,7 @@ final class Connection {
         webSocket?.cancel(with: .goingAway, reason: nil)
         webSocket = nil
         state = .disconnected
+        hasConnected = false
         reconnectDelay = 1.0
     }
 
@@ -135,6 +138,7 @@ final class Connection {
         switch msg {
         case .serverInit(let version):
             state = .connected(version: version)
+            hasConnected = true
 
         case .history(let entries):
             messages = entries.map { entry in

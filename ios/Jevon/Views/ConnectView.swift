@@ -5,11 +5,7 @@ import SwiftUI
 
 struct ConnectView: View {
     @Environment(Connection.self) private var connection
-    #if targetEnvironment(simulator)
-    @State private var host: String = "localhost"
-    #else
     @State private var host: String = ""
-    #endif
     @State private var portText: String = "8080"
 
     var body: some View {
@@ -61,13 +57,6 @@ struct ConnectView: View {
                 host = last.host
                 portText = String(last.port)
             }
-            #if targetEnvironment(simulator)
-            // Auto-connect on simulator.
-            if !host.isEmpty {
-                let port = Int(portText) ?? 8080
-                connection.connect(to: host, port: port)
-            }
-            #endif
         }
     }
 }
