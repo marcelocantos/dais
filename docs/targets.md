@@ -42,7 +42,7 @@ bypass. Permission tiers from the trust model (🎯T4) are enforced.
 
 - **Weight**: 1 (value 20 / cost 20)
 - **Estimated-cost**: 20
-- **Status**: identified
+- **Status**: converging — Phase 1 (SwiftUI chat app) builds for simulator. Connect screen, chat view with streaming, WebSocket connection manager implemented. QR discovery and worker list deferred to Phase 2/3.
 - **Discovered**: 2026-03-08
 
 **Desired state:** A phone app provides a UI for interacting with

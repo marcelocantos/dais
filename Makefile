@@ -93,6 +93,11 @@ init: ge/init
 	@echo "  Go dependencies downloaded"
 	$(ge/INIT_DONE)
 
+# ── iOS app ─────────────────────────────────────────
+.PHONY: ios
+ios:
+	cd ios && xcodegen generate
+
 # ── Test ─────────────────────────────────────────────
 .PHONY: test test-go
 test-go:

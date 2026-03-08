@@ -27,5 +27,11 @@ Thumbs.db
 # Generated embedded files
 /internal/cli/help_agent.md
 
+# Xcode
+/ios/Jevon.xcodeproj/
+xcuserdata/
+DerivedData/
+*.xcworkspace
+
 # Claude Code local settings
 /.claude/

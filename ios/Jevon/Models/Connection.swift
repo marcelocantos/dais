@@ -1,0 +1,214 @@
+// Copyright 2026 Marcelo Cantos
+// SPDX-License-Identifier: Apache-2.0
+
+import Foundation
+import Observation
+
+/// Manages the WebSocket connection to jevond.
+@Observable
+@MainActor
+final class Connection {
+    enum State: Sendable {
+        case disconnected
+        case connecting
+        case connected(version: String)
+        case error(String)
+    }
+
+    private(set) var state: State = .disconnected
+    private(set) var messages: [ChatMessage] = []
+    private(set) var serverState: ServerMessage.ServerState = .idle
+
+    /// Text being streamed from the current Jevon response.
+    private var streamingText: String = ""
+
+    private var webSocket: URLSessionWebSocketTask?
+    private var receiveTask: Task<Void, Never>?
+    private var reconnectTask: Task<Void, Never>?
+
+    private var serverURL: URL?
+    private var reconnectDelay: TimeInterval = 1.0
+    private static let maxReconnectDelay: TimeInterval = 8.0
+
+    func connect(to host: String, port: Int) {
+        disconnect()
+        guard let url = URL(string: "ws://\(host):\(port)/ws/remote") else {
+            state = .error("Invalid URL")
+            return
+        }
+        serverURL = url
+        saveLastServer(host: host, port: port)
+        doConnect(url: url)
+    }
+
+    func disconnect() {
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        receiveTask?.cancel()
+        receiveTask = nil
+        webSocket?.cancel(with: .goingAway, reason: nil)
+        webSocket = nil
+        state = .disconnected
+        reconnectDelay = 1.0
+    }
+
+    func send(_ text: String) {
+        // Add locally immediately for responsiveness.
+        messages.append(ChatMessage(role: .user, text: text))
+
+        guard let webSocket else { return }
+
+        let msg = ClientMessage.message(text)
+        guard let data = try? JSONEncoder().encode(msg) else { return }
+        let string = String(data: data, encoding: .utf8) ?? ""
+
+        webSocket.send(.string(string)) { [weak self] error in
+            if let error {
+                Task { @MainActor [weak self] in
+                    self?.state = .error(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    // MARK: - Persistence
+
+    var lastServer: (host: String, port: Int)? {
+        let defaults = UserDefaults.standard
+        guard let host = defaults.string(forKey: "lastHost") else { return nil }
+        let port = defaults.integer(forKey: "lastPort")
+        return port > 0 ? (host, port) : nil
+    }
+
+    private func saveLastServer(host: String, port: Int) {
+        let defaults = UserDefaults.standard
+        defaults.set(host, forKey: "lastHost")
+        defaults.set(port, forKey: "lastPort")
+    }
+
+    // MARK: - Internal
+
+    private func doConnect(url: URL) {
+        state = .connecting
+
+        let session = URLSession(configuration: .default)
+        let task = session.webSocketTask(with: url)
+        webSocket = task
+        task.resume()
+
+        receiveTask = Task { [weak self] in
+            await self?.receiveLoop()
+        }
+    }
+
+    private func receiveLoop() async {
+        guard let webSocket else { return }
+
+        while !Task.isCancelled {
+            do {
+                let message = try await webSocket.receive()
+                let data: Data
+                switch message {
+                case .string(let text):
+                    data = Data(text.utf8)
+                case .data(let d):
+                    data = d
+                @unknown default:
+                    continue
+                }
+
+                let serverMsg = try ServerMessage(from: data)
+                handleMessage(serverMsg)
+                reconnectDelay = 1.0
+            } catch {
+                if !Task.isCancelled {
+                    state = .error("Disconnected")
+                    flushStreaming()
+                    scheduleReconnect()
+                }
+                return
+            }
+        }
+    }
+
+    private func handleMessage(_ msg: ServerMessage) {
+        switch msg {
+        case .serverInit(let version):
+            state = .connected(version: version)
+
+        case .history(let entries):
+            messages = entries.map { entry in
+                ChatMessage(
+                    role: entry.role == "user" ? .user : .jevon,
+                    text: entry.text,
+                    timestamp: entry.timestamp
+                )
+            }
+
+        case .text(let content):
+            streamingText += content
+            if serverState != .thinking {
+                serverState = .thinking
+            }
+            updateOrAppendStreamingMessage()
+
+        case .status(let newState):
+            serverState = newState
+            if newState == .idle {
+                flushStreaming()
+            }
+
+        case .userMessage(let text, let timestamp):
+            // Only add if we didn't already add it locally.
+            if messages.last?.role != .user || messages.last?.text != text {
+                messages.append(ChatMessage(role: .user, text: text, timestamp: timestamp))
+            }
+
+        case .unknown:
+            break
+        }
+    }
+
+    private func updateOrAppendStreamingMessage() {
+        if let last = messages.last, last.role == .jevon, last.isStreaming {
+            messages[messages.count - 1] = ChatMessage(
+                role: .jevon,
+                text: streamingText,
+                timestamp: last.timestamp,
+                isStreaming: true
+            )
+        } else {
+            messages.append(ChatMessage(
+                role: .jevon,
+                text: streamingText,
+                timestamp: Date(),
+                isStreaming: true
+            ))
+        }
+    }
+
+    private func flushStreaming() {
+        guard !streamingText.isEmpty else { return }
+        if let last = messages.last, last.role == .jevon, last.isStreaming {
+            messages[messages.count - 1] = ChatMessage(
+                role: .jevon,
+                text: streamingText,
+                timestamp: last.timestamp,
+                isStreaming: false
+            )
+        }
+        streamingText = ""
+    }
+
+    private func scheduleReconnect() {
+        guard let url = serverURL else { return }
+        let delay = reconnectDelay
+        reconnectDelay = min(reconnectDelay * 2, Self.maxReconnectDelay)
+
+        reconnectTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            self?.doConnect(url: url)
+        }
+    }
+}
