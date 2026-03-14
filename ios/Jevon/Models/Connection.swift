@@ -52,6 +52,14 @@ final class Connection {
     /// Server version string, extracted from init message.
     private var serverVersion: String = ""
 
+    // MARK: - sqlpipe sync
+
+    /// Bidirectional SQLite sync peer. Created on first serverInit.
+    private var syncPeer: SyncPeer?
+    /// Subscription IDs for auto-render queries.
+    private var transcriptSubID: UInt64?
+    private var stateSubID: UInt64?
+
     private var webSocket: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
@@ -84,6 +92,10 @@ final class Connection {
         luaRuntime = nil
         sessions = []
         activeSheet = ""
+        syncPeer?.close()
+        syncPeer = nil
+        transcriptSubID = nil
+        stateSubID = nil
     }
 
     func send(_ text: String) {
@@ -115,7 +127,11 @@ final class Connection {
                 // Add message locally for immediate feedback.
                 messages.append(ChatMessage(role: .user, text: value))
                 renderViews()
-                sendToServer(action: action, value: value)
+                if syncPeer != nil {
+                    sendRequest(type: action, payload: value)
+                } else {
+                    sendToServer(action: action, value: value)
+                }
                 return
 
             case "show_sessions":
@@ -207,23 +223,26 @@ final class Connection {
                 return
             }
 
-            let data: Data
             switch message {
-            case .string(let text):
-                data = Data(text.utf8)
             case .data(let d):
-                data = d
+                // Binary frame — sqlpipe sync protocol.
+                handleBinaryMessage(d)
+                reconnectDelay = 1.0
+                continue
+
+            case .string(let text):
+                // JSON frame — existing application protocol.
+                let data = Data(text.utf8)
+                do {
+                    let serverMsg = try ServerMessage(from: data)
+                    handleMessage(serverMsg)
+                    reconnectDelay = 1.0
+                } catch {
+                    logger.warning("Failed to parse server message: \(error.localizedDescription) — raw: \(String(data: data.prefix(200), encoding: .utf8) ?? "?")")
+                }
+
             @unknown default:
                 continue
-            }
-
-            do {
-                let serverMsg = try ServerMessage(from: data)
-                handleMessage(serverMsg)
-                reconnectDelay = 1.0
-            } catch {
-                logger.warning("Failed to parse server message: \(error.localizedDescription) — raw: \(String(data: data.prefix(200), encoding: .utf8) ?? "?")")
-                // Don't disconnect on parse errors — just skip the message.
             }
         }
     }
@@ -234,6 +253,7 @@ final class Connection {
             state = .connected(version: version)
             serverVersion = version
             hasConnected = true
+            initSyncPeer()
             renderViews()
 
         case .history(let entries):
@@ -348,6 +368,34 @@ final class Connection {
         default: isConnected = false
         }
 
+        // When syncPeer is active, query the local replica DB.
+        if let syncPeer {
+            let msgs = syncPeer.query(
+                "SELECT role, content AS text, timestamp FROM sync_transcript ORDER BY rowid"
+            ) ?? []
+
+            let sessEntries = syncPeer.query(
+                "SELECT * FROM sessions ORDER BY score DESC LIMIT 20"
+            ) ?? []
+
+            let stateRow = syncPeer.query(
+                "SELECT status, streaming_text FROM server_state WHERE id = 1"
+            )?.first
+
+            let status = (stateRow?["status"] as? String) ?? "idle"
+            let streaming = (stateRow?["streaming_text"] as? String) ?? ""
+
+            return [
+                "connected": isConnected,
+                "version": serverVersion,
+                "status": status,
+                "messages": msgs,
+                "streaming_text": streaming,
+                "sessions": sessEntries,
+            ]
+        }
+
+        // Fallback: build from in-memory state.
         let formatter = ISO8601DateFormatter()
         let msgs: [[String: Any]] = messages.map { msg in
             [
@@ -408,6 +456,120 @@ final class Connection {
             )
         }
         streamingText = ""
+    }
+
+    // MARK: - sqlpipe sync
+
+    /// Initialize the SyncPeer and send the handshake to the server.
+    private func initSyncPeer() {
+        guard syncPeer == nil else { return }
+
+        let docsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let dbPath = docsDir.appendingPathComponent("jevon-sync.db").path
+
+        do {
+            let peer = try SyncPeer(dbPath: dbPath, ownedTables: ["requests"])
+
+            // Create client-owned requests table.
+            try peer.execute("""
+                CREATE TABLE IF NOT EXISTS requests (
+                    id INTEGER PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+                """)
+
+            syncPeer = peer
+
+            // Start the handshake — send initial data to server.
+            if let handshake = peer.start() {
+                sendBinary(handshake)
+            }
+
+            // Set up query subscriptions for auto-render.
+            setupSubscriptions()
+
+            logger.info("SyncPeer initialized")
+        } catch {
+            logger.error("Failed to init SyncPeer: \(error.localizedDescription)")
+        }
+    }
+
+    /// Subscribe to key queries so we re-render when data changes.
+    private func setupSubscriptions() {
+        guard let syncPeer else { return }
+
+        if let result = syncPeer.subscribe(
+            "SELECT role, content, timestamp FROM sync_transcript ORDER BY rowid"
+        ) {
+            transcriptSubID = result.id
+        }
+
+        if let result = syncPeer.subscribe(
+            "SELECT status, streaming_text, version FROM server_state WHERE id = 1"
+        ) {
+            stateSubID = result.id
+        }
+    }
+
+    /// Handle a binary WebSocket frame (sqlpipe sync protocol).
+    private func handleBinaryMessage(_ data: Data) {
+        guard let syncPeer else {
+            logger.warning("Received binary message but syncPeer is nil")
+            return
+        }
+
+        let result = syncPeer.handleMessage(data)
+
+        // Send response data back to server.
+        if let response = result.response {
+            sendBinary(response)
+        }
+
+        // Re-render if data changed or subscriptions fired.
+        if result.hasChanges || !result.subscriptions.isEmpty {
+            renderViews()
+        }
+    }
+
+    /// Insert a request into the client-owned requests table and flush.
+    private func sendRequest(type: String, payload: String) {
+        guard let syncPeer else {
+            // Fall back to JSON.
+            sendToServer(action: type, value: payload)
+            return
+        }
+
+        do {
+            // Use single quotes for SQL string values; escape any embedded quotes.
+            let escapedType = type.replacingOccurrences(of: "'", with: "''")
+            let escapedPayload = payload.replacingOccurrences(of: "'", with: "''")
+            try syncPeer.execute(
+                "INSERT INTO requests (type, payload) VALUES ('\(escapedType)', '\(escapedPayload)')"
+            )
+
+            if let flushData = syncPeer.flush() {
+                sendBinary(flushData)
+            }
+        } catch {
+            logger.error("sendRequest failed: \(error.localizedDescription)")
+            // Fall back to JSON.
+            sendToServer(action: type, value: payload)
+        }
+    }
+
+    /// Send a binary WebSocket frame.
+    private func sendBinary(_ data: Data) {
+        guard let webSocket else { return }
+        webSocket.send(.data(data)) { [weak self] error in
+            if let error {
+                Task { @MainActor [weak self] in
+                    logger.error("Binary send failed: \(error.localizedDescription)")
+                    self?.state = .error(error.localizedDescription)
+                }
+            }
+        }
     }
 
     private func scheduleReconnect() {
