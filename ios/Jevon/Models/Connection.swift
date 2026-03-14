@@ -3,6 +3,9 @@
 
 import Foundation
 import Observation
+import os
+
+private let logger = Logger(subsystem: "com.marcelocantos.jevon", category: "Connection")
 
 /// Manages the WebSocket connection to jevond.
 @Observable
@@ -28,7 +31,7 @@ final class Connection {
     private var receiveTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
 
-    private var serverURL: URL?
+    private(set) var serverURL: URL?
     private var reconnectDelay: TimeInterval = 1.0
     private static let maxReconnectDelay: TimeInterval = 8.0
 
@@ -74,6 +77,15 @@ final class Connection {
         }
     }
 
+    /// Base HTTP URL derived from the WebSocket connection URL.
+    var httpBaseURL: URL? {
+        guard let serverURL else { return nil }
+        var components = URLComponents(url: serverURL, resolvingAgainstBaseURL: false)
+        components?.scheme = "http"
+        components?.path = ""
+        return components?.url
+    }
+
     // MARK: - Persistence
 
     var lastServer: (host: String, port: Int)? {
@@ -108,28 +120,36 @@ final class Connection {
         guard let webSocket else { return }
 
         while !Task.isCancelled {
+            let message: URLSessionWebSocketTask.Message
             do {
-                let message = try await webSocket.receive()
-                let data: Data
-                switch message {
-                case .string(let text):
-                    data = Data(text.utf8)
-                case .data(let d):
-                    data = d
-                @unknown default:
-                    continue
-                }
-
-                let serverMsg = try ServerMessage(from: data)
-                handleMessage(serverMsg)
-                reconnectDelay = 1.0
+                message = try await webSocket.receive()
             } catch {
                 if !Task.isCancelled {
+                    logger.error("WebSocket receive failed: \(error.localizedDescription)")
                     state = .error("Disconnected")
                     flushStreaming()
                     scheduleReconnect()
                 }
                 return
+            }
+
+            let data: Data
+            switch message {
+            case .string(let text):
+                data = Data(text.utf8)
+            case .data(let d):
+                data = d
+            @unknown default:
+                continue
+            }
+
+            do {
+                let serverMsg = try ServerMessage(from: data)
+                handleMessage(serverMsg)
+                reconnectDelay = 1.0
+            } catch {
+                logger.warning("Failed to parse server message: \(error.localizedDescription) — raw: \(String(data: data.prefix(200), encoding: .utf8) ?? "?")")
+                // Don't disconnect on parse errors — just skip the message.
             }
         }
     }

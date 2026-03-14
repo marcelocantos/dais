@@ -105,6 +105,9 @@ func (s *Session) ID() string { return s.id }
 // Name returns the session's human-readable name.
 func (s *Session) Name() string { return s.name }
 
+// WorkDir returns the session's working directory.
+func (s *Session) WorkDir() string { return s.workDir }
+
 // Status returns the current session status.
 func (s *Session) Status() Status {
 	s.mu.Lock()

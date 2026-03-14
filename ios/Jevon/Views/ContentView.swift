@@ -11,12 +11,15 @@ struct ContentView: View {
         case .disconnected:
             ConnectView()
         case .connecting:
-            ProgressView("Connecting...")
+            if connection.hasConnected {
+                // Reconnecting — keep showing the chat view to avoid flicker.
+                ChatView()
+            } else {
+                ProgressView("Connecting...")
+            }
         case .connected:
             ChatView()
         case .error:
-            // Show chat view if we were previously connected (reconnecting),
-            // otherwise show connect view.
             if connection.hasConnected {
                 ChatView()
             } else {

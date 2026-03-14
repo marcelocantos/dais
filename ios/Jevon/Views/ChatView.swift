@@ -6,6 +6,7 @@ import SwiftUI
 struct ChatView: View {
     @Environment(Connection.self) private var connection
     @State private var inputText: String = ""
+    @State private var showSessions = false
     @FocusState private var inputFocused: Bool
 
     var body: some View {
@@ -18,11 +19,24 @@ struct ChatView: View {
             .navigationTitle("Jevon")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showSessions = true
+                    } label: {
+                        Image(systemName: "list.bullet")
+                    }
+                    .disabled(connection.httpBaseURL == nil)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Disconnect") {
                         connection.disconnect()
                     }
                     .font(.callout)
+                }
+            }
+            .sheet(isPresented: $showSessions) {
+                if let baseURL = connection.httpBaseURL {
+                    SessionListView(baseURL: baseURL)
                 }
             }
         }

@@ -196,7 +196,7 @@ func main() {
 		}
 	})
 
-	srv := server.New(jev, database, cli.Version)
+	srv := server.New(jev, mgr, database, cli.Version)
 
 	// Wire MCP server with Jevon event callback.
 	mcpSrv := mcpserver.New(mgr, *workDir, func(workerID, workerName, result string, failed bool) {

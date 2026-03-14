@@ -15,6 +15,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/marcelocantos/jevon/internal/db"
 	"github.com/marcelocantos/jevon/internal/jevon"
+	"github.com/marcelocantos/jevon/internal/manager"
 )
 
 // TranscriptEntry is a single turn in the conversation log.
@@ -32,6 +33,7 @@ type remoteConn struct {
 // Server is the daisd HTTP/WebSocket server.
 type Server struct {
 	jevon   *jevon.Jevon
+	mgr     *manager.Manager
 	db      *db.DB
 	version string
 
@@ -41,12 +43,13 @@ type Server struct {
 	turnBuf    string // accumulates Jevon text for current turn
 }
 
-// New creates a Server with the given Jevon instance, database, and version string.
+// New creates a Server with the given Jevon instance, manager, database, and version string.
 // It loads any existing transcript from the database and wires Jevon
 // callbacks for broadcasting to all connected clients.
-func New(jev *jevon.Jevon, database *db.DB, version string) *Server {
+func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string) *Server {
 	s := &Server{
 		jevon:   jev,
+		mgr:     mgr,
 		db:      database,
 		version: version,
 		remotes: make(map[*websocket.Conn]remoteConn),
@@ -119,6 +122,9 @@ func New(jev *jevon.Jevon, database *db.DB, version string) *Server {
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("/ws/remote", s.handleRemote)
+	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
+	mux.HandleFunc("GET /api/sessions/{id}", s.handleGetSession)
+	mux.HandleFunc("POST /api/sessions/{id}/kill", s.handleKillSession)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -249,6 +255,44 @@ func (s *Server) broadcast(v any) {
 		}
 		cancel()
 	}
+}
+
+func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	all := r.URL.Query().Get("all") == "true"
+	sessions := s.mgr.List(all)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(sessions)
+}
+
+func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	sess := s.mgr.Get(id)
+	if sess == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]any{"error": "not found"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"id":          sess.ID(),
+		"name":        sess.Name(),
+		"status":      sess.Status(),
+		"workdir":     sess.WorkDir(),
+		"last_result": sess.LastResult(),
+	})
+}
+
+func (s *Server) handleKillSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.mgr.Kill(id); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"ok": true})
 }
 
 // writeJSON sends a JSON message to a single connection.
