@@ -29,6 +29,8 @@ targets:
         compilerFlags: "-w -std=c++23 -DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_PREUPDATE_HOOK"
       - path: Vendor/sqlpipe/dist/sqlpipe_capi.cpp
         compilerFlags: "-w -std=c++23 -DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_PREUPDATE_HOOK"
+      - path: Vendor/sqldeep/dist/sqldeep.cpp
+        compilerFlags: "-w -std=c++20"
     settings:
       base:
         INFOPLIST_FILE: Jevon/Info.plist
@@ -36,4 +38,4 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_STRICT_CONCURRENCY: complete
         SWIFT_OBJC_BRIDGING_HEADER: Jevon/Jevon-Bridging-Header.h
-        HEADER_SEARCH_PATHS: "Vendor/lua-5.1.5/src Vendor/sqlpipe/dist Vendor/sqlpipe/vendor/include"
+        HEADER_SEARCH_PATHS: "Vendor/lua-5.1.5/src Vendor/sqlpipe/dist Vendor/sqlpipe/vendor/include Vendor/sqldeep/dist"

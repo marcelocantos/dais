@@ -7,3 +7,4 @@
 
 #include "sqlite3.h"
 #include "sqlpipe_capi.h"
+#include "sqldeep.h"

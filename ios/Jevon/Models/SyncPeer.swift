@@ -242,12 +242,13 @@ final class SyncPeer {
         }
     }
 
-    /// One-shot query on the local database.
+    /// One-shot query on the local database. Accepts sqldeep syntax.
     func query(_ sql: String) -> [[String: Any]]? {
         guard let db else { return nil }
+        let transpiled = transpile(sql)
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            logger.error("query prepare failed: \(String(cString: sqlite3_errmsg(db)))")
+        guard sqlite3_prepare_v2(db, transpiled, -1, &stmt, nil) == SQLITE_OK else {
+            logger.error("query prepare failed: \(String(cString: sqlite3_errmsg(db))) — sql: \(transpiled.prefix(200))")
             return nil
         }
         defer { sqlite3_finalize(stmt) }
@@ -514,6 +515,23 @@ final class SyncPeer {
         let msg = err.msg.flatMap { String(cString: $0) } ?? "code \(err.code)"
         logger.error("SyncPeer.\(context) failed: \(msg)")
         sqlpipe_free_error(err)
+    }
+    /// Transpile sqldeep syntax to standard SQL. If the input is already
+    /// plain SQL (no deep constructs), it passes through unchanged.
+    private func transpile(_ input: String) -> String {
+        var error: UnsafeMutablePointer<CChar>?
+        var errLine: Int32 = 0
+        var errCol: Int32 = 0
+        guard let result = sqldeep_transpile(input, &error, &errLine, &errCol) else {
+            if let error {
+                let msg = String(cString: error)
+                logger.warning("sqldeep transpile failed at \(errLine):\(errCol): \(msg) — using input as-is")
+                sqldeep_free(error)
+            }
+            return input
+        }
+        defer { sqldeep_free(result) }
+        return String(cString: result)
     }
 }
 
