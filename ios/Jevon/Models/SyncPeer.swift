@@ -87,28 +87,6 @@ final class SyncPeer {
             cfg.owned_tables = buf.baseAddress
             cfg.owned_table_count = ownedTables.count
 
-            // Schema mismatch callback — apply remote schema to local DB.
-            // The remote_schema_sql contains semicolon-separated CREATE TABLE
-            // statements from the server. We execute them to create any missing
-            // tables, then return true to retry the handshake.
-            cfg.on_schema_mismatch = { ctx, remoteSV, localSV, remoteSchemaSQL in
-                guard let remoteSchemaSQL, let db = ctx?.assumingMemoryBound(to: OpaquePointer?.self).pointee else {
-                    return 0
-                }
-                let sql = String(cString: remoteSchemaSQL)
-                logger.info("Schema mismatch — applying remote schema (\(sql.count) chars)")
-                for stmt in sql.components(separatedBy: ";") {
-                    let trimmed = stmt.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !trimmed.isEmpty else { continue }
-                    if sqlite3_exec(db, trimmed, nil, nil, nil) != SQLITE_OK {
-                        let err = String(cString: sqlite3_errmsg(db))
-                        logger.error("Schema apply failed: \(err) — stmt: \(trimmed.prefix(100))")
-                    }
-                }
-                return 1  // retry
-            }
-            cfg.schema_mismatch_ctx = withUnsafeMutablePointer(to: &self.db) { UnsafeMutableRawPointer($0) }
-
             // Set up logging callback.
             cfg.on_log = { ctx, level, message in
                 guard let message else { return }

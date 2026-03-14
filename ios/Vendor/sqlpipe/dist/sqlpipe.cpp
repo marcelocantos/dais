@@ -151,6 +151,11 @@ std::string get_schema_sql(
 /// Get the CREATE TABLE SQL for a single table.
 std::string get_table_create_sql(sqlite3* db, const std::string& table);
 
+/// Migrate the local schema to match the remote schema using sqlift.
+/// Returns true if migration succeeded, false on error.
+bool auto_migrate_schema(sqlite3* db, const std::string& remote_schema_sql,
+                         const LogCallback& on_log);
+
 /// Check if a table uses WITHOUT ROWID.
 bool is_without_rowid(sqlite3* db, const std::string& table);
 
@@ -721,6 +726,7 @@ std::vector<std::string> get_tracked_tables(
         "SELECT name FROM sqlite_master "
         "WHERE type='table' "
         "  AND name NOT LIKE '_sqlpipe_%' "
+        "  AND name NOT LIKE '_sqlift_%' "
         "  AND name NOT LIKE 'sqlite_%' "
         "ORDER BY name");
 
@@ -773,6 +779,70 @@ std::string get_schema_sql(
     }
     if (!sql.empty()) sql += ";";
     return sql;
+}
+
+bool auto_migrate_schema(sqlite3* db, const std::string& remote_schema_sql,
+                         const LogCallback& on_log) {
+    int err_type = 0;
+    char* err_msg = nullptr;
+
+    // Parse the remote (desired) schema.
+    char* desired_json = sqlift_parse(remote_schema_sql.c_str(),
+                                      &err_type, &err_msg);
+    if (!desired_json) {
+        SQLPIPE_LOG(on_log, LogLevel::Error,
+                    "auto_migrate: failed to parse remote schema: {}",
+                    err_msg ? err_msg : "unknown");
+        sqlift_free(err_msg);
+        return false;
+    }
+
+    // Get the local user-table schema (excludes _sqlpipe_meta and other
+    // internal tables), then parse it with sqlift.
+    auto local_sql = get_schema_sql(db);
+    char* current_json = sqlift_parse(
+        local_sql.empty() ? "" : local_sql.c_str(),
+        &err_type, &err_msg);
+    if (!current_json) {
+        SQLPIPE_LOG(on_log, LogLevel::Error,
+                    "auto_migrate: failed to parse local schema: {}",
+                    err_msg ? err_msg : "unknown");
+        sqlift_free(err_msg);
+        sqlift_free(desired_json);
+        return false;
+    }
+
+    // Diff current → desired.
+    char* plan_json = sqlift_diff(current_json, desired_json,
+                                  &err_type, &err_msg);
+    sqlift_free(current_json);
+    sqlift_free(desired_json);
+    if (!plan_json) {
+        SQLPIPE_LOG(on_log, LogLevel::Error,
+                    "auto_migrate: failed to diff schemas: {}",
+                    err_msg ? err_msg : "unknown");
+        sqlift_free(err_msg);
+        return false;
+    }
+
+    // Apply the migration plan (allow destructive — master is authoritative).
+    sqlift_db* sdb = sqlift_db_wrap(db);
+    int rc = sqlift_apply(sdb, plan_json, /*allow_destructive=*/1,
+                          &err_type, &err_msg);
+    sqlift_free(plan_json);
+    sqlift_db_close(sdb);
+
+    if (rc != 0) {
+        SQLPIPE_LOG(on_log, LogLevel::Error,
+                    "auto_migrate: failed to apply migration: {}",
+                    err_msg ? err_msg : "unknown");
+        sqlift_free(err_msg);
+        return false;
+    }
+
+    SQLPIPE_LOG(on_log, LogLevel::Info,
+                "auto_migrate: schema migrated to match master");
+    return true;
 }
 
 std::string get_table_create_sql(sqlite3* db, const std::string& table) {
@@ -1823,6 +1893,32 @@ bool QueryWatch::empty() const {
     return impl_->subscriptions.empty();
 }
 
+// ── query (one-shot) ────────────────────────────────────────────
+
+QueryResult query(sqlite3* db, const std::string& sql) {
+    auto stmt = detail::prepare(db, sql.c_str());
+    int ncols = sqlite3_column_count(stmt.get());
+
+    QueryResult result;
+    result.id = 0;
+    result.columns.reserve(static_cast<std::size_t>(ncols));
+    for (int i = 0; i < ncols; ++i) {
+        const char* name = sqlite3_column_name(stmt.get(), i);
+        result.columns.push_back(name ? name : "");
+    }
+
+    while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+        std::vector<Value> row;
+        row.reserve(static_cast<std::size_t>(ncols));
+        for (int i = 0; i < ncols; ++i) {
+            row.push_back(detail::to_value(
+                sqlite3_column_value(stmt.get(), i)));
+        }
+        result.rows.push_back(std::move(row));
+    }
+    return result;
+}
+
 } // namespace sqlpipe
 
 // ── replica.cpp ─────────────────────────────────────────────────
@@ -2131,16 +2227,23 @@ HandleResult Replica::handle_message(const Message& msg) {
             return {{AckMsg{m.seq}}, std::move(events), {}};
         }
         else if constexpr (std::is_same_v<T, ErrorMsg>) {
-            if (m.code == ErrorCode::SchemaMismatch &&
-                impl_->config.on_schema_mismatch) {
-                auto my_sv = schema_version();
-                if (impl_->config.on_schema_mismatch(
+            if (m.code == ErrorCode::SchemaMismatch) {
+                bool resolved = false;
+                if (impl_->config.on_schema_mismatch) {
+                    // User callback gets first shot.
+                    auto my_sv = schema_version();
+                    resolved = impl_->config.on_schema_mismatch(
                         m.remote_schema_version, my_sv,
-                        m.remote_schema_sql)) {
-                    // Callback modified the local schema. Reset to Init
-                    // so the caller can retry the handshake.
+                        m.remote_schema_sql);
+                } else if (!m.remote_schema_sql.empty()) {
+                    // Auto-migrate: use sqlift to adopt master's schema.
+                    resolved = detail::auto_migrate_schema(
+                        impl_->db, m.remote_schema_sql,
+                        impl_->config.on_log);
+                }
+                if (resolved) {
                     SQLPIPE_LOG(impl_->config.on_log, LogLevel::Info,
-                                "schema mismatch resolved by callback, "
+                                "schema mismatch resolved, "
                                 "resetting to Init");
                     impl_->state = State::Init;
                     impl_->seq = detail::read_seq(
@@ -2198,14 +2301,21 @@ HandleResult Replica::handle_messages(std::span<const Message> msgs) {
                 return {{AckMsg{m.seq}}, std::move(events), {}};
             }
             else if constexpr (std::is_same_v<T, ErrorMsg>) {
-                if (m.code == ErrorCode::SchemaMismatch &&
-                    impl_->config.on_schema_mismatch) {
-                    auto my_sv = schema_version();
-                    if (impl_->config.on_schema_mismatch(
+                if (m.code == ErrorCode::SchemaMismatch) {
+                    bool resolved = false;
+                    if (impl_->config.on_schema_mismatch) {
+                        auto my_sv = schema_version();
+                        resolved = impl_->config.on_schema_mismatch(
                             m.remote_schema_version, my_sv,
-                            m.remote_schema_sql)) {
+                            m.remote_schema_sql);
+                    } else if (!m.remote_schema_sql.empty()) {
+                        resolved = detail::auto_migrate_schema(
+                            impl_->db, m.remote_schema_sql,
+                            impl_->config.on_log);
+                    }
+                    if (resolved) {
                         SQLPIPE_LOG(impl_->config.on_log, LogLevel::Info,
-                                    "schema mismatch resolved by callback, "
+                                    "schema mismatch resolved, "
                                     "resetting to Init");
                         impl_->state = State::Init;
                         impl_->seq = detail::read_seq(

@@ -18,6 +18,9 @@
 extern "C" {
 #endif
 
+// Forward-declare sqlite3 for sqlift_db_wrap.
+typedef struct sqlite3 sqlite3;
+
 // Error types returned by all C wrapper functions.
 enum sqlift_error_type {
     SQLIFT_OK               = 0,
@@ -39,6 +42,10 @@ typedef struct sqlift_db sqlift_db;
 // flags: SQLite open flags (0 = default READWRITE|CREATE).
 sqlift_db* sqlift_db_open(const char* path, int flags,
                           int* err_type, char** err_msg);
+
+// Wrap an existing sqlite3* handle. The caller retains ownership;
+// sqlift_db_close will NOT close the underlying handle.
+sqlift_db* sqlift_db_wrap(sqlite3* handle);
 
 // Close a database handle. Safe to call with NULL.
 void sqlift_db_close(sqlift_db* db);

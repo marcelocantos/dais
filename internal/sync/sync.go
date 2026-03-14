@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package sync manages bidirectional sqlpipe replication between jevond
-// and connected iOS clients. jevond runs a Master for server-owned
-// tables and a Replica for the client-owned "requests" table.
+// and connected iOS clients. Both sides use sqlpipe Peer mode — the
+// server approves client ownership requests and owns the complement.
 package sync
 
 import (
@@ -19,19 +19,6 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 )
-
-// serverTables are mastered by jevond.
-var serverTables = map[string]bool{
-	"sync_transcript": true,
-	"sessions":        true,
-	"scripts":         true,
-	"server_state":    true,
-}
-
-// clientTables are mastered by the iOS app.
-var clientTables = map[string]bool{
-	"requests": true,
-}
 
 // Request is a decoded row from the client-owned requests table.
 type Request struct {
@@ -52,15 +39,13 @@ type SessionData struct {
 	ModTime string
 }
 
-// SyncManager coordinates sqlpipe Master (server→client) and Replica
-// (client→server) replication over a shared SQLite database.
+// SyncManager coordinates sqlpipe Peer replication over a shared SQLite
+// database. The server Peer approves client ownership requests and owns
+// all tables not claimed by the client.
 type SyncManager struct {
-	db      *sql.DB
-	master  *sqlpipe.Master
-	replica *sqlpipe.Replica
-
-	masterConn  *sql.Conn
-	replicaConn *sql.Conn
+	db       *sql.DB
+	peer     *sqlpipe.Peer
+	peerConn *sql.Conn
 
 	mu        gosync.Mutex
 	onRequest func(Request)
@@ -70,9 +55,8 @@ type SyncManager struct {
 }
 
 // NewSyncManager opens (or reuses) the database, creates the sync schema,
-// and initialises a Master for server tables and a Replica for client tables.
+// and initialises a Peer for bidirectional replication.
 func NewSyncManager(dbPath string, onRequest func(Request)) (*SyncManager, error) {
-	// Open with session-extension flags via the DSN.
 	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL")
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
@@ -80,25 +64,16 @@ func NewSyncManager(dbPath string, onRequest func(Request)) (*SyncManager, error
 
 	ctx := context.Background()
 
-	// Acquire two dedicated connections — Master and Replica each need
-	// their own because sqlpipe installs preupdate hooks per-connection.
-	masterConn, err := db.Conn(ctx)
+	peerConn, err := db.Conn(ctx)
 	if err != nil {
 		db.Close()
-		return nil, fmt.Errorf("master conn: %w", err)
-	}
-	replicaConn, err := db.Conn(ctx)
-	if err != nil {
-		masterConn.Close()
-		db.Close()
-		return nil, fmt.Errorf("replica conn: %w", err)
+		return nil, fmt.Errorf("peer conn: %w", err)
 	}
 
 	sm := &SyncManager{
-		db:          db,
-		masterConn:  masterConn,
-		replicaConn: replicaConn,
-		onRequest:   onRequest,
+		db:        db,
+		peerConn:  peerConn,
+		onRequest: onRequest,
 	}
 
 	// Seed the last-seen request ID so we don't replay old rows on startup.
@@ -120,52 +95,22 @@ func NewSyncManager(dbPath string, onRequest func(Request)) (*SyncManager, error
 		}
 	}
 
-	master, err := sqlpipe.NewMaster(masterConn, sqlpipe.MasterConfig{
-		TableFilter: &sqlpipe.TableFilter{Tables: serverTables},
-		OnSchemaMismatch: func(remoteSV, localSV sqlpipe.SchemaVersion, remoteSQL string) bool {
-			slog.Info("sqlpipe master schema mismatch — applying remote schema",
-				"remote_sv", remoteSV, "local_sv", localSV)
-			if _, err := db.Exec(remoteSQL); err != nil {
-				slog.Error("schema migration failed", "err", err)
-				return false
-			}
-			return true
-		},
-		OnLog: logCb,
-	})
-	if err != nil {
-		replicaConn.Close()
-		masterConn.Close()
-		db.Close()
-		return nil, fmt.Errorf("new master: %w", err)
-	}
-	sm.master = master
-
-	replica, err := sqlpipe.NewReplica(replicaConn, sqlpipe.ReplicaConfig{
-		TableFilter: &sqlpipe.TableFilter{Tables: clientTables},
-		OnSchemaMismatch: func(remoteSV, localSV sqlpipe.SchemaVersion, remoteSQL string) bool {
-			slog.Info("sqlpipe replica schema mismatch — applying remote schema",
-				"remote_sv", remoteSV, "local_sv", localSV)
-			if _, err := db.Exec(remoteSQL); err != nil {
-				slog.Error("schema migration failed", "err", err)
-				return false
-			}
-			return true // retry with updated schema
+	peer, err := sqlpipe.NewPeer(peerConn, sqlpipe.PeerConfig{
+		ApproveOwnership: func(requested map[string]bool) bool {
+			return true // server approves all client ownership requests
 		},
 		OnConflict: func(ct sqlpipe.ConflictType, ce sqlpipe.ChangeEvent) sqlpipe.ConflictAction {
-			slog.Warn("sqlpipe replica conflict", "type", ct, "table", ce.Table)
+			slog.Warn("sqlpipe conflict", "type", ct, "table", ce.Table)
 			return sqlpipe.ConflictReplace
 		},
 		OnLog: logCb,
 	})
 	if err != nil {
-		master.Close()
-		replicaConn.Close()
-		masterConn.Close()
+		peerConn.Close()
 		db.Close()
-		return nil, fmt.Errorf("new replica: %w", err)
+		return nil, fmt.Errorf("new peer: %w", err)
 	}
-	sm.replica = replica
+	sm.peer = peer
 
 	return sm, nil
 }
@@ -199,7 +144,7 @@ func (sm *SyncManager) SeedTranscript(legacyDB *sql.DB) error {
 		if err := rows.Scan(&role, &text, &ts); err != nil {
 			return err
 		}
-		if _, err := sm.masterConn.ExecContext(context.Background(),
+		if _, err := sm.peerConn.ExecContext(context.Background(),
 			"INSERT INTO sync_transcript (role, content, timestamp) VALUES (?, ?, ?)",
 			role, text, ts,
 		); err != nil {
@@ -212,88 +157,60 @@ func (sm *SyncManager) SeedTranscript(legacyDB *sql.DB) error {
 // ── Wire framing ────────────────────────────────────────────────
 //
 // Over the WebSocket we send binary frames containing one or more
-// sqlpipe messages. Each message is prefixed by a 1-byte role tag
-// (0 = from-master, 1 = from-replica) so the remote end can route
-// it to the correct handler.
-//
-// Frame layout: [role:1][sqlpipe message bytes...]
-// Multiple frames can be concatenated in a single WebSocket message.
+// PeerMessages. Each PeerMessage is length-prefixed (4 bytes LE)
+// with a role tag, matching sqlpipe's native PeerMessage wire format.
 
-// encodeFrame wraps a sqlpipe Message as a PeerMessage with a role tag.
-func encodeFrame(role sqlpipe.SenderRole, msg sqlpipe.Message) []byte {
-	return sqlpipe.SerializePeer(sqlpipe.PeerMessage{
-		SenderRole: role,
-		Payload:    msg,
-	})
-}
-
-// encodeFrames encodes multiple messages with the same role.
-func encodeFrames(role sqlpipe.SenderRole, msgs []sqlpipe.Message) []byte {
+// serializePeerMessages serializes a slice of PeerMessages into wire bytes.
+func serializePeerMessages(msgs []sqlpipe.PeerMessage) []byte {
 	if len(msgs) == 0 {
 		return nil
 	}
 	var out []byte
 	for _, msg := range msgs {
-		out = append(out, encodeFrame(role, msg)...)
+		out = append(out, sqlpipe.SerializePeer(msg)...)
 	}
 	return out
 }
 
-// DecodeFrames splits a binary WebSocket payload into role-tagged messages.
-// Accepts sqlpipe PeerMessage wire format: [4B LE length][1B role][1B tag][payload]
-func DecodeFrames(data []byte) (masterMsgs, replicaMsgs []sqlpipe.Message, err error) {
+// DecodePeerMessages splits a binary WebSocket payload into PeerMessages.
+func DecodePeerMessages(data []byte) ([]sqlpipe.PeerMessage, error) {
+	var msgs []sqlpipe.PeerMessage
 	pos := 0
 	for pos < len(data) {
 		if pos+4 > len(data) {
-			return nil, nil, fmt.Errorf("truncated frame at offset %d", pos)
+			return nil, fmt.Errorf("truncated frame at offset %d", pos)
 		}
 		msgLen := binary.LittleEndian.Uint32(data[pos:])
 		total := 4 + int(msgLen)
 		if pos+total > len(data) {
-			return nil, nil, fmt.Errorf("truncated message at offset %d", pos)
+			return nil, fmt.Errorf("truncated message at offset %d", pos)
 		}
 		pm, err := sqlpipe.DeserializePeer(data[pos : pos+total])
 		if err != nil {
-			return nil, nil, fmt.Errorf("deserialize at offset %d: %w", pos, err)
+			return nil, fmt.Errorf("deserialize at offset %d: %w", pos, err)
 		}
+		msgs = append(msgs, pm)
 		pos += total
-
-		switch pm.SenderRole {
-		case sqlpipe.RoleAsMaster:
-			masterMsgs = append(masterMsgs, pm.Payload)
-		case sqlpipe.RoleAsReplica:
-			replicaMsgs = append(replicaMsgs, pm.Payload)
-		}
 	}
-	return
+	return msgs, nil
 }
 
 // ── Handshake ───────────────────────────────────────────────────
 
-// Hello returns the initial handshake bytes to send to a newly connected
-// client. This includes the Master's current state (flush) and the
-// Replica's Hello message.
+// Hello returns initial data to send to a newly connected client.
+// The server peer does NOT call Start() — the client initiates the
+// handshake. The server just flushes any pending changes so the
+// client's first HandleMessage can process them.
 func (sm *SyncManager) Hello() ([]byte, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	var out []byte
+	// Reset the peer for the new connection.
+	sm.peer.Reset()
 
-	// Master flush — send current state of server tables.
-	masterMsgs, err := sm.master.Flush()
-	if err != nil {
-		return nil, fmt.Errorf("master flush: %w", err)
-	}
-	out = append(out, encodeFrames(sqlpipe.RoleAsMaster, masterMsgs)...)
-
-	// Replica hello — initiate replication of client tables.
-	hello, err := sm.replica.Hello()
-	if err != nil {
-		return nil, fmt.Errorf("replica hello: %w", err)
-	}
-	out = append(out, encodeFrame(sqlpipe.RoleAsReplica, hello)...)
-
-	return out, nil
+	// Flush any pending changes so they're ready when the client
+	// sends its Start messages.
+	return sm.flushLocked()
 }
 
 // ── Message handling ────────────────────────────────────────────
@@ -301,7 +218,7 @@ func (sm *SyncManager) Hello() ([]byte, error) {
 // HandleMessage processes an incoming binary WebSocket frame from a client.
 // Returns response bytes to send back, if any.
 func (sm *SyncManager) HandleMessage(data []byte) ([]byte, error) {
-	masterMsgs, replicaMsgs, err := DecodeFrames(data)
+	peerMsgs, err := DecodePeerMessages(data)
 	if err != nil {
 		return nil, err
 	}
@@ -310,29 +227,18 @@ func (sm *SyncManager) HandleMessage(data []byte) ([]byte, error) {
 	defer sm.mu.Unlock()
 
 	var out []byte
-
-	// Messages the client sent as master → feed to our Replica.
-	for _, msg := range masterMsgs {
-		hr, err := sm.replica.HandleMessage(msg)
+	for _, pm := range peerMsgs {
+		hr, err := sm.peer.HandleMessage(pm)
 		if err != nil {
-			slog.Error("replica handle error", "err", err)
+			slog.Error("peer handle error", "err", err)
 			continue
 		}
-		// Send response messages back as replica.
-		out = append(out, encodeFrames(sqlpipe.RoleAsReplica, hr.Messages)...)
+		out = append(out, serializePeerMessages(hr.Messages)...)
 
-		// Check for new requests.
-		sm.processNewRequests()
-	}
-
-	// Messages the client sent as replica → feed to our Master.
-	for _, msg := range replicaMsgs {
-		resp, err := sm.master.HandleMessage(msg)
-		if err != nil {
-			slog.Error("master handle error", "err", err)
-			continue
+		// Check for new requests after processing client messages.
+		if pm.SenderRole == sqlpipe.RoleAsMaster {
+			sm.processNewRequests()
 		}
-		out = append(out, encodeFrames(sqlpipe.RoleAsMaster, resp)...)
 	}
 
 	return out, nil
@@ -361,25 +267,19 @@ func (sm *SyncManager) processNewRequests() {
 			continue
 		}
 		sm.lastRequestID = r.ID
-		// Fire callback outside the lock would be better, but for now
-		// keep it simple — the callback should be non-blocking.
 		sm.onRequest(r)
 	}
 }
 
 // ── State writes (server-owned tables) ──────────────────────────
 
-// Flush extracts pending Master changes and returns wire bytes to
+// Flush extracts pending Peer changes and returns wire bytes to
 // broadcast to all connected clients.
 func (sm *SyncManager) Flush() ([]byte, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	msgs, err := sm.master.Flush()
-	if err != nil {
-		return nil, err
-	}
-	return encodeFrames(sqlpipe.RoleAsMaster, msgs), nil
+	return sm.flushLocked()
 }
 
 // WriteTranscript inserts a message into sync_transcript and flushes.
@@ -387,7 +287,7 @@ func (sm *SyncManager) WriteTranscript(role, content string) ([]byte, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	_, err := sm.masterConn.ExecContext(context.Background(),
+	_, err := sm.peerConn.ExecContext(context.Background(),
 		`INSERT INTO sync_transcript (role, content) VALUES (?, ?)`,
 		role, content,
 	)
@@ -402,7 +302,7 @@ func (sm *SyncManager) WriteServerState(status, streamingText string) ([]byte, e
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	_, err := sm.masterConn.ExecContext(context.Background(),
+	_, err := sm.peerConn.ExecContext(context.Background(),
 		`UPDATE server_state SET status = ?, streaming_text = ? WHERE id = 1`,
 		status, streamingText,
 	)
@@ -417,7 +317,7 @@ func (sm *SyncManager) AppendStreamingText(text string) ([]byte, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	_, err := sm.masterConn.ExecContext(context.Background(),
+	_, err := sm.peerConn.ExecContext(context.Background(),
 		`UPDATE server_state SET streaming_text = streaming_text || ? WHERE id = 1`,
 		text,
 	)
@@ -432,7 +332,7 @@ func (sm *SyncManager) ClearStreamingText() ([]byte, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	_, err := sm.masterConn.ExecContext(context.Background(),
+	_, err := sm.peerConn.ExecContext(context.Background(),
 		`UPDATE server_state SET streaming_text = '' WHERE id = 1`)
 	if err != nil {
 		return nil, fmt.Errorf("clear streaming_text: %w", err)
@@ -455,7 +355,7 @@ func (sm *SyncManager) WriteSessions(sessions []SessionData) ([]byte, error) {
 		if s.Active {
 			active = 1
 		}
-		_, err := sm.masterConn.ExecContext(context.Background(),
+		_, err := sm.peerConn.ExecContext(context.Background(),
 			`INSERT INTO sessions (id, name, status, workdir, active, score, mod_time)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(id) DO UPDATE SET
@@ -479,7 +379,7 @@ func (sm *SyncManager) WriteScripts(name, source string) ([]byte, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	_, err := sm.masterConn.ExecContext(context.Background(),
+	_, err := sm.peerConn.ExecContext(context.Background(),
 		`INSERT INTO scripts (name, source, updated_at)
 		 VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 		 ON CONFLICT(name) DO UPDATE SET
@@ -498,33 +398,27 @@ func (sm *SyncManager) SetVersion(version string) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	_, err := sm.masterConn.ExecContext(context.Background(),
+	_, err := sm.peerConn.ExecContext(context.Background(),
 		`UPDATE server_state SET version = ? WHERE id = 1`, version)
 	return err
 }
 
-// flushLocked flushes the master and returns wire bytes. Caller must hold sm.mu.
+// flushLocked flushes the peer and returns wire bytes. Caller must hold sm.mu.
 func (sm *SyncManager) flushLocked() ([]byte, error) {
-	msgs, err := sm.master.Flush()
+	msgs, err := sm.peer.Flush()
 	if err != nil {
 		return nil, fmt.Errorf("flush: %w", err)
 	}
-	return encodeFrames(sqlpipe.RoleAsMaster, msgs), nil
+	return serializePeerMessages(msgs), nil
 }
 
 // Close releases all resources.
 func (sm *SyncManager) Close() error {
-	if sm.master != nil {
-		sm.master.Close()
+	if sm.peer != nil {
+		sm.peer.Close()
 	}
-	if sm.replica != nil {
-		sm.replica.Close()
-	}
-	if sm.masterConn != nil {
-		sm.masterConn.Close()
-	}
-	if sm.replicaConn != nil {
-		sm.replicaConn.Close()
+	if sm.peerConn != nil {
+		sm.peerConn.Close()
 	}
 	if sm.db != nil {
 		return sm.db.Close()

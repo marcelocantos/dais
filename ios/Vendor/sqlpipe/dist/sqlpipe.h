@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#define SQLPIPE_VERSION       "0.8.0"
+#define SQLPIPE_VERSION       "0.9.0"
 #define SQLPIPE_VERSION_MAJOR 0
-#define SQLPIPE_VERSION_MINOR 8
+#define SQLPIPE_VERSION_MINOR 9
 #define SQLPIPE_VERSION_PATCH 0
 
 #include <cstdint>
@@ -136,6 +136,11 @@ using LogCallback = std::function<void(LogLevel level, std::string_view message)
 using SchemaMismatchCallback = std::function<bool(
     SchemaVersion remote_sv, SchemaVersion local_sv,
     const std::string& remote_schema_sql)>;
+
+/// Execute a one-shot SQL query and return the result set.
+/// The returned QueryResult has id = 0 (not a subscription).
+/// Throws Error on SQL errors.
+QueryResult query(sqlite3* db, const std::string& sql);
 
 } // namespace sqlpipe
 
