@@ -166,13 +166,12 @@ func (sm *SyncManager) DB() *sql.DB { return sm.db }
 // Frame layout: [role:1][sqlpipe message bytes...]
 // Multiple frames can be concatenated in a single WebSocket message.
 
-// encodeFrame wraps a serialised sqlpipe Message with a role prefix.
+// encodeFrame wraps a sqlpipe Message as a PeerMessage with a role tag.
 func encodeFrame(role sqlpipe.SenderRole, msg sqlpipe.Message) []byte {
-	wire := sqlpipe.Serialize(msg)
-	out := make([]byte, 0, 1+len(wire))
-	out = append(out, byte(role))
-	out = append(out, wire...)
-	return out
+	return sqlpipe.SerializePeer(sqlpipe.PeerMessage{
+		SenderRole: role,
+		Payload:    msg,
+	})
 }
 
 // encodeFrames encodes multiple messages with the same role.
@@ -188,34 +187,29 @@ func encodeFrames(role sqlpipe.SenderRole, msgs []sqlpipe.Message) []byte {
 }
 
 // DecodeFrames splits a binary WebSocket payload into role-tagged messages.
+// Accepts sqlpipe PeerMessage wire format: [4B LE length][1B role][1B tag][payload]
 func DecodeFrames(data []byte) (masterMsgs, replicaMsgs []sqlpipe.Message, err error) {
 	pos := 0
 	for pos < len(data) {
-		if pos+5 > len(data) { // 1 role + 4 length prefix minimum
+		if pos+4 > len(data) {
 			return nil, nil, fmt.Errorf("truncated frame at offset %d", pos)
 		}
-		role := sqlpipe.SenderRole(data[pos])
-		pos++
-
-		// sqlpipe message: [4B LE length][tag][payload]
 		msgLen := binary.LittleEndian.Uint32(data[pos:])
 		total := 4 + int(msgLen)
 		if pos+total > len(data) {
 			return nil, nil, fmt.Errorf("truncated message at offset %d", pos)
 		}
-		msg, err := sqlpipe.Deserialize(data[pos : pos+total])
+		pm, err := sqlpipe.DeserializePeer(data[pos : pos+total])
 		if err != nil {
 			return nil, nil, fmt.Errorf("deserialize at offset %d: %w", pos, err)
 		}
 		pos += total
 
-		switch role {
+		switch pm.SenderRole {
 		case sqlpipe.RoleAsMaster:
-			// Remote sent as master → we handle as replica
-			masterMsgs = append(masterMsgs, msg)
+			masterMsgs = append(masterMsgs, pm.Payload)
 		case sqlpipe.RoleAsReplica:
-			// Remote sent as replica → we handle as master
-			replicaMsgs = append(replicaMsgs, msg)
+			replicaMsgs = append(replicaMsgs, pm.Payload)
 		}
 	}
 	return
