@@ -239,6 +239,57 @@ the UI without app rebuilds or redeployment.
 - Smoke test: Jevon writes path abbreviation via conversation, pushes
   script update, phone re-renders without app rebuild.
 
+### 🎯T10 sqlpipe-based state sync
+
+- **Value**: 13
+- **Cost**: 13
+- **Weight**: 1.0 (value 13 / cost 13)
+- **Status**: identified
+- **Discovered**: 2026-03-15
+
+**Desired state:** All state synchronisation between jevond and the iOS
+app flows through sqlpipe bidirectional peer sync over the existing
+WebSocket. No application-level message protocol — the WebSocket is a
+pure sqlpipe transport.
+
+**Architecture:**
+- **jevond is a sqlpipe Peer.** Server-owned tables: `transcript`
+  (chat messages), `sessions` (worker list), `scripts` (Lua view
+  source), `state` (server status, version). Writes trigger
+  `flush()` → changeset streamed to client.
+- **iOS app is a sqlpipe Peer.** Client-owned tables: `requests`
+  (user messages, action triggers), `preferences` (client settings).
+  Writes replicate to server → jevond processes them.
+- **Diff sync on reconnect.** Client catches up via sqlpipe's
+  hash-based diff protocol. No manual history replay needed.
+- **Query subscriptions.** Client subscribes to queries; Lua scripts
+  receive live query results as state. Re-render only when relevant
+  data changes.
+- **Lua state from queries.** Instead of a manually-built state dict,
+  Lua screen functions receive query results directly from the
+  replica's subscribed queries.
+
+**Integration:**
+- sqlpipe Go wrapper (`go/sqlpipe/`) for jevond
+- sqlpipe C++ API via bridging header for iOS (same as Lua vendoring)
+- Replace all WebSocket message types (init, history, text, status,
+  user_message, sessions, scripts, notification, view, dismiss, action)
+  with table reads/writes
+- jevond's existing SQLite DB becomes the sqlpipe master database
+
+**Dependencies:** `marcelocantos/sqlpipe` (sibling repo)
+
+**Acceptance criteria:**
+- WebSocket carries only sqlpipe peer messages — no application-level
+  JSON messages.
+- Server writes to transcript/sessions/scripts/state tables; changes
+  stream to client automatically.
+- Client writes to requests table; server processes inserts as actions.
+- Reconnect uses diff sync — no full state resend.
+- Lua scripts render from query subscription results.
+- Chat, sessions, and status all reflect server state reliably without
+  manual push logic.
+
 ### 🎯T7 Mobile app for Jevon
 
 - **Value**: 20
