@@ -227,6 +227,12 @@ func main() {
 			WorkerName: workerName,
 			Detail:     result,
 		})
+	}, func() error {
+		if err := luaRT.Reload(); err != nil {
+			return err
+		}
+		srv.PushView()
+		return nil
 	})
 
 	mux := http.NewServeMux()

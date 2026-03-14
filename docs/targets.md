@@ -174,44 +174,70 @@ and system performance analysis.
 - **Cost**: 13
 - **Weight**: 1.0 (value 13 / cost 13)
 - **Tags**: visual
-- **Status**: identified
+- **Status**: converging — server-side Lua rendering works end-to-end (current commit). Pivoting to client-side Lua execution.
 - **Discovered**: 2026-03-14
 
-**Desired state:** The iOS app is a thin generic renderer. jevond builds
-view trees from Lua scripts and sends them as JSON over WebSocket; the
-client maps them to native SwiftUI. Jevon (the AI agent) can modify Lua
-scripts at runtime to reshape the UI without app rebuilds.
+**Desired state:** The iOS app is a programmable thin client. Lua view
+scripts run on the device, rendering native SwiftUI from local state.
+jevond pushes script updates and state changes; the phone renders
+locally. Jevon (the AI agent) can modify scripts at runtime to reshape
+the UI without app rebuilds or redeployment.
 
 **Architecture:**
+- **Client-side Lua.** The iOS app embeds a Lua runtime (C Lua, ~25KB).
+  View scripts run on device against local state, producing view trees
+  that the generic SwiftUI renderer displays. No server round-trip per
+  render.
+- **Script distribution.** jevond holds canonical scripts. On connect
+  (or on change), pushes scripts to connected clients. Clients cache
+  scripts locally for offline use.
+- **State protocol.** Server sends structured state updates over
+  WebSocket (new message, status change, session list diff). Client
+  merges into local state and re-renders via Lua. Replaces streaming
+  full view trees.
 - **Primitives, not components.** View schema has fine-grained primitives
-  (text, vstack, hstack, spacer, image, padding, background, etc.) — no
-  domain-specific components. "Chat bubble" is a composition of primitives
-  defined in Lua, not a hardcoded client component.
-- **Lua view scripts.** View-building logic lives in Lua scripts loaded
-  by jevond via gopher-lua. Scripts receive app state and return view
-  trees. jevond hot-reloads scripts on change.
+  (text, vstack, hstack, spacer, image, padding, background, etc.).
+  "Chat bubble" is a composition defined in Lua, not a hardcoded client
+  component.
 - **Inline assets.** Images via SF Symbols (by name), data URIs (inline
-  SVG/PNG), or bundled assets. Jevon can send novel icons without app
+  SVG/PNG), or bundled assets. Jevon can create novel icons without app
   bundling.
-- **Server-defined templates.** Lua functions act as reusable component
-  templates. Jevon defines and modifies them conversationally.
+- **Dev flow.** Jevon edits scripts on the server → pushes draft to
+  device → user previews → approves → promotes to live. Testing before
+  releasing.
 - **Reserved: `embed` component** for future ge wire protocol integration
   (game content rendered inline within server-driven UI).
 
+**What exists (current commit):**
+- Go: Lua runtime (gopher-lua), view state manager, view schema, MCP
+  reload tool (`jevon_reload_views`)
+- iOS: generic recursive SwiftUI renderer (`ServerView`), view/dismiss
+  message handling
+- Lua: screen scripts for chat, connect, sessions, session detail
+- Server renders Lua → streams JSON view trees. This works but is the
+  wrong architecture — should be client-side Lua.
+
+**Remaining work:**
+- Embed C Lua in iOS app (via SPM package or vendored source)
+- Port view builder functions to Swift/C Lua bindings
+- Change WebSocket protocol: server sends scripts + state updates,
+  not rendered view trees
+- Client runs Lua locally on state changes
+- Add draft/preview/promote flow for script testing
+- Smoke test: path abbreviation written by Jevon via conversation
+
 **Acceptance criteria:**
-- Primitive-based view schema defined: text, vstack, hstack, zstack,
-  spacer, scroll, list, image, button, text_field, nav, toolbar, sheet,
-  background, padding, swipe_action, tap, badge, progress.
-- gopher-lua embedded in jevond. Lua scripts in `lua/views/` build view
-  trees for all screens (connect, chat, session list, session detail).
-- jevond hot-reloads Lua scripts on file change (fsnotify or signal).
-- iOS app has a generic recursive renderer mapping JSON nodes → SwiftUI.
-  No business logic in Swift.
-- Client sends action messages (taps, swipes, text submit) back to server.
-  Server processes actions in Lua, pushes updated view trees.
-- Smoke test: path abbreviation (~/home, GitHub logos) is deliberately
-  NOT implemented in the initial Lua scripts. Jevon writes it via
-  conversation to prove the architecture works end-to-end.
+- Lua runtime embedded in iOS app, running view scripts locally.
+- jevond pushes script updates over WebSocket; client caches and
+  executes them.
+- Server sends state updates (messages, sessions, status), not view
+  trees. Client renders locally from state.
+- `jevon_reload_views` MCP tool pushes updated scripts to connected
+  clients.
+- Generic SwiftUI renderer maps Lua-produced view trees to native views.
+- No business logic in Swift — all view logic in Lua scripts.
+- Smoke test: Jevon writes path abbreviation via conversation, pushes
+  script update, phone re-renders without app rebuild.
 
 ### 🎯T7 Mobile app for Jevon
 

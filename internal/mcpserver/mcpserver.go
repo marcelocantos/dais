@@ -22,20 +22,26 @@ import (
 // EventCallback is called when a worker finishes a command.
 type EventCallback func(workerID, workerName, result string, failed bool)
 
+// ReloadViewsFunc reloads Lua view scripts and pushes updated views.
+type ReloadViewsFunc func() error
+
 // Server wraps an MCP server that provides worker management tools.
 type Server struct {
-	mgr       *manager.Manager
-	workerWD  string
-	onDone    EventCallback
-	transport *server.StreamableHTTPServer
+	mgr          *manager.Manager
+	workerWD     string
+	onDone       EventCallback
+	reloadViews  ReloadViewsFunc
+	transport    *server.StreamableHTTPServer
 }
 
-// New creates an MCP server with 5 jevon tools wired to the given manager.
-func New(mgr *manager.Manager, workerWD string, onDone EventCallback) *Server {
+// New creates an MCP server with jevon tools wired to the given manager.
+// reloadViews may be nil if server-driven UI is not active.
+func New(mgr *manager.Manager, workerWD string, onDone EventCallback, reloadViews ReloadViewsFunc) *Server {
 	s := &Server{
-		mgr:      mgr,
-		workerWD: workerWD,
-		onDone:   onDone,
+		mgr:         mgr,
+		workerWD:    workerWD,
+		onDone:      onDone,
+		reloadViews: reloadViews,
 	}
 
 	mcpSrv := server.NewMCPServer("jevon", "1.0.0")
@@ -83,6 +89,15 @@ func New(mgr *manager.Manager, workerWD string, onDone EventCallback) *Server {
 		),
 		s.handleKillSession,
 	)
+
+	if s.reloadViews != nil {
+		mcpSrv.AddTool(
+			mcp.NewTool("jevon_reload_views",
+				mcp.WithDescription("Reload Lua view scripts and push updated UI to connected clients. Call this after editing files in ~/.jevon/lua/views/."),
+			),
+			s.handleReloadViews,
+		)
+	}
 
 	s.transport = server.NewStreamableHTTPServer(mcpSrv, server.WithStateLess(true))
 	return s
@@ -259,6 +274,16 @@ func (s *Server) runAndNotify(id string, sess *session.Session, text string) {
 	if s.onDone != nil {
 		s.onDone(id, sess.Name(), truncate(result, 2000), failed)
 	}
+}
+
+func (s *Server) handleReloadViews(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if s.reloadViews == nil {
+		return mcp.NewToolResultError("view reload not configured"), nil
+	}
+	if err := s.reloadViews(); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("reload failed: %v", err)), nil
+	}
+	return mcp.NewToolResultText("Views reloaded and pushed to connected clients."), nil
 }
 
 func truncate(s string, max int) string {

@@ -103,7 +103,7 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 
 		if s.viewState != nil {
 			s.viewState.UpdateStreamingText(text)
-			s.pushView()
+			s.PushView()
 		}
 	})
 	jev.SetStatus(func(state string) {
@@ -138,7 +138,7 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 
 		if s.viewState != nil {
 			s.viewState.SetStatus(state)
-			s.pushView()
+			s.PushView()
 		}
 	})
 
@@ -210,7 +210,7 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Send server-driven UI view tree.
-	s.pushView()
+	s.PushView()
 
 	// Read loop: process messages from remote.
 	for {
@@ -334,7 +334,7 @@ func (s *Server) handleUserMessage(text string) {
 
 	if s.viewState != nil {
 		s.viewState.AddMessage("user", text)
-		s.pushView()
+		s.PushView()
 	}
 
 	s.jevon.Enqueue(jevon.Event{
@@ -359,7 +359,7 @@ func (s *Server) handleAction(action, value string) {
 			// Refresh session list before showing.
 			s.refreshSessions()
 			s.viewState.SetSheet("sessions")
-			s.pushView()
+			s.PushView()
 		}
 
 	case action == "dismiss_sheet":
@@ -377,7 +377,7 @@ func (s *Server) handleAction(action, value string) {
 			slog.Warn("kill session failed", "id", sessionID, "err", err)
 		} else {
 			s.refreshSessions()
-			s.pushView()
+			s.PushView()
 		}
 
 	case action == "reload_views":
@@ -385,7 +385,7 @@ func (s *Server) handleAction(action, value string) {
 			if err := s.luaRT.Reload(); err != nil {
 				slog.Error("lua reload failed", "err", err)
 			} else {
-				s.pushView()
+				s.PushView()
 			}
 		}
 
@@ -394,8 +394,8 @@ func (s *Server) handleAction(action, value string) {
 	}
 }
 
-// pushView renders the current view state via Lua and broadcasts to all clients.
-func (s *Server) pushView() {
+// PushView renders the current view state via Lua and broadcasts to all clients.
+func (s *Server) PushView() {
 	if s.luaRT == nil || s.viewState == nil {
 		return
 	}
