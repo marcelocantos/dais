@@ -16,6 +16,7 @@ import (
 	"github.com/marcelocantos/jevon/internal/db"
 	"github.com/marcelocantos/jevon/internal/jevon"
 	"github.com/marcelocantos/jevon/internal/manager"
+	jvsync "github.com/marcelocantos/jevon/internal/sync"
 	"github.com/marcelocantos/jevon/internal/ui"
 )
 
@@ -36,6 +37,7 @@ type Server struct {
 	jevon   *jevon.Jevon
 	mgr     *manager.Manager
 	db      *db.DB
+	syncMgr *jvsync.SyncManager // nil until sqlpipe is wired up
 	version string
 
 	mu         sync.RWMutex
@@ -101,6 +103,11 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 			"content": text,
 		})
 
+		// Sync: append to streaming_text in server_state.
+		if s.syncMgr != nil {
+			s.syncBroadcast(s.syncMgr.AppendStreamingText(text))
+		}
+
 		if s.viewState != nil {
 			s.viewState.UpdateStreamingText(text)
 			s.PushView()
@@ -124,6 +131,11 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 				if err := s.db.AppendTranscript("jevon", turnText); err != nil {
 					slog.Error("failed to persist jevon turn", "err", err)
 				}
+				// Sync: persist to sync_transcript and clear streaming_text.
+				if s.syncMgr != nil {
+					s.syncBroadcast(s.syncMgr.WriteTranscript("jevon", turnText))
+					s.syncBroadcast(s.syncMgr.ClearStreamingText())
+				}
 			}
 
 			if s.viewState != nil {
@@ -136,6 +148,11 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 			"state": state,
 		})
 
+		// Sync: update status in server_state.
+		if s.syncMgr != nil {
+			s.syncBroadcast(s.syncMgr.WriteServerState(state, ""))
+		}
+
 		if s.viewState != nil {
 			s.viewState.SetStatus(state)
 			s.PushView()
@@ -143,6 +160,45 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 	})
 
 	return s
+}
+
+// SetSyncManager attaches the sqlpipe SyncManager. Must be called before
+// any clients connect. When set, the server sends sqlpipe binary frames
+// alongside JSON messages (dual-write during transition).
+func (s *Server) SetSyncManager(sm *jvsync.SyncManager) {
+	s.syncMgr = sm
+}
+
+// BroadcastBinary sends a binary WebSocket message to all connected clients.
+func (s *Server) BroadcastBinary(data []byte) {
+	if len(data) == 0 {
+		return
+	}
+
+	s.mu.RLock()
+	remotes := make([]remoteConn, 0, len(s.remotes))
+	for _, rc := range s.remotes {
+		remotes = append(remotes, rc)
+	}
+	s.mu.RUnlock()
+
+	for _, rc := range remotes {
+		writeCtx, cancel := context.WithTimeout(rc.ctx, 5*time.Second)
+		if err := rc.conn.Write(writeCtx, websocket.MessageBinary, data); err != nil {
+			slog.Debug("binary broadcast write failed", "err", err)
+		}
+		cancel()
+	}
+}
+
+// syncBroadcast writes to a sync table and broadcasts the resulting
+// changeset to all clients. Logs errors internally.
+func (s *Server) syncBroadcast(wire []byte, err error) {
+	if err != nil {
+		slog.Error("sync write failed", "err", err)
+		return
+	}
+	s.BroadcastBinary(wire)
 }
 
 // RegisterRoutes adds HTTP and WebSocket routes to the mux.
@@ -224,6 +280,19 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 		s.PushView()
 	}
 
+	// Send sqlpipe handshake if sync is active.
+	if s.syncMgr != nil {
+		if hello, err := s.syncMgr.Hello(); err != nil {
+			slog.Error("sqlpipe hello failed", "err", err)
+		} else if len(hello) > 0 {
+			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			if err := conn.Write(writeCtx, websocket.MessageBinary, hello); err != nil {
+				slog.Debug("sqlpipe hello write failed", "err", err)
+			}
+			cancel()
+		}
+	}
+
 	// Read loop: process messages from remote.
 	for {
 		mt, data, err := conn.Read(ctx)
@@ -233,6 +302,26 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
+
+		// Binary messages → sqlpipe protocol.
+		if mt == websocket.MessageBinary {
+			if s.syncMgr != nil {
+				resp, err := s.syncMgr.HandleMessage(data)
+				if err != nil {
+					slog.Error("sqlpipe handle error", "err", err)
+					continue
+				}
+				if len(resp) > 0 {
+					writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+					if err := conn.Write(writeCtx, websocket.MessageBinary, resp); err != nil {
+						slog.Debug("sqlpipe response write failed", "err", err)
+					}
+					cancel()
+				}
+			}
+			continue
+		}
+
 		if mt != websocket.MessageText {
 			continue
 		}
@@ -338,6 +427,11 @@ func (s *Server) HandleUserMessage(text string) {
 		slog.Error("failed to persist user message", "err", err)
 	}
 
+	// Sync: persist to sync_transcript.
+	if s.syncMgr != nil {
+		s.syncBroadcast(s.syncMgr.WriteTranscript("user", text))
+	}
+
 	s.Broadcast(map[string]any{
 		"type":      "user_message",
 		"text":      text,
@@ -361,6 +455,13 @@ func (s *Server) HandleAction(action, value string) {
 		return
 	}
 	slog.Debug("action received", "action", action, "value", value)
+
+	// send_message always goes through HandleUserMessage for persistence
+	// and broadcast, regardless of Lua handling.
+	if action == "send_message" {
+		s.HandleUserMessage(value)
+		return
+	}
 
 	// Try Lua handler first.
 	if s.luaRT != nil {

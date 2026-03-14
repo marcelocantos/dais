@@ -109,6 +109,14 @@ func (d *DB) Set(key, value string) error {
 	return err
 }
 
+// SqlDB returns the underlying *sql.DB.
+func (d *DB) SqlDB() *sql.DB { return d.db }
+
+// OpenRaw opens a raw *sql.DB with WAL mode for direct use.
+func OpenRaw(path string) (*sql.DB, error) {
+	return sql.Open("sqlite3", path+"?_journal_mode=WAL")
+}
+
 // Close closes the database connection.
 func (d *DB) Close() error {
 	return d.db.Close()

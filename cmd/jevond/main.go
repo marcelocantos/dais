@@ -23,6 +23,7 @@ import (
 	"github.com/marcelocantos/jevon/internal/qr"
 	"github.com/marcelocantos/jevon/internal/server"
 	"github.com/marcelocantos/jevon/internal/session"
+	jvsync "github.com/marcelocantos/jevon/internal/sync"
 	"github.com/marcelocantos/jevon/internal/transcript"
 	"github.com/marcelocantos/jevon/internal/ui"
 )
@@ -187,6 +188,45 @@ func main() {
 	}
 	defer database.Close()
 
+	// Set up sqlpipe sync database (separate from main DB to avoid
+	// preupdate hook conflicts).
+	//
+	// The onRequest callback needs the Server, which doesn't exist yet.
+	// srvRef is assigned after server.New() below; the closure captures it
+	// by pointer so the nil check works at call time.
+	var srvRef *server.Server
+	syncDBPath := filepath.Join(homeDir, ".jevon", "sync.db")
+	var syncMgr *jvsync.SyncManager
+	if syncDB, err := db.OpenRaw(syncDBPath); err != nil {
+		slog.Error("sqlpipe: cannot open sync db — running without sync", "err", err)
+	} else if err := db.CreateSyncSchema(syncDB); err != nil {
+		slog.Error("sqlpipe: schema creation failed — running without sync", "err", err)
+		syncDB.Close()
+	} else {
+		syncDB.Close() // SyncManager opens its own dedicated connections.
+
+		sm, err := jvsync.NewSyncManager(syncDBPath, func(req jvsync.Request) {
+			if srvRef == nil {
+				return
+			}
+			switch req.Type {
+			case "message":
+				srvRef.HandleUserMessage(req.Payload)
+			case "action":
+				srvRef.HandleAction(req.Payload, "")
+			}
+		})
+		if err != nil {
+			slog.Error("sqlpipe: init failed — running without sync", "err", err)
+		} else {
+			syncMgr = sm
+			defer syncMgr.Close()
+			if err := syncMgr.SetVersion(cli.Version); err != nil {
+				slog.Warn("sqlpipe: failed to set version", "err", err)
+			}
+		}
+	}
+
 	// Create components.
 	scanner := discovery.NewScanner(filepath.Join(homeDir, ".claude", "projects"))
 	mgr := manager.New(*model, *workDir, database, scanner)
@@ -219,6 +259,11 @@ func main() {
 	vs.SetConnected(cli.Version)
 
 	srv := server.New(jev, mgr, database, cli.Version, luaRT, vs)
+	srvRef = srv // Wire the forward reference for syncMgr's onRequest callback.
+	if syncMgr != nil {
+		srv.SetSyncManager(syncMgr)
+		slog.Info("sqlpipe sync enabled")
+	}
 
 	// Transcript reader for Lua access to Claude session transcripts.
 	transcriptReader := transcript.NewReader(filepath.Join(homeDir, ".claude", "projects"))

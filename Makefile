@@ -46,6 +46,9 @@ player: $(ge/PLAYER)
 # ── Go binaries ─────────────────────────────────────
 VERSION  ?= dev
 LDFLAGS  := -ldflags "-X github.com/marcelocantos/jevon/internal/cli.Version=$(VERSION)"
+# mattn/go-sqlite3 needs these defines for sqlpipe session extension support.
+export CGO_CFLAGS += -DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_PREUPDATE_HOOK
+GO_TAGS  := -tags sqlite_preupdate_hook
 GO_SRC   := $(shell find cmd internal -name '*.go' 2>/dev/null)
 EMBED_GUIDE := internal/cli/help_agent.md
 
@@ -57,14 +60,14 @@ jevond: bin/jevond
 
 bin/jevond: $(GO_SRC) $(EMBED_GUIDE)
 	@mkdir -p bin
-	go build $(LDFLAGS) -o bin/jevond ./cmd/jevond
+	go build $(GO_TAGS) $(LDFLAGS) -o bin/jevond ./cmd/jevond
 
 .PHONY: remote
 remote: bin/remote
 
 bin/remote: $(GO_SRC) $(EMBED_GUIDE)
 	@mkdir -p bin
-	go build $(LDFLAGS) -o bin/remote ./cmd/remote
+	go build $(GO_TAGS) $(LDFLAGS) -o bin/remote ./cmd/remote
 
 # ── Run ──────────────────────────────────────────────
 .PHONY: run run-app run-jevond run-remote

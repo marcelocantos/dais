@@ -9,6 +9,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
 	github.com/coder/websocket v1.8.14
 	github.com/google/uuid v1.6.0
+	github.com/marcelocantos/sqlpipe/go/sqlpipe v0.0.0-00010101000000-000000000000
 	github.com/mark3labs/mcp-go v0.44.1
 	github.com/mattn/go-sqlite3 v1.14.34
 	github.com/peterh/liner v1.2.2
@@ -45,6 +46,7 @@ require (
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/muesli/reflow v0.3.0 // indirect
 	github.com/muesli/termenv v0.16.0 // indirect
+	github.com/pierrec/lz4/v4 v4.1.25 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
@@ -58,3 +60,5 @@ require (
 	golang.org/x/text v0.24.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/marcelocantos/sqlpipe/go/sqlpipe => ../../marcelocantos/sqlpipe/go/sqlpipe

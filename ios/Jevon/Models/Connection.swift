@@ -111,8 +111,14 @@ final class Connection {
         // Handle some actions locally when Lua scripts are loaded.
         if luaRuntime != nil {
             switch action {
+            case "send_message" where !value.isEmpty:
+                // Add message locally for immediate feedback.
+                messages.append(ChatMessage(role: .user, text: value))
+                renderViews()
+                sendToServer(action: action, value: value)
+                return
+
             case "show_sessions":
-                // Ask the server for fresh session data, then show the sheet.
                 sendToServer(action: action, value: value)
                 return
 
