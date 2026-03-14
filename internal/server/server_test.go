@@ -138,7 +138,7 @@ func TestTurnAccumulation(t *testing.T) {
 func TestBroadcastWithNoClients(t *testing.T) {
 	s, _ := newTestServer(t)
 	// Should not panic when broadcasting with no connected clients.
-	s.broadcast(map[string]any{"type": "text", "content": "hello"})
+	s.Broadcast(map[string]any{"type": "text", "content": "hello"})
 }
 
 func TestRegisterRoutesAddsEndpoints(t *testing.T) {

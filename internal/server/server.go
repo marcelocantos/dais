@@ -96,7 +96,7 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 		s.turnBuf += text
 		s.mu.Unlock()
 
-		s.broadcast(map[string]any{
+		s.Broadcast(map[string]any{
 			"type":    "text",
 			"content": text,
 		})
@@ -131,7 +131,7 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 			}
 		}
 
-		s.broadcast(map[string]any{
+		s.Broadcast(map[string]any{
 			"type":  "status",
 			"state": state,
 		})
@@ -249,7 +249,7 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 
 		switch msg.Type {
 		case "message":
-			s.handleUserMessage(msg.Text)
+			s.HandleUserMessage(msg.Text)
 
 		case "action":
 			s.handleAction(msg.Action, msg.Value)
@@ -257,8 +257,8 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// broadcast sends a JSON message to all connected remote clients.
-func (s *Server) broadcast(v any) {
+// Broadcast sends a JSON message to all connected remote clients.
+func (s *Server) Broadcast(v any) {
 	data, err := json.Marshal(v)
 	if err != nil {
 		slog.Error("marshal failed", "err", err)
@@ -319,8 +319,8 @@ func (s *Server) handleKillSession(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{"ok": true})
 }
 
-// handleUserMessage processes a text message from a remote client.
-func (s *Server) handleUserMessage(text string) {
+// HandleUserMessage processes a text message from a remote client.
+func (s *Server) HandleUserMessage(text string) {
 	if text == "" {
 		return
 	}
@@ -338,7 +338,7 @@ func (s *Server) handleUserMessage(text string) {
 		slog.Error("failed to persist user message", "err", err)
 	}
 
-	s.broadcast(map[string]any{
+	s.Broadcast(map[string]any{
 		"type":      "user_message",
 		"text":      text,
 		"timestamp": now,
@@ -362,12 +362,21 @@ func (s *Server) handleAction(action, value string) {
 	}
 	slog.Debug("action received", "action", action, "value", value)
 
+	// Try Lua handler first.
+	if s.luaRT != nil {
+		if err := s.luaRT.CallAction(action, value); err == nil {
+			return
+		}
+		// If Lua doesn't have handle_action or it errors, fall through to Go.
+	}
+
+	// Go fallback.
 	switch {
 	case action == "send_message":
-		s.handleUserMessage(value)
+		s.HandleUserMessage(value)
 
 	case action == "show_sessions":
-		s.pushSessions()
+		s.PushSessions()
 
 	case action == "dismiss_sheet":
 		// Client handles dismiss locally when using client-side Lua.
@@ -385,7 +394,7 @@ func (s *Server) handleAction(action, value string) {
 		if err := s.mgr.Kill(sessionID); err != nil {
 			slog.Warn("kill session failed", "id", sessionID, "err", err)
 		} else {
-			s.pushSessions()
+			s.PushSessions()
 		}
 
 	case action == "reload_views":
@@ -416,7 +425,7 @@ func (s *Server) PushView() {
 
 	slog.Debug("pushView", "messages", len(msgs), "clients", len(s.remotes))
 	for _, msg := range msgs {
-		s.broadcast(msg)
+		s.Broadcast(msg)
 	}
 }
 
@@ -433,14 +442,14 @@ func (s *Server) PushScripts() {
 	if source == "" {
 		return
 	}
-	s.broadcast(map[string]any{
+	s.Broadcast(map[string]any{
 		"type":   "scripts",
 		"source": source,
 	})
 }
 
-// pushSessions fetches the current session list and broadcasts it to all clients.
-func (s *Server) pushSessions() {
+// PushSessions fetches the current session list and broadcasts it to all clients.
+func (s *Server) PushSessions() {
 	summaries := s.mgr.List(false)
 	type sessionJSON struct {
 		ID      string `json:"id"`
@@ -459,7 +468,7 @@ func (s *Server) pushSessions() {
 			Active:  sum.Active,
 		}
 	}
-	s.broadcast(map[string]any{
+	s.Broadcast(map[string]any{
 		"type":     "sessions",
 		"sessions": entries,
 	})
@@ -486,7 +495,7 @@ func (s *Server) refreshSessions() {
 
 // broadcastDismiss sends a dismiss message for the given slot.
 func (s *Server) broadcastDismiss(slot string) {
-	s.broadcast(ui.DismissMessage{
+	s.Broadcast(ui.DismissMessage{
 		Type: "dismiss",
 		Slot: slot,
 	})

@@ -13,9 +13,25 @@ import (
 	lua "github.com/yuin/gopher-lua"
 )
 
+// Capabilities provides Go functions callable from Lua action handlers.
+type Capabilities struct {
+	JevonEnqueue  func(text string)
+	JevonReset    func()
+	SessionList   func(all bool) []map[string]any
+	SessionKill   func(id string) error
+	SessionCreate func(name, workdir, model string) (string, error)
+	SessionSend   func(id, text string, wait bool) (string, error)
+	DBGet         func(key string) string
+	DBSet         func(key, value string) error
+	PushSessions  func()
+	PushScripts   func()
+	Broadcast     func(msg map[string]any)
+}
+
 // LuaRuntime loads and executes Lua view scripts that build UI node trees.
 type LuaRuntime struct {
-	dir string
+	dir  string
+	caps *Capabilities
 
 	mu sync.Mutex
 	L  *lua.LState
@@ -28,6 +44,140 @@ func NewLuaRuntime(dir string) (*LuaRuntime, error) {
 		return nil, err
 	}
 	return r, nil
+}
+
+// RegisterCapabilities registers Go capability functions in the Lua state,
+// making them callable from Lua action handlers.
+func (r *LuaRuntime) RegisterCapabilities(caps Capabilities) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.caps = &caps
+	r.registerCaps()
+}
+
+// registerCaps installs the capability functions into the current Lua state.
+// Must be called with r.mu held.
+func (r *LuaRuntime) registerCaps() {
+	if r.caps == nil || r.L == nil {
+		return
+	}
+	caps := r.caps
+	L := r.L
+
+	L.SetGlobal("jevon_enqueue", L.NewFunction(func(L *lua.LState) int {
+		caps.JevonEnqueue(L.CheckString(1))
+		return 0
+	}))
+
+	L.SetGlobal("jevon_reset", L.NewFunction(func(L *lua.LState) int {
+		caps.JevonReset()
+		return 0
+	}))
+
+	L.SetGlobal("session_list", L.NewFunction(func(L *lua.LState) int {
+		all := false
+		if L.GetTop() >= 1 {
+			all = L.ToBool(1)
+		}
+		sessions := caps.SessionList(all)
+		t := L.NewTable()
+		for _, s := range sessions {
+			t.Append(goToLua(L, s))
+		}
+		L.Push(t)
+		return 1
+	}))
+
+	L.SetGlobal("session_kill", L.NewFunction(func(L *lua.LState) int {
+		id := L.CheckString(1)
+		if err := caps.SessionKill(id); err != nil {
+			L.Push(lua.LString(err.Error()))
+			return 1
+		}
+		return 0
+	}))
+
+	L.SetGlobal("session_create", L.NewFunction(func(L *lua.LState) int {
+		name := L.OptString(1, "")
+		workdir := L.OptString(2, "")
+		model := L.OptString(3, "")
+		id, err := caps.SessionCreate(name, workdir, model)
+		if err != nil {
+			L.Push(lua.LNil)
+			L.Push(lua.LString(err.Error()))
+			return 2
+		}
+		L.Push(lua.LString(id))
+		return 1
+	}))
+
+	L.SetGlobal("session_send", L.NewFunction(func(L *lua.LState) int {
+		id := L.CheckString(1)
+		text := L.CheckString(2)
+		wait := true
+		if L.GetTop() >= 3 {
+			wait = L.ToBool(3)
+		}
+		result, err := caps.SessionSend(id, text, wait)
+		if err != nil {
+			L.Push(lua.LNil)
+			L.Push(lua.LString(err.Error()))
+			return 2
+		}
+		L.Push(lua.LString(result))
+		return 1
+	}))
+
+	L.SetGlobal("db_get", L.NewFunction(func(L *lua.LState) int {
+		L.Push(lua.LString(caps.DBGet(L.CheckString(1))))
+		return 1
+	}))
+
+	L.SetGlobal("db_set", L.NewFunction(func(L *lua.LState) int {
+		if err := caps.DBSet(L.CheckString(1), L.CheckString(2)); err != nil {
+			L.Push(lua.LString(err.Error()))
+			return 1
+		}
+		return 0
+	}))
+
+	L.SetGlobal("push_sessions", L.NewFunction(func(L *lua.LState) int {
+		caps.PushSessions()
+		return 0
+	}))
+
+	L.SetGlobal("push_scripts", L.NewFunction(func(L *lua.LState) int {
+		caps.PushScripts()
+		return 0
+	}))
+
+	L.SetGlobal("broadcast", L.NewFunction(func(L *lua.LState) int {
+		t := L.CheckTable(1)
+		msg := luaTableToGoMap(t)
+		caps.Broadcast(msg)
+		return 0
+	}))
+}
+
+// CallAction calls the Lua handle_action function. Returns an error if the
+// function doesn't exist or fails.
+func (r *LuaRuntime) CallAction(action, value string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	fn := r.L.GetGlobal("handle_action")
+	if fn == lua.LNil {
+		return fmt.Errorf("handle_action not defined")
+	}
+
+	if err := r.L.CallByParam(lua.P{
+		Fn:      fn,
+		NRet:    0,
+		Protect: true,
+	}, lua.LString(action), lua.LString(value)); err != nil {
+		return fmt.Errorf("handle_action: %w", err)
+	}
+	return nil
 }
 
 // Close releases the Lua state.
@@ -53,6 +203,7 @@ func (r *LuaRuntime) Reload() error {
 	r.L = L
 
 	registerNodeFuncs(L)
+	r.registerCaps()
 
 	entries, err := os.ReadDir(r.dir)
 	if err != nil {
@@ -601,6 +752,46 @@ func luaBool(t *lua.LTable, key string) bool {
 		return bool(b)
 	}
 	return false
+}
+
+// luaTableToGoMap converts a Lua table to a Go map[string]any.
+func luaTableToGoMap(t *lua.LTable) map[string]any {
+	m := make(map[string]any)
+	t.ForEach(func(k, v lua.LValue) {
+		key, ok := k.(lua.LString)
+		if !ok {
+			return
+		}
+		m[string(key)] = luaToGo(v)
+	})
+	return m
+}
+
+// luaToGo converts a Lua value to a Go value.
+func luaToGo(v lua.LValue) any {
+	switch val := v.(type) {
+	case *lua.LNilType:
+		return nil
+	case lua.LBool:
+		return bool(val)
+	case lua.LNumber:
+		return float64(val)
+	case lua.LString:
+		return string(val)
+	case *lua.LTable:
+		// Check if it's an array (sequential integer keys starting at 1).
+		maxN := val.MaxN()
+		if maxN > 0 {
+			arr := make([]any, 0, maxN)
+			for i := 1; i <= maxN; i++ {
+				arr = append(arr, luaToGo(val.RawGetInt(i)))
+			}
+			return arr
+		}
+		return luaTableToGoMap(val)
+	default:
+		return fmt.Sprint(v)
+	}
 }
 
 // goToLua converts a Go value to a Lua value, recursively handling maps and slices.

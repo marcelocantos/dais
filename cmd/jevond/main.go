@@ -19,6 +19,7 @@ import (
 	"github.com/marcelocantos/jevon/internal/mcpserver"
 	"github.com/marcelocantos/jevon/internal/qr"
 	"github.com/marcelocantos/jevon/internal/server"
+	"github.com/marcelocantos/jevon/internal/session"
 	"github.com/marcelocantos/jevon/internal/ui"
 )
 
@@ -214,6 +215,88 @@ func main() {
 	vs.SetConnected(cli.Version)
 
 	srv := server.New(jev, mgr, database, cli.Version, luaRT, vs)
+
+	// Register Lua capabilities — Go functions callable from Lua action handlers.
+	luaRT.RegisterCapabilities(ui.Capabilities{
+		JevonEnqueue: func(text string) {
+			srv.HandleUserMessage(text)
+		},
+		JevonReset: func() {
+			if err := database.Set("jevon_claude_id", ""); err != nil {
+				slog.Error("failed to reset jevon claude ID", "err", err)
+			}
+		},
+		SessionList: func(all bool) []map[string]any {
+			summaries := mgr.List(all)
+			result := make([]map[string]any, len(summaries))
+			for i, s := range summaries {
+				result[i] = map[string]any{
+					"id":      s.ID,
+					"name":    s.Name,
+					"status":  string(s.Status),
+					"workdir": s.WorkDir,
+					"active":  s.Active,
+				}
+			}
+			return result
+		},
+		SessionKill: func(id string) error {
+			return mgr.Kill(id)
+		},
+		SessionCreate: func(name, workdir, model string) (string, error) {
+			s, err := mgr.Create(manager.CreateConfig{
+				Name:    name,
+				WorkDir: workdir,
+				Model:   model,
+			})
+			if err != nil {
+				return "", err
+			}
+			return s.ID(), nil
+		},
+		SessionSend: func(id, text string, wait bool) (string, error) {
+			s := mgr.Get(id)
+			if s == nil {
+				return "", fmt.Errorf("session %q not found", id)
+			}
+			events, err := s.Run(context.Background(), text)
+			if err != nil {
+				return "", err
+			}
+			if !wait {
+				go func() {
+					for range events {
+					}
+				}()
+				return "command sent", nil
+			}
+			var result string
+			for ev := range events {
+				if ev.Type == session.EventText {
+					result += ev.Content
+				}
+			}
+			if r := s.LastResult(); r != "" {
+				result = r
+			}
+			return result, nil
+		},
+		DBGet: func(key string) string {
+			return database.Get(key)
+		},
+		DBSet: func(key, value string) error {
+			return database.Set(key, value)
+		},
+		PushSessions: func() {
+			srv.PushSessions()
+		},
+		PushScripts: func() {
+			srv.PushScripts()
+		},
+		Broadcast: func(msg map[string]any) {
+			srv.Broadcast(msg)
+		},
+	})
 
 	// Wire MCP server with Jevon event callback.
 	mcpSrv := mcpserver.New(mgr, *workDir, func(workerID, workerName, result string, failed bool) {
