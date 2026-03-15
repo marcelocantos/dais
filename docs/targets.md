@@ -297,6 +297,60 @@ pure sqlpipe transport.
 - Chat, sessions, and status all reflect server state reliably without
   manual push logic.
 
+### 🎯T11 Lua-controllable SwiftUI modifier surface
+
+- **Value**: 8
+- **Cost**: 5
+- **Weight**: 1.6 (value 8 / cost 5)
+- **Tags**: visual
+- **Status**: identified
+- **Discovered**: 2026-03-15
+
+**Desired state:** SwiftUI behavioral modifiers are exposed as Lua props
+so the server-driven UI has full control over rendering behavior without
+Swift code changes.
+
+**Sub-targets:**
+
+#### 🎯T11.1 Essential modifiers (Phase 1)
+
+- **Value**: 5
+- **Cost**: 3
+- **Weight**: 1.7 (value 5 / cost 3)
+- **Parent**: 🎯T11
+- **Status**: identified
+- **Discovered**: 2026-03-15
+
+16 props that un-hardcode current behavior:
+- Input: `keyboard`, `autocorrect`, `autocapitalize`, `submit_label`
+- Scroll: `scroll_anchor`, `scroll_dismiss_keyboard`, `keyboard_avoidance`
+- Layout: `frame_width`, `frame_height`, `frame_max_width`, `frame_max_height`
+- Visual: `foreground_style`, `content_mode`
+- Nav: `title_display_mode`
+- Accessibility: `a11y_label`
+
+#### 🎯T11.2 Useful modifiers (Phase 2)
+
+- **Value**: 3
+- **Cost**: 3
+- **Weight**: 1.0 (value 3 / cost 3)
+- **Parent**: 🎯T11
+- **Depends on**: 🎯T11.1
+- **Status**: identified
+- **Discovered**: 2026-03-15
+
+25 props for richer interactions and visual polish:
+- Input: `secure`, `content_type`, `line_limit_min`, `line_limit_max`
+- Scroll: `scroll_indicators`, `scroll_axis`
+- Layout: `frame_min_width`, `frame_min_height`, `aspect_ratio`, `clip_shape`
+- Visual: `shadow_radius`, `border_color`, `border_width`, `tint`, `resizable`
+- Typography: `text_case`, `monospaced`, `text_selection`, `multiline_alignment`
+- Interaction: `long_press_action`, `context_menu`, `confirmation`, `alert`
+  (structured props as child node types, matching swipe_action pattern)
+- Navigation: `pull_to_refresh`
+- Accessibility: `a11y_hint`, `a11y_hidden`
+- Animation: `transition`
+
 ### 🎯T7 Mobile app for Jevon
 
 - **Value**: 20
