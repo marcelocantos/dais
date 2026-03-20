@@ -1,12 +1,13 @@
 # Build artifacts
-build/
-bin/
+/build/
+/bin/
+/jevond
 *.o
 *.a
 *.d
 
 # Compile database
-compile_commands.json
+/compile_commands.json
 
 # IDE
 .vscode/
@@ -24,7 +25,13 @@ Thumbs.db
 .env.local
 
 # Generated embedded files
-internal/cli/help_agent.md
+/internal/cli/help_agent.md
+
+# Xcode
+/ios/Jevon.xcodeproj/
+xcuserdata/
+DerivedData/
+*.xcworkspace
 
 # Claude Code local settings
-.claude/
+/.claude/

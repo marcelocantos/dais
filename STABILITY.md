@@ -16,7 +16,7 @@ Snapshot as of v0.1.0.
 
 | Flag | Type | Default | Stability |
 |---|---|---|---|
-| `--port` | int | `8080` | Stable |
+| `--port` | int | `13705` | Stable |
 | `--workdir` | string | `"."` | Needs review — semantics may evolve with project management features |
 | `--model` | string | `""` | Needs review — may consolidate with config file |
 | `--jevon-model` | string | `""` | Needs review — same concern |
@@ -28,7 +28,7 @@ Snapshot as of v0.1.0.
 
 | Flag | Type | Default | Stability |
 |---|---|---|---|
-| `--addr` | string | `"localhost:8080"` | Needs review — name/semantics will change with mTLS |
+| `--addr` | string | `"localhost:13705"` | Needs review — name/semantics will change with mTLS |
 | `--version` | bool | `false` | Stable |
 | `--help-agent` | bool | `false` | Stable |
 
@@ -134,7 +134,8 @@ The following must be addressed before 1.0:
   stub. mTLS with QR-based device provisioning is planned but unimplemented.
 - **Permission model**: Both Jevon and workers run with permissions bypassed
   (`--permission-mode bypassPermissions`, `--dangerously-skip-permissions`).
-  Needs a trust model before 1.0.
+  Trust model defined in `docs/trust-model.md`; implementation tracked by
+  🎯T5 (authentication) and 🎯T6 (permission enforcement).
 
 ### Protocol and API
 - **Error message type**: Defined in the protocol but never emitted by the

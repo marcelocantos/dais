@@ -9,7 +9,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
+	"sync"
 	"syscall"
+	"time"
+
+	"github.com/marcelocantos/sqlpipe/go/sqlpipe"
 
 	"github.com/marcelocantos/jevon/internal/cli"
 	"github.com/marcelocantos/jevon/internal/db"
@@ -17,7 +22,12 @@ import (
 	"github.com/marcelocantos/jevon/internal/jevon"
 	"github.com/marcelocantos/jevon/internal/manager"
 	"github.com/marcelocantos/jevon/internal/mcpserver"
+	"github.com/marcelocantos/jevon/internal/qr"
 	"github.com/marcelocantos/jevon/internal/server"
+	"github.com/marcelocantos/jevon/internal/session"
+	jvsync "github.com/marcelocantos/jevon/internal/sync"
+	"github.com/marcelocantos/jevon/internal/transcript"
+	"github.com/marcelocantos/jevon/internal/ui"
 )
 
 // jevonCLAUDEMD is the CLAUDE.md template written to Jevon's workdir.
@@ -105,7 +115,7 @@ Do not run other commands.
 `
 
 func main() {
-	port := flag.Int("port", 8080, "listen port")
+	port := flag.Int("port", 13705, "listen port")
 	workDir := flag.String("workdir", ".", "default working directory for worker sessions")
 	model := flag.String("model", "", "default model for worker sessions")
 	jevonModel := flag.String("jevon-model", "", "model for Jevon (default: same as --model)")
@@ -180,6 +190,53 @@ func main() {
 	}
 	defer database.Close()
 
+	// Set up sqlpipe sync database (separate from main DB to avoid
+	// preupdate hook conflicts).
+	//
+	// The onRequest callback needs the Server, which doesn't exist yet.
+	// srvRef is assigned after server.New() below; the closure captures it
+	// by pointer so the nil check works at call time.
+	var srvRef *server.Server
+	syncDBPath := filepath.Join(homeDir, ".jevon", "sync.db")
+	var syncMgr *jvsync.SyncManager
+	if syncDB, err := sqlpipe.OpenDatabase(syncDBPath); err != nil {
+		slog.Error("sqlpipe: cannot open sync db — running without sync", "err", err)
+	} else if err := db.CreateSyncSchema(syncDB); err != nil {
+		slog.Error("sqlpipe: schema creation failed — running without sync", "err", err)
+		syncDB.Close()
+	} else {
+		syncDB.Close() // SyncManager opens its own dedicated connections.
+
+		sm, err := jvsync.NewSyncManager(syncDBPath, func(req jvsync.Request) {
+			if srvRef == nil {
+				return
+			}
+			switch req.Type {
+			case "message":
+				srvRef.HandleUserMessage(req.Payload)
+			case "action":
+				srvRef.HandleAction(req.Payload, "")
+			}
+		})
+		if err != nil {
+			slog.Error("sqlpipe: init failed — running without sync", "err", err)
+		} else {
+			syncMgr = sm
+			defer syncMgr.Close()
+			if err := syncMgr.SetVersion(cli.Version); err != nil {
+				slog.Warn("sqlpipe: failed to set version", "err", err)
+			}
+			// Seed sync_transcript from legacy transcript table.
+			if err := syncMgr.SeedTranscript(database.SqlpipeDB()); err != nil {
+				slog.Warn("sqlpipe: transcript seeding failed", "err", err)
+			}
+			// Flush seed data so it's available for the first client handshake.
+			if _, err := syncMgr.Flush(); err != nil {
+				slog.Warn("sqlpipe: post-seed flush failed", "err", err)
+			}
+		}
+	}
+
 	// Create components.
 	scanner := discovery.NewScanner(filepath.Join(homeDir, ".claude", "projects"))
 	mgr := manager.New(*model, *workDir, database, scanner)
@@ -195,7 +252,244 @@ func main() {
 		}
 	})
 
-	srv := server.New(jev, database, cli.Version)
+	// Set up Lua view runtime.
+	luaViewsDir := filepath.Join(jevDir, "..", "lua", "views")
+	if err := os.MkdirAll(luaViewsDir, 0o755); err != nil {
+		slog.Error("cannot create lua views dir", "err", err)
+		os.Exit(1)
+	}
+	luaRT, err := ui.NewLuaRuntime(luaViewsDir)
+	if err != nil {
+		slog.Error("cannot create lua runtime", "err", err)
+		os.Exit(1)
+	}
+	defer luaRT.Close()
+
+	vs := ui.NewViewState()
+	vs.SetConnected(cli.Version)
+
+	srv := server.New(jev, mgr, database, cli.Version, luaRT, vs)
+	srvRef = srv // Wire the forward reference for syncMgr's onRequest callback.
+	if syncMgr != nil {
+		srv.SetSyncManager(syncMgr)
+		slog.Info("sqlpipe sync enabled")
+	}
+
+	// Transcript reader for Lua access to Claude session transcripts.
+	transcriptReader := transcript.NewReader(filepath.Join(homeDir, ".claude", "projects"))
+
+	// Timer state — named timers that fire actions through the Lua runtime.
+	var (
+		timersMu sync.Mutex
+		timers   = make(map[string]func()) // name → cancel func
+	)
+	cancelTimer := func(name string) {
+		timersMu.Lock()
+		defer timersMu.Unlock()
+		if cancel, ok := timers[name]; ok {
+			cancel()
+			delete(timers, name)
+		}
+	}
+
+	// File I/O sandbox root.
+	sandboxRoot := filepath.Join(homeDir, ".jevon")
+
+	// validateSandbox ensures a path is under ~/.jevon/.
+	validateSandbox := func(path string) (string, error) {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return "", fmt.Errorf("invalid path: %w", err)
+		}
+		// Resolve symlinks to prevent escaping via symlink.
+		real, err := filepath.EvalSymlinks(filepath.Dir(abs))
+		if err != nil {
+			// Dir doesn't exist yet — check the parent chain.
+			real = abs
+		} else {
+			real = filepath.Join(real, filepath.Base(abs))
+		}
+		if !strings.HasPrefix(real, sandboxRoot) {
+			return "", fmt.Errorf("path %q is outside sandbox %q", path, sandboxRoot)
+		}
+		return abs, nil
+	}
+
+	// Register Lua capabilities — Go functions callable from Lua action handlers.
+	luaRT.RegisterCapabilities(ui.Capabilities{
+		JevonEnqueue: func(text string) {
+			srv.HandleUserMessage(text)
+		},
+		JevonReset: func() {
+			if err := database.Set("jevon_claude_id", ""); err != nil {
+				slog.Error("failed to reset jevon claude ID", "err", err)
+			}
+		},
+		SessionList: func(all bool) []map[string]any {
+			summaries := mgr.List(all)
+			result := make([]map[string]any, len(summaries))
+			for i, s := range summaries {
+				result[i] = map[string]any{
+					"id":      s.ID,
+					"name":    s.Name,
+					"status":  string(s.Status),
+					"workdir": s.WorkDir,
+					"active":  s.Active,
+				}
+			}
+			return result
+		},
+		SessionKill: func(id string) error {
+			return mgr.Kill(id)
+		},
+		SessionCreate: func(name, workdir, model string) (string, error) {
+			s, err := mgr.Create(manager.CreateConfig{
+				Name:    name,
+				WorkDir: workdir,
+				Model:   model,
+			})
+			if err != nil {
+				return "", err
+			}
+			return s.ID(), nil
+		},
+		SessionSend: func(id, text string, wait bool) (string, error) {
+			s := mgr.Get(id)
+			if s == nil {
+				return "", fmt.Errorf("session %q not found", id)
+			}
+			events, err := s.Run(context.Background(), text)
+			if err != nil {
+				return "", err
+			}
+			if !wait {
+				go func() {
+					for range events {
+					}
+				}()
+				return "command sent", nil
+			}
+			var result string
+			for ev := range events {
+				if ev.Type == session.EventText {
+					result += ev.Content
+				}
+			}
+			if r := s.LastResult(); r != "" {
+				result = r
+			}
+			return result, nil
+		},
+		DBGet: func(key string) string {
+			return database.Get(key)
+		},
+		DBSet: func(key, value string) error {
+			return database.Set(key, value)
+		},
+		PushSessions: func() {
+			srv.PushSessions()
+		},
+		PushScripts: func() {
+			srv.PushScripts()
+		},
+		Broadcast: func(msg map[string]any) {
+			srv.Broadcast(msg)
+		},
+
+		// Transcript access.
+		TranscriptRead: func(sessionID string) ([]map[string]any, error) {
+			return transcriptReader.Read(sessionID)
+		},
+		TranscriptTruncate: func(sessionID string, keepTurns int) error {
+			return transcriptReader.Truncate(sessionID, keepTurns)
+		},
+		TranscriptFork: func(sessionID string, keepTurns int) (string, error) {
+			return transcriptReader.Fork(sessionID, keepTurns)
+		},
+
+		// File I/O (sandboxed to ~/.jevon/).
+		FileRead: func(path string) (string, error) {
+			abs, err := validateSandbox(path)
+			if err != nil {
+				return "", err
+			}
+			data, err := os.ReadFile(abs)
+			if err != nil {
+				return "", err
+			}
+			return string(data), nil
+		},
+		FileWrite: func(path, content string) error {
+			abs, err := validateSandbox(path)
+			if err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(abs, []byte(content), 0o644)
+		},
+		FileList: func(dir string) ([]string, error) {
+			abs, err := validateSandbox(dir)
+			if err != nil {
+				return nil, err
+			}
+			entries, err := os.ReadDir(abs)
+			if err != nil {
+				return nil, err
+			}
+			names := make([]string, len(entries))
+			for i, e := range entries {
+				names[i] = e.Name()
+			}
+			return names, nil
+		},
+
+		// Timers.
+		SetTimeout: func(name string, delayMs int, action string) {
+			cancelTimer(name)
+			timer := time.AfterFunc(time.Duration(delayMs)*time.Millisecond, func() {
+				slog.Debug("timer fired", "name", name, "action", action)
+				timersMu.Lock()
+				delete(timers, name)
+				timersMu.Unlock()
+				srv.HandleAction(action, "")
+			})
+			timersMu.Lock()
+			timers[name] = func() { timer.Stop() }
+			timersMu.Unlock()
+		},
+		SetInterval: func(name string, intervalMs int, action string) {
+			cancelTimer(name)
+			ticker := time.NewTicker(time.Duration(intervalMs) * time.Millisecond)
+			done := make(chan struct{})
+			go func() {
+				for {
+					select {
+					case <-ticker.C:
+						slog.Debug("interval fired", "name", name, "action", action)
+						srv.HandleAction(action, "")
+					case <-done:
+						ticker.Stop()
+						return
+					}
+				}
+			}()
+			timersMu.Lock()
+			timers[name] = func() { close(done) }
+			timersMu.Unlock()
+		},
+		CancelTimer: cancelTimer,
+
+		// Notifications.
+		Notify: func(title, body string) {
+			srv.Broadcast(map[string]any{
+				"type":  "notification",
+				"title": title,
+				"body":  body,
+			})
+		},
+	})
 
 	// Wire MCP server with Jevon event callback.
 	mcpSrv := mcpserver.New(mgr, *workDir, func(workerID, workerName, result string, failed bool) {
@@ -209,6 +503,27 @@ func main() {
 			WorkerName: workerName,
 			Detail:     result,
 		})
+	}, func() error {
+		if err := luaRT.Reload(); err != nil {
+			return err
+		}
+		srv.PushScripts()
+		return nil
+	}, &mcpserver.TranscriptOps{
+		Read: func(sessionID string) ([]map[string]any, error) {
+			tr := transcript.NewReader(filepath.Join(homeDir, ".claude", "projects"))
+			return tr.Read(sessionID)
+		},
+		Truncate: func(sessionID string, keepTurns int) error {
+			tr := transcript.NewReader(filepath.Join(homeDir, ".claude", "projects"))
+			return tr.Truncate(sessionID, keepTurns)
+		},
+		ResetID: func() {
+			database.Set("jevon_claude_id", "")
+		},
+		GetID: func() string {
+			return database.Get("jevon_claude_id")
+		},
 	})
 
 	mux := http.NewServeMux()
@@ -237,6 +552,14 @@ func main() {
 
 	slog.Info("jevond starting", "addr", listenAddr, "version", cli.Version,
 		"jevon_model", jevModel, "worker_model", *model)
+
+	// Print QR code for mobile app discovery.
+	if url, err := qr.ServerURL(*port); err == nil {
+		qr.Print(os.Stderr, url)
+	} else {
+		slog.Warn("cannot generate QR code", "err", err)
+	}
+
 	if err := httpSrv.ListenAndServe(); err != http.ErrServerClosed {
 		slog.Error("server failed", "err", err)
 		os.Exit(1)
