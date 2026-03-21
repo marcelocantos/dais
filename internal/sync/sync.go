@@ -356,10 +356,16 @@ func (sm *SyncManager) WriteSessions(sessions []SessionData) ([]byte, error) {
 	return sm.flushLocked()
 }
 
-// WriteScripts upserts a Lua script and flushes.
+// WriteScripts upserts a Lua script and flushes. Before overwriting,
+// snapshots all current scripts into script_versions for rollback.
 func (sm *SyncManager) WriteScripts(name, source string) ([]byte, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+
+	// Snapshot current scripts before overwriting.
+	if err := sm.snapshotScriptsLocked(); err != nil {
+		return nil, fmt.Errorf("snapshot scripts: %w", err)
+	}
 
 	if err := sm.sdb.Exec(
 		`INSERT INTO scripts (name, source, updated_at)
@@ -371,6 +377,97 @@ func (sm *SyncManager) WriteScripts(name, source string) ([]byte, error) {
 	); err != nil {
 		return nil, fmt.Errorf("upsert script %s: %w", name, err)
 	}
+	return sm.flushLocked()
+}
+
+// snapshotScriptsLocked saves all current scripts as a versioned snapshot.
+// Caller must hold sm.mu.
+func (sm *SyncManager) snapshotScriptsLocked() error {
+	// Get the next snapshot number.
+	qr, err := sm.sdb.Query(`SELECT COALESCE(MAX(snapshot), 0) + 1 FROM script_versions`)
+	if err != nil {
+		return err
+	}
+	nextSnapshot := int64(1)
+	if len(qr.Rows) > 0 {
+		if v, ok := qr.Rows[0][0].(int64); ok {
+			nextSnapshot = v
+		}
+	}
+
+	// Copy all current scripts into the version table.
+	if err := sm.sdb.Exec(
+		`INSERT INTO script_versions (snapshot, name, source)
+		 SELECT ?, name, source FROM scripts`,
+		nextSnapshot,
+	); err != nil {
+		return err
+	}
+
+	// Prune old snapshots, keeping the last 10.
+	return sm.sdb.Exec(
+		`DELETE FROM script_versions WHERE snapshot <= (
+			SELECT COALESCE(MAX(snapshot), 0) - 10 FROM script_versions
+		)`,
+	)
+}
+
+// ScriptSnapshot describes a point-in-time snapshot of all scripts.
+type ScriptSnapshot struct {
+	Snapshot  int64
+	CreatedAt string
+}
+
+// ListSnapshots returns available script version snapshots, newest first.
+func (sm *SyncManager) ListSnapshots() ([]ScriptSnapshot, error) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	var snapshots []ScriptSnapshot
+	for row := range sm.sdb.Rows(
+		`SELECT snapshot, MIN(created_at) FROM script_versions
+		 GROUP BY snapshot ORDER BY snapshot DESC`,
+	) {
+		if row.Err() != nil {
+			return nil, row.Err()
+		}
+		snapshots = append(snapshots, ScriptSnapshot{
+			Snapshot:  row.Int64(0),
+			CreatedAt: row.Text(1),
+		})
+	}
+	return snapshots, nil
+}
+
+// RollbackScripts restores all scripts from the given snapshot and flushes.
+// Returns the flush bytes to broadcast to clients.
+func (sm *SyncManager) RollbackScripts(snapshot int64) ([]byte, error) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	// Verify snapshot exists.
+	qr, err := sm.sdb.Query(
+		`SELECT COUNT(*) FROM script_versions WHERE snapshot = ?`, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	if len(qr.Rows) == 0 || qr.Rows[0][0].(int64) == 0 {
+		return nil, fmt.Errorf("snapshot %d not found", snapshot)
+	}
+
+	// Replace current scripts with the snapshot.
+	if err := sm.sdb.Exec(`DELETE FROM scripts`); err != nil {
+		return nil, fmt.Errorf("clear scripts: %w", err)
+	}
+	if err := sm.sdb.Exec(
+		`INSERT INTO scripts (name, source, updated_at)
+		 SELECT name, source, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+		 FROM script_versions WHERE snapshot = ?`,
+		snapshot,
+	); err != nil {
+		return nil, fmt.Errorf("restore scripts: %w", err)
+	}
+
 	return sm.flushLocked()
 }
 

@@ -35,3 +35,12 @@ DerivedData/
 
 # Claude Code local settings
 /.claude/
+sqlite_mcp_server.db
+relay
+
+# Generated PlantUML output (regenerate via: plantuml -tsvg docs/*.puml)
+docs/*.svg
+
+# TLC model checker artifacts
+formal/*_TTrace_*
+formal/states/

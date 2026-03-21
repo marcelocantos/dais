@@ -9,11 +9,13 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
 	github.com/coder/websocket v1.8.14
 	github.com/google/uuid v1.6.0
-	github.com/marcelocantos/sqlpipe/go/sqlpipe v0.11.1
+	github.com/marcelocantos/sqlpipe/go/sqlpipe v0.12.0
 	github.com/mark3labs/mcp-go v0.44.1
 	github.com/peterh/liner v1.2.2
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/yuin/gopher-lua v1.1.1
+	golang.org/x/crypto v0.31.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -57,5 +59,4 @@ require (
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/term v0.31.0 // indirect
 	golang.org/x/text v0.24.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

@@ -25,6 +25,12 @@ type EventCallback func(workerID, workerName, result string, failed bool)
 // ReloadViewsFunc reloads Lua view scripts and pushes updated views.
 type ReloadViewsFunc func() error
 
+// ExecLuaFunc sends Lua code to connected clients for execution.
+type ExecLuaFunc func(code string)
+
+// ScreenshotFunc requests a screenshot from connected clients and returns the file path.
+type ScreenshotFunc func() (string, error)
+
 // TranscriptOps provides transcript manipulation functions.
 type TranscriptOps struct {
 	Read     func(sessionID string) ([]map[string]any, error)
@@ -39,6 +45,8 @@ type Server struct {
 	workerWD     string
 	onDone       EventCallback
 	reloadViews  ReloadViewsFunc
+	execLua      ExecLuaFunc
+	screenshot   ScreenshotFunc
 	transcript   *TranscriptOps
 	transport    *server.StreamableHTTPServer
 }
@@ -46,12 +54,14 @@ type Server struct {
 // New creates an MCP server with jevon tools wired to the given manager.
 // reloadViews may be nil if server-driven UI is not active.
 // transcript may be nil if transcript ops are not available.
-func New(mgr *manager.Manager, workerWD string, onDone EventCallback, reloadViews ReloadViewsFunc, transcript *TranscriptOps) *Server {
+func New(mgr *manager.Manager, workerWD string, onDone EventCallback, reloadViews ReloadViewsFunc, execLua ExecLuaFunc, screenshot ScreenshotFunc, transcript *TranscriptOps) *Server {
 	s := &Server{
 		mgr:         mgr,
 		workerWD:    workerWD,
 		onDone:      onDone,
 		reloadViews: reloadViews,
+		execLua:     execLua,
+		screenshot:  screenshot,
 		transcript:  transcript,
 	}
 
@@ -107,6 +117,25 @@ func New(mgr *manager.Manager, workerWD string, onDone EventCallback, reloadView
 				mcp.WithDescription("Reload Lua view scripts and push updated UI to connected clients. Call this after editing files in ~/.jevon/lua/views/."),
 			),
 			s.handleReloadViews,
+		)
+	}
+
+	if s.execLua != nil {
+		mcpSrv.AddTool(
+			mcp.NewTool("jevon_exec_lua",
+				mcp.WithDescription("Execute Lua code on connected mobile clients. The code runs in the client's Lua runtime which has access to client-side functions like disconnect(). Use this for client interactions that don't need UI."),
+				mcp.WithString("code", mcp.Required(), mcp.Description("Lua code to execute on the client")),
+			),
+			s.handleExecLua,
+		)
+	}
+
+	if s.screenshot != nil {
+		mcpSrv.AddTool(
+			mcp.NewTool("jevon_screenshot",
+				mcp.WithDescription("Take a screenshot of the connected mobile client's current screen. Returns the file path of the saved PNG image."),
+			),
+			s.handleScreenshot,
 		)
 	}
 
@@ -311,6 +340,24 @@ func (s *Server) handleReloadViews(_ context.Context, _ mcp.CallToolRequest) (*m
 		return mcp.NewToolResultError(fmt.Sprintf("reload failed: %v", err)), nil
 	}
 	return mcp.NewToolResultText("Views reloaded and pushed to connected clients."), nil
+}
+
+func (s *Server) handleScreenshot(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	path, err := s.screenshot()
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("screenshot failed: %v", err)), nil
+	}
+	return mcp.NewToolResultText(path), nil
+}
+
+func (s *Server) handleExecLua(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	code, _ := args["code"].(string)
+	if code == "" {
+		return mcp.NewToolResultError("code is required"), nil
+	}
+	s.execLua(code)
+	return mcp.NewToolResultText("Lua code sent to connected clients."), nil
 }
 
 func (s *Server) handleTranscriptRead(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {

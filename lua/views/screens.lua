@@ -112,11 +112,6 @@ function chat_screen(state)
         table.insert(msg_nodes, chat_bubble({role = "jevon", text = state.streaming_text}))
     end
 
-    local messages_scroll = with_props(
-        scroll("messages", vstack(8, unpack(msg_nodes))),
-        {scroll_anchor = "bottom", scroll_dismiss_keyboard = "interactive", keyboard_avoidance = "ignore"}
-    )
-
     -- Thinking status bar
     local thinking_bar = nil
     if state.status == "thinking" then
@@ -126,16 +121,24 @@ function chat_screen(state)
         )
     end
 
-    -- Input bar
+    -- Input bar — extra bottom padding clears the QuickType autocomplete bar,
+    -- which SwiftUI's keyboard safe area doesn't account for.
     local input_bar = padding(
         with_props(
             text_field("message-input", "Message", "send_message"),
             {submit_label = "send", autocapitalize = "sentences"}
         ),
-        8, 16, 8, 16
+        8, 16, 32, 16
     )
 
-    -- Assemble body
+    local messages_scroll = with_props(
+        scroll("messages", vstack(8, unpack(msg_nodes))),
+        {scroll_anchor = "bottom", scroll_dismiss_keyboard = "interactive",
+         frame_max_width = "infinity", frame_max_height = "infinity"}
+    )
+
+    -- Simple VStack: scroll expands, input bar sits at the bottom.
+    -- SwiftUI's automatic keyboard avoidance pushes everything up.
     local body
     if thinking_bar then
         body = vstack(0, messages_scroll, thinking_bar, input_bar)
@@ -146,7 +149,7 @@ function chat_screen(state)
     -- Toolbar
     local tb = toolbar(
         {icon_button("sessions-btn", "list.bullet", "show_sessions")},
-        {button("disconnect-btn", "Disconnect", "disconnect")}
+        {icon_button("mic-btn", "mic.fill", "toggle_voice")}
     )
 
     return nav("Jevon", tb, body)

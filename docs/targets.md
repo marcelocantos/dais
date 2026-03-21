@@ -67,6 +67,18 @@ SQLite tracks workers for observability. cworkers absorbed into jevond.
 - All sub-targets achieved.
 - cworkers repo archived after absorption complete.
 
+**Alternative to evaluate:** Grok's full-duplex realtime API
+(`wss://api.x.ai/v1/realtime`) as the primary agent backend instead of
+Claude Code subprocesses. Benefits: native WebSocket (matches jevond's
+architecture), single connection for text + voice, no subprocess
+management. Trade-offs: vendor lock-in to xAI, loss of Claude Code's
+tool ecosystem, unknown MCP support. Known UX issue: Grok's voice mode
+continues speaking for several seconds after an interruption is
+captured, making it hard to maintain conversational thread — jevond's
+interruption handling (🎯T13) must cut output immediately on new
+utterance, not just queue it. Evaluate before committing to the
+subprocess model.
+
 **Prior design:** `docs/vision-v2.md` (superseded by this simpler model)
 
 #### 🎯T8.1 Worker dispatch foundation
@@ -333,6 +345,183 @@ jevond — sending commands, viewing responses, and managing workers.
 - User can send text commands and see streaming responses.
 - User can view and manage worker sessions.
 - App works on iOS (primary target: Pippa, iPad Air 5th gen).
+
+### 🎯T12 Script versioning and safe mode
+
+- **Value**: 8
+- **Cost**: 5
+- **Weight**: 1.6 (value 8 / cost 5)
+- **Gates**: 🎯T9
+- **Status**: identified
+- **Discovered**: 2026-03-21
+
+**Desired state:** Lua script updates are versioned. If a script change
+breaks the UI, the user can roll back to the last known-good version
+without depending on the Lua layer.
+
+**Architecture:**
+- **Script versioning:** `script_versions` table in SQLite keeps the
+  last N versions per script. Each `jevon_reload_views` push creates
+  an atomic version snapshot across all scripts.
+- **Control channel:** The WebSocket has a reserved message namespace
+  below the Lua layer. Control messages (rollback, version query,
+  health check) are handled before Lua sees them. The Lua layer
+  accesses comms through an abstracted API, not raw WebSocket.
+- **Safe mode trigger:** Two-finger chevron (`>`) gesture, recognised
+  at the UIWindow level in Swift — independent of any Lua-rendered
+  view hierarchy. Fires even if every script is broken.
+- **Safe mode screen:** Pure Swift (no Lua). Shows current script
+  version, last known-good version, rollback button, raw log view.
+  Talks directly to the control channel.
+
+**Acceptance criteria:**
+- Script updates create versioned snapshots in SQLite.
+- Two-finger chevron gesture triggers safe mode from any screen state.
+- Safe mode screen renders without Lua, shows version info, allows
+  one-tap rollback.
+- Rollback restores all scripts to the selected snapshot atomically.
+- Control channel messages bypass the Lua layer entirely.
+- Smoke test: push a broken script, verify safe mode activates and
+  rollback restores the working UI.
+
+### 🎯T14 Onboarding and device pairing
+
+- **Value**: 8
+- **Cost**: 8
+- **Weight**: 1.0 (value 8 / cost 8)
+- **Status**: identified
+- **Discovered**: 2026-03-21
+
+**Desired state:** A new user goes from zero to connected in one flow
+with no manual IP entry or configuration.
+
+**Onboarding flow:**
+1. User installs the iOS app. App opens a QR scanner and displays:
+   "Run `brew install marcelocantos/tap/jevon && jevon --init` on
+   your laptop."
+2. `jevon --init` (a separate CLI binary, not jevond) prompts the
+   user to paste their OpenAI API key. Stores it in macOS Keychain.
+3. CLI pings jevond (running as a brew service) that the key is
+   available.
+4. jevond generates a one-time auth token, encodes it with host:port
+   into a QR code, and sends it back to the CLI for display.
+5. User points their device at the QR code on the terminal.
+6. App scans QR, extracts host:port + auth token, connects to jevond
+   with the token. jevond validates and promotes the connection.
+
+**Key details:**
+- jevond runs as a launchd service via `brew services start jevon`.
+  Starts with or without the OpenAI key.
+- QR code contains `wss://relay.jevon.app/ws/<instance-id>?token=<auth>`.
+  The token authenticates the device pairing, not the OpenAI key.
+- Manual IP:port entry removed from the connect screen. QR-only.
+- `jevon` CLI binary is separate from `jevond` daemon.
+
+**Relay architecture:**
+- A small Go relay runs on Fly.io (`jevon-relay.fly.dev`).
+- Each jevond connects outbound to `wss://jevon-relay.fly.dev/register`
+  on startup and gets an instance ID.
+- iOS app connects to `wss://jevon-relay.fly.dev/ws/<instance-id>`.
+- Relay bridges WebSocket traffic between jevond and the app.
+- No per-user DNS, no tunnels, fully dynamic. One relay serves all
+  users.
+
+**Device pairing ceremony (one-time via `jevon --init`):**
+1. CLI prompts for OpenAI key, stores in macOS Keychain.
+2. CLI asks jevond to generate a single-use pairing token.
+3. jevond registers with relay, gets instance ID.
+4. CLI displays QR: `wss://relay.../ws/<id>?pair=<token>`.
+5. User scans QR. App connects, sends pairing token to prove it
+   saw the QR.
+6. jevond sends a 6-digit confirmation code to the app.
+7. App displays: "Enter this code on your laptop: 847291".
+8. User types code into CLI — proves same human controls both.
+9. jevond generates a persistent device secret, sends to app.
+10. App stores secret in iOS Keychain. jevond stores hash in DB.
+11. Pairing token revoked, QR cleared from console.
+
+**Subsequent connections:** App sends persistent secret + device
+fingerprint (`identifierForVendor`). jevond verifies hash. No QR,
+no user interaction.
+
+**Revocation:** `jevon --unpair` revokes the device secret server-side.
+
+**Acceptance criteria:**
+- `brew install` installs both `jevon` CLI and `jevond` daemon.
+- `jevon --init` runs the pairing ceremony end-to-end.
+- Device secret persists in iOS Keychain; hash in jevond's DB.
+- Subsequent connections authenticate automatically.
+- `jevon --unpair` revokes a paired device.
+- No manual host/port entry in the app.
+- jevond runs as a brew service.
+- Relay runs on Fly.io.
+
+### 🎯T13 Full-duplex voice input
+
+- **Value**: 13
+- **Cost**: 8
+- **Weight**: 1.6 (value 13 / cost 8)
+- **Status**: identified
+- **Discovered**: 2026-03-21
+
+**Desired state:** The user speaks continuously into the iOS app. Each
+utterance is transcribed in real-time via OpenAI's Realtime API
+(`gpt-4o-transcribe`) and delivered to jevond as a user message
+immediately. The agent can begin responding while the user is still
+speaking. New utterances interrupt the current response — the agent
+considers the full accumulated input before continuing.
+
+**Architecture:**
+- **Local VAD:** `AVAudioEngine` monitors mic levels on-device (always
+  on, no network cost). On speech detection, opens OpenAI WebSocket.
+- **Cloud transcription:** OpenAI Realtime API with `gpt-4o-transcribe`
+  model. 24kHz mono PCM16 audio streamed via WebSocket. Semantic VAD
+  detects utterance boundaries.
+- **Ephemeral tokens:** jevond proxies OpenAI API key. iOS app requests
+  a short-lived token per voice session. No secrets on-device.
+- **Sentence delivery:** On `transcription.completed`, send transcript
+  to jevond as a regular user message.
+- **Interruption:** When a new utterance arrives while the agent is
+  responding, jevond cancels the current Claude process and restarts
+  with the full accumulated context.
+
+**Acceptance criteria:**
+- Local VAD detects speech onset and opens OpenAI Realtime connection.
+- Audio streams to OpenAI, transcription deltas displayed in real-time.
+- Completed utterances sent to jevond immediately as user messages.
+- Agent response interrupted and restarted when new input arrives.
+- Extended silence closes the OpenAI connection (back to local VAD).
+- No API keys stored on device — ephemeral token flow via jevond.
+
+### 🎯T15 Protocol state machines are formally verifiable
+
+- **Value**: 13
+- **Cost**: 8
+- **Weight**: 1.6 (value 13 / cost 8)
+- **Status**: converging — framework built, pairing ceremony modelled with 8 adversary capabilities and 8 properties. MitM vulnerability found and fixed (key-bound confirmation codes). TLA+ spec generated. Remaining: run TLC to verify properties.
+- **Discovered**: 2026-03-21
+- **Forked-from**: 🎯T14
+
+**Desired state:** Protocol state machines are defined as data (transition
+tables) that serve as the single source of truth. The same definition
+drives both runtime execution in Go and TLA+ spec generation. Protocol
+logic bugs are catchable by model checking against the actual code.
+
+**Architecture:**
+- `internal/protocol/` package with declarative transition table types.
+- Runtime executor: table-driven state machine enforcing valid transitions.
+- TLA+ exporter: generates spec with one PlusCal process per actor,
+  message channels, and Dolev-Yao adversary overlay.
+- Pairing ceremony (🎯T14) defined using this framework.
+
+**Acceptance criteria:**
+- Protocol defined as Go structs (actors, states, transitions, messages,
+  guards, properties).
+- Runtime `Machine` enforces transitions — rejects invalid messages.
+- `ExportTLA()` emits a valid TLA+ spec that TLC can check.
+- Pairing ceremony modelled; TLC verifies no-replay, token-exhaustion,
+  and authentication properties.
+- No drift possible between runtime and model — single source of truth.
 
 ## Achieved
 

@@ -27,18 +27,13 @@ struct ChatView: View {
                     }
                     .disabled(connection.httpBaseURL == nil)
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Disconnect") {
-                        connection.disconnect()
-                    }
-                    .font(.callout)
-                }
             }
             .sheet(isPresented: $showSessions) {
                 if let baseURL = connection.httpBaseURL {
                     SessionListView(baseURL: baseURL)
                 }
             }
+            .onAppear { inputFocused = true }
         }
     }
 
