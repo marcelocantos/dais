@@ -400,18 +400,49 @@ with no manual IP entry or configuration.
 **Key details:**
 - jevond runs as a launchd service via `brew services start jevon`.
   Starts with or without the OpenAI key.
-- QR code contains `jevon://<host>:<port>?token=<one-time-token>`.
+- QR code contains `wss://relay.jevon.app/ws/<instance-id>?token=<auth>`.
   The token authenticates the device pairing, not the OpenAI key.
 - Manual IP:port entry removed from the connect screen. QR-only.
 - `jevon` CLI binary is separate from `jevond` daemon.
 
+**Relay architecture:**
+- A small Go relay runs on Fly.io (`jevon-relay.fly.dev`).
+- Each jevond connects outbound to `wss://jevon-relay.fly.dev/register`
+  on startup and gets an instance ID.
+- iOS app connects to `wss://jevon-relay.fly.dev/ws/<instance-id>`.
+- Relay bridges WebSocket traffic between jevond and the app.
+- No per-user DNS, no tunnels, fully dynamic. One relay serves all
+  users.
+
+**Device pairing ceremony (one-time via `jevon --init`):**
+1. CLI prompts for OpenAI key, stores in macOS Keychain.
+2. CLI asks jevond to generate a single-use pairing token.
+3. jevond registers with relay, gets instance ID.
+4. CLI displays QR: `wss://relay.../ws/<id>?pair=<token>`.
+5. User scans QR. App connects, sends pairing token to prove it
+   saw the QR.
+6. jevond sends a 6-digit confirmation code to the app.
+7. App displays: "Enter this code on your laptop: 847291".
+8. User types code into CLI — proves same human controls both.
+9. jevond generates a persistent device secret, sends to app.
+10. App stores secret in iOS Keychain. jevond stores hash in DB.
+11. Pairing token revoked, QR cleared from console.
+
+**Subsequent connections:** App sends persistent secret + device
+fingerprint (`identifierForVendor`). jevond verifies hash. No QR,
+no user interaction.
+
+**Revocation:** `jevon --unpair` revokes the device secret server-side.
+
 **Acceptance criteria:**
 - `brew install` installs both `jevon` CLI and `jevond` daemon.
-- `jevon --init` prompts for OpenAI key, stores in Keychain, triggers
-  QR display via jevond.
-- iOS app scans QR and connects with one-time token.
+- `jevon --init` runs the pairing ceremony end-to-end.
+- Device secret persists in iOS Keychain; hash in jevond's DB.
+- Subsequent connections authenticate automatically.
+- `jevon --unpair` revokes a paired device.
 - No manual host/port entry in the app.
 - jevond runs as a brew service.
+- Relay runs on Fly.io.
 
 ### 🎯T13 Full-duplex voice input
 
