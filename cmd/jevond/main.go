@@ -509,6 +509,14 @@ func main() {
 		}
 		srv.PushScripts()
 		return nil
+	}, func(code string) {
+		srv.Broadcast(map[string]any{
+			"type":   "control",
+			"action": "exec_lua",
+			"code":   code,
+		})
+	}, func() (string, error) {
+		return srv.RequestScreenshot(10 * time.Second)
 	}, &mcpserver.TranscriptOps{
 		Read: func(sessionID string) ([]map[string]any, error) {
 			tr := transcript.NewReader(filepath.Join(homeDir, ".claude", "projects"))

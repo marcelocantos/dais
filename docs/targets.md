@@ -334,6 +334,44 @@ jevond — sending commands, viewing responses, and managing workers.
 - User can view and manage worker sessions.
 - App works on iOS (primary target: Pippa, iPad Air 5th gen).
 
+### 🎯T12 Script versioning and safe mode
+
+- **Value**: 8
+- **Cost**: 5
+- **Weight**: 1.6 (value 8 / cost 5)
+- **Gates**: 🎯T9
+- **Status**: identified
+- **Discovered**: 2026-03-21
+
+**Desired state:** Lua script updates are versioned. If a script change
+breaks the UI, the user can roll back to the last known-good version
+without depending on the Lua layer.
+
+**Architecture:**
+- **Script versioning:** `script_versions` table in SQLite keeps the
+  last N versions per script. Each `jevon_reload_views` push creates
+  an atomic version snapshot across all scripts.
+- **Control channel:** The WebSocket has a reserved message namespace
+  below the Lua layer. Control messages (rollback, version query,
+  health check) are handled before Lua sees them. The Lua layer
+  accesses comms through an abstracted API, not raw WebSocket.
+- **Safe mode trigger:** Two-finger chevron (`>`) gesture, recognised
+  at the UIWindow level in Swift — independent of any Lua-rendered
+  view hierarchy. Fires even if every script is broken.
+- **Safe mode screen:** Pure Swift (no Lua). Shows current script
+  version, last known-good version, rollback button, raw log view.
+  Talks directly to the control channel.
+
+**Acceptance criteria:**
+- Script updates create versioned snapshots in SQLite.
+- Two-finger chevron gesture triggers safe mode from any screen state.
+- Safe mode screen renders without Lua, shows version info, allows
+  one-tap rollback.
+- Rollback restores all scripts to the selected snapshot atomically.
+- Control channel messages bypass the Lua layer entirely.
+- Smoke test: push a broken script, verify safe mode activates and
+  rollback restores the working UI.
+
 ## Achieved
 
 ### 🎯T4 Trust model defined for pre-1.0

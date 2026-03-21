@@ -104,13 +104,19 @@ struct ServerView: View {
 
     @ViewBuilder
     private func renderScroll() -> some View {
-        let childCount = countDescendants(node)
+        let allChildren = node.childNodes
+        // Pull out a bottom_inset child (if any) to render as .safeAreaInset.
+        let bottomInset = allChildren.last(where: { $0.type == "bottom_inset" })
+        let scrollChildren = bottomInset != nil
+            ? allChildren.filter { $0.type != "bottom_inset" }
+            : allChildren
+        let childCount = scrollChildren.reduce(0) { $0 + 1 + countDescendants($1) }
         let props = node.props
 
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    ForEach(indexedChildren()) { child in
+                    ForEach(indexed(scrollChildren)) { child in
                         ServerView(node: child.node, onAction: onAction)
                             .id(child.id)
                     }
@@ -121,6 +127,7 @@ struct ServerView: View {
             .applyScrollDismissKeyboard(props?.scrollDismissKeyboard)
             .applyScrollAnchor(props?.scrollAnchor)
             .applyKeyboardAvoidance(props?.keyboardAvoidance)
+            .applyBottomInset(bottomInset, onAction: onAction)
             .onChange(of: childCount) {
                 withAnimation(.easeOut(duration: 0.2)) {
                     proxy.scrollTo("__scroll_bottom__", anchor: .bottom)
@@ -401,6 +408,7 @@ private struct ServerTextField: View {
     let node: ViewNode
     let onAction: (String, String) -> Void
     @State private var text: String = ""
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         let action = node.props?.action ?? ""
@@ -412,6 +420,7 @@ private struct ServerTextField: View {
                 text: $text,
                 axis: .vertical
             )
+            .focused($isFocused)
             .textFieldStyle(.roundedBorder)
             .lineLimit(1...5)
             .applyKeyboardType(props?.keyboard)
@@ -428,6 +437,7 @@ private struct ServerTextField: View {
             }
             .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
+        .onAppear { isFocused = true }
     }
 
     private func submit(action: String) {
@@ -435,6 +445,7 @@ private struct ServerTextField: View {
         guard !trimmed.isEmpty else { return }
         onAction(action, trimmed)
         text = ""
+        isFocused = true
     }
 }
 
@@ -714,6 +725,26 @@ private extension View {
     func applyA11yLabel(_ label: String?) -> some View {
         if let label {
             self.accessibilityLabel(label)
+        } else {
+            self
+        }
+    }
+
+    // MARK: - Bottom inset
+
+    @ViewBuilder
+    func applyBottomInset(_ insetNode: ViewNode?, onAction: @escaping (String, String) -> Void) -> some View {
+        if let insetNode {
+            self.safeAreaInset(edge: .bottom) {
+                VStack(spacing: 0) {
+                    ForEach(
+                        (insetNode.children ?? []).enumerated().map { IndexedNode(node: $1, index: $0) }
+                    ) { child in
+                        ServerView(node: child.node, onAction: onAction)
+                    }
+                }
+                .background(.bar)
+            }
         } else {
             self
         }

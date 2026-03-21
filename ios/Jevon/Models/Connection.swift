@@ -4,6 +4,7 @@
 import Foundation
 import Observation
 import os
+import UIKit
 
 private let logger = Logger(subsystem: "com.marcelocantos.jevon", category: "Connection")
 
@@ -160,6 +161,117 @@ final class Connection {
         return components?.url
     }
 
+    // MARK: - Control channel
+
+    /// Pending control response continuations, keyed by action name.
+    private var controlContinuations: [String: CheckedContinuation<ControlResponse, Never>] = [:]
+
+    /// Send a control-channel message and await the response.
+    /// Control messages bypass the Lua layer entirely.
+    func sendControl(action: String, value: String = "") async -> Result<[String: Any], Error> {
+        guard webSocket != nil else {
+            return .failure(ControlError.notConnected)
+        }
+
+        let response = await withCheckedContinuation { (continuation: CheckedContinuation<ControlResponse, Never>) in
+            controlContinuations[action] = continuation
+
+            let msg: [String: String] = [
+                "type": "control",
+                "action": action,
+                "value": value,
+            ]
+            guard let data = try? JSONEncoder().encode(msg),
+                  let string = String(data: data, encoding: .utf8) else {
+                controlContinuations.removeValue(forKey: action)
+                continuation.resume(returning: .error("Failed to encode control message"))
+                return
+            }
+
+            webSocket?.send(.string(string)) { [weak self] error in
+                if let error {
+                    Task { @MainActor in
+                        if let cont = self?.controlContinuations.removeValue(forKey: action) {
+                            cont.resume(returning: .error(error.localizedDescription))
+                        }
+                    }
+                }
+            }
+
+            // Timeout after 10 seconds.
+            Task {
+                try? await Task.sleep(for: .seconds(10))
+                await MainActor.run {
+                    if let cont = self.controlContinuations.removeValue(forKey: action) {
+                        cont.resume(returning: .error("Control request timed out"))
+                    }
+                }
+            }
+        }
+
+        switch response {
+        case .success(let jsonData):
+            if let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
+                return .success(json)
+            }
+            return .failure(ControlError.serverError("Invalid response format"))
+        case .error(let msg):
+            return .failure(ControlError.serverError(msg))
+        }
+    }
+
+    /// Handle an incoming control message — either a response to a pending
+    /// request or a server-pushed action (like exec_lua).
+    func handleControlResponse(_ data: [String: Any]) {
+        guard let action = data["action"] as? String else { return }
+
+        // Server-pushed control actions (no pending request).
+        switch action {
+        case "exec_lua":
+            if let code = data["code"] as? String {
+                let result = execLua(code)
+                logger.info("exec_lua result: \(result ?? "nil")")
+            }
+            return
+        case "screenshot":
+            captureAndSendScreenshot()
+            return
+        default:
+            break
+        }
+
+        // Response to a pending request.
+        guard let continuation = controlContinuations.removeValue(forKey: action) else {
+            return
+        }
+        if let jsonData = try? JSONSerialization.data(withJSONObject: data) {
+            continuation.resume(returning: .success(jsonData))
+        } else {
+            continuation.resume(returning: .error("Failed to re-serialize control response"))
+        }
+    }
+
+    /// Sendable wrapper for control responses to cross isolation boundaries.
+    /// Stores the raw JSON Data rather than [String: Any] to satisfy Sendable.
+    private enum ControlResponse: Sendable {
+        case success(_ jsonData: Data)
+        case error(_ message: String)
+    }
+
+    enum ControlError: LocalizedError {
+        case notConnected
+        case timeout
+        case serverError(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .notConnected: "Not connected to server"
+            case .timeout: "Control request timed out"
+            case .serverError(let msg): msg
+            }
+        }
+    }
+
     // MARK: - Persistence
 
     var lastServer: (host: String, port: Int)? {
@@ -231,8 +343,16 @@ final class Connection {
                 continue
 
             case .string(let text):
-                // JSON frame — existing application protocol.
+                // JSON frame — check for control response first.
                 let data = Data(text.utf8)
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   json["type"] as? String == "control" {
+                    handleControlResponse(json)
+                    reconnectDelay = 1.0
+                    continue
+                }
+
+                // Application protocol.
                 do {
                     let serverMsg = try ServerMessage(from: data)
                     handleMessage(serverMsg)
@@ -326,12 +446,66 @@ final class Connection {
 
     private func loadScripts(_ source: String) {
         let runtime = LuaRuntime()
+        runtime.onAction = { [weak self] action, value in
+            self?.handleLuaAction(action, value: value)
+        }
         if runtime.loadScript(source) {
             luaRuntime = runtime
             logger.info("Lua scripts loaded for client-side rendering")
             renderViews()
         } else {
             logger.error("Failed to load Lua scripts — falling back to server rendering")
+        }
+    }
+
+    /// Handle actions triggered by Lua client-side functions.
+    private func handleLuaAction(_ action: String, value: String) {
+        switch action {
+        case "disconnect":
+            disconnect()
+        default:
+            sendAction(action, value: value)
+        }
+    }
+
+    /// Execute Lua code pushed via the control channel. Returns result string.
+    func execLua(_ code: String) -> String? {
+        return luaRuntime?.eval(code)
+    }
+
+    /// Capture the current screen and send it back via the control channel.
+    private func captureAndSendScreenshot() {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let window = scene.windows.first else {
+            logger.error("screenshot: no window")
+            return
+        }
+
+        let renderer = UIGraphicsImageRenderer(bounds: window.bounds)
+        let image = renderer.image { ctx in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: false)
+        }
+
+        guard let pngData = image.pngData() else {
+            logger.error("screenshot: PNG encoding failed")
+            return
+        }
+
+        let base64 = pngData.base64EncodedString()
+
+        guard let webSocket else { return }
+        let msg: [String: String] = [
+            "type": "control",
+            "action": "screenshot_result",
+            "value": base64,
+        ]
+        guard let jsonData = try? JSONEncoder().encode(msg),
+              let string = String(data: jsonData, encoding: .utf8) else { return }
+
+        webSocket.send(.string(string)) { error in
+            if let error {
+                logger.error("screenshot send failed: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -368,31 +542,36 @@ final class Connection {
         default: isConnected = false
         }
 
-        // When syncPeer is active, query the local replica DB.
+        // When syncPeer is active and has data, query the local replica DB.
+        // Fall through to in-memory state if the replica is empty (sync
+        // may not have completed yet).
         if let syncPeer {
             let msgs = syncPeer.query(
                 "SELECT role, content AS text, timestamp FROM sync_transcript ORDER BY rowid"
             ) ?? []
 
-            let sessEntries = syncPeer.query(
-                "SELECT * FROM sessions ORDER BY score DESC LIMIT 20"
-            ) ?? []
+            if !msgs.isEmpty || messages.isEmpty {
+                let sessEntries = syncPeer.query(
+                    "SELECT * FROM sessions ORDER BY score DESC LIMIT 20"
+                ) ?? []
 
-            let stateRow = syncPeer.query(
-                "SELECT status, streaming_text FROM server_state WHERE id = 1"
-            )?.first
+                // Use in-memory state for status and streaming_text — the
+                // server_state DB table syncs asynchronously and may lag
+                // behind, causing stale "thinking" spinners and duplicate
+                // messages (streaming text shown alongside the completed
+                // transcript entry).
+                let status = serverState == .thinking ? "thinking" : "idle"
+                let streaming = streamingText
 
-            let status = (stateRow?["status"] as? String) ?? "idle"
-            let streaming = (stateRow?["streaming_text"] as? String) ?? ""
-
-            return [
-                "connected": isConnected,
-                "version": serverVersion,
-                "status": status,
-                "messages": msgs,
-                "streaming_text": streaming,
-                "sessions": sessEntries,
-            ]
+                return [
+                    "connected": isConnected,
+                    "version": serverVersion,
+                    "status": status,
+                    "messages": msgs,
+                    "streaming_text": streaming,
+                    "sessions": sessEntries,
+                ]
+            }
         }
 
         // Fallback: build from in-memory state.

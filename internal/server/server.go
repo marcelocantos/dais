@@ -6,8 +6,12 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"net/http"
 	"sync"
 	"time"
@@ -47,6 +51,9 @@ type Server struct {
 
 	luaRT     *ui.LuaRuntime
 	viewState *ui.ViewState
+
+	lastScreenshot string
+	screenshotCh   chan string
 }
 
 // New creates a Server with the given Jevon instance, manager, database, version string,
@@ -337,6 +344,9 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 		}
 
 		switch msg.Type {
+		case "control":
+			s.handleControl(conn, ctx, msg.Action, msg.Value)
+
 		case "message":
 			s.HandleUserMessage(msg.Text)
 
@@ -509,6 +519,178 @@ func (s *Server) HandleAction(action, value string) {
 
 	default:
 		slog.Warn("unknown action", "action", action)
+	}
+}
+
+// handleControl processes control-channel messages that bypass the Lua layer.
+// These are used for safe mode operations (rollback, version query, health).
+func (s *Server) handleControl(conn *websocket.Conn, ctx context.Context, action, value string) {
+	respond := func(v any) {
+		data, err := json.Marshal(v)
+		if err != nil {
+			return
+		}
+		writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		conn.Write(writeCtx, websocket.MessageText, data)
+	}
+
+	switch action {
+	case "health":
+		respond(map[string]any{
+			"type":   "control",
+			"action": "health",
+			"status": "ok",
+		})
+
+	case "list_snapshots":
+		if s.syncMgr == nil {
+			respond(map[string]any{
+				"type":   "control",
+				"action": "list_snapshots",
+				"error":  "sync not available",
+			})
+			return
+		}
+		snapshots, err := s.syncMgr.ListSnapshots()
+		if err != nil {
+			respond(map[string]any{
+				"type":   "control",
+				"action": "list_snapshots",
+				"error":  err.Error(),
+			})
+			return
+		}
+		entries := make([]map[string]any, len(snapshots))
+		for i, snap := range snapshots {
+			entries[i] = map[string]any{
+				"snapshot":   snap.Snapshot,
+				"created_at": snap.CreatedAt,
+			}
+		}
+		respond(map[string]any{
+			"type":      "control",
+			"action":    "list_snapshots",
+			"snapshots": entries,
+		})
+
+	case "exec_lua":
+		// Forward Lua code to all connected clients for execution.
+		s.Broadcast(map[string]any{
+			"type":   "control",
+			"action": "exec_lua",
+			"code":   value,
+		})
+		respond(map[string]any{
+			"type":   "control",
+			"action": "exec_lua",
+			"status": "sent",
+		})
+
+	case "screenshot":
+		// Forward screenshot request to all connected clients.
+		s.Broadcast(map[string]any{
+			"type":   "control",
+			"action": "screenshot",
+		})
+		// Don't respond yet — the client will send screenshot_result.
+
+	case "screenshot_result":
+		// Client sent back a screenshot as base64 PNG in the value field.
+		if value == "" {
+			slog.Warn("screenshot_result: no data")
+			return
+		}
+		imgData, err := base64.StdEncoding.DecodeString(value)
+		if err != nil {
+			slog.Error("screenshot_result: decode failed", "err", err)
+			return
+		}
+		path := filepath.Join(os.TempDir(), "jevon-screenshot.png")
+		if err := os.WriteFile(path, imgData, 0644); err != nil {
+			slog.Error("screenshot_result: write failed", "err", err)
+			return
+		}
+		slog.Info("screenshot saved", "path", path)
+		s.mu.Lock()
+		s.lastScreenshot = path
+		if s.screenshotCh != nil {
+			select {
+			case s.screenshotCh <- path:
+			default:
+			}
+		}
+		s.mu.Unlock()
+
+	case "rollback":
+		if s.syncMgr == nil {
+			respond(map[string]any{
+				"type":   "control",
+				"action": "rollback",
+				"error":  "sync not available",
+			})
+			return
+		}
+		var snapshot int64
+		if _, err := fmt.Sscanf(value, "%d", &snapshot); err != nil {
+			respond(map[string]any{
+				"type":   "control",
+				"action": "rollback",
+				"error":  "invalid snapshot number",
+			})
+			return
+		}
+		flushData, err := s.syncMgr.RollbackScripts(snapshot)
+		if err != nil {
+			slog.Error("rollback failed", "snapshot", snapshot, "err", err)
+			respond(map[string]any{
+				"type":   "control",
+				"action": "rollback",
+				"error":  err.Error(),
+			})
+			return
+		}
+		// Broadcast updated scripts to all clients via sqlpipe.
+		s.syncBroadcast(flushData, nil)
+		// Also push scripts via the JSON path for clients without sqlpipe.
+		s.PushScripts()
+		slog.Info("scripts rolled back", "snapshot", snapshot)
+		respond(map[string]any{
+			"type":     "control",
+			"action":   "rollback",
+			"snapshot": snapshot,
+			"status":   "ok",
+		})
+
+	default:
+		slog.Warn("unknown control action", "action", action)
+	}
+}
+
+// RequestScreenshot sends a screenshot request to connected clients and waits
+// for the result. Returns the file path of the saved PNG.
+func (s *Server) RequestScreenshot(timeout time.Duration) (string, error) {
+	ch := make(chan string, 1)
+	s.mu.Lock()
+	s.screenshotCh = ch
+	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		s.screenshotCh = nil
+		s.mu.Unlock()
+	}()
+
+	s.Broadcast(map[string]any{
+		"type":   "control",
+		"action": "screenshot",
+	})
+
+	select {
+	case path := <-ch:
+		return path, nil
+	case <-time.After(timeout):
+		return "", fmt.Errorf("screenshot timeout")
 	}
 }
 

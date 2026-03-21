@@ -36,6 +36,8 @@ final class LuaRuntime {
         }
         openSafeLibs(L)
         registerBuilders(L)
+        registerClientAPI(L)
+        activeLuaRuntime = self
     }
 
     deinit {
@@ -55,6 +57,35 @@ final class LuaRuntime {
             return false
         }
         return true
+    }
+
+    /// Action callback for Lua client-side functions (disconnect, navigate, etc.).
+    var onAction: ((String, String) -> Void)?
+
+    /// Execute arbitrary Lua code. Returns the result as a string, or nil on error.
+    func eval(_ code: String) -> String? {
+        guard let L else { return nil }
+        if luaL_loadstring(L, code) != 0 {
+            let err = lua_tolstring(L, -1, nil).map { String(cString: $0) }
+            luaPop(L, 1)
+            return err
+        }
+        if lua_pcall(L, 0, 1, 0) != 0 {
+            let err = lua_tolstring(L, -1, nil).map { String(cString: $0) }
+            luaPop(L, 1)
+            return err
+        }
+        // Convert result to string if present.
+        let result: String?
+        if lua_type(L, -1) == LUA_TSTRING, let cstr = lua_tolstring(L, -1, nil) {
+            result = String(cString: cstr)
+        } else if lua_type(L, -1) == LUA_TNIL || lua_type(L, -1) == LUA_TNONE {
+            result = nil
+        } else {
+            result = String(lua_tonumber(L, -1))
+        }
+        luaPop(L, 1)
+        return result
     }
 
     /// Call a named Lua screen function with the given state dictionary.
@@ -157,6 +188,41 @@ private func reg(_ L: OpaquePointer, _ name: String,
     lua_setfield(L, LUA_GLOBALSINDEX, name)
 }
 
+// MARK: - Client API functions
+
+/// Global weak reference to the active LuaRuntime for C callbacks.
+/// Safe because there is exactly one LuaRuntime, always on MainActor.
+nonisolated(unsafe) private weak var activeLuaRuntime: LuaRuntime?
+
+// disconnect() — triggers app disconnection
+private func luaFn_disconnect(_ L: OpaquePointer?) -> Int32 {
+    guard let L else { return 0 }
+    MainActor.assumeIsolated {
+        activeLuaRuntime?.onAction?("disconnect", "")
+    }
+    lua_pushboolean(L, 1)
+    return 1
+}
+
+// client_action(action, value?) — generic client action dispatch
+private func luaFn_clientAction(_ L: OpaquePointer?) -> Int32 {
+    guard let L else { return 0 }
+    let action = getString(L, 1)
+    let value = lua_gettop(L) >= 2 ? getString(L, 2) : ""
+    MainActor.assumeIsolated {
+        activeLuaRuntime?.onAction?(action, value)
+    }
+    lua_pushboolean(L, 1)
+    return 1
+}
+
+private func registerClientAPI(_ L: OpaquePointer) {
+    reg(L, "disconnect",    luaFn_disconnect)
+    reg(L, "client_action", luaFn_clientAction)
+}
+
+// MARK: - Builder registration
+
 private func registerBuilders(_ L: OpaquePointer) {
     reg(L, "text",         luaFn_text)
     reg(L, "text_styled",  luaFn_textStyled)
@@ -181,6 +247,7 @@ private func registerBuilders(_ L: OpaquePointer) {
     reg(L, "background",   luaFn_background)
     reg(L, "swipe_action", luaFn_swipeAction)
     reg(L, "tap",          luaFn_tap)
+    reg(L, "bottom_inset", luaFn_bottomInset)
     reg(L, "props",        luaFn_props)
     reg(L, "with_props",   luaFn_withProps)
 }
@@ -610,6 +677,16 @@ private func luaFn_tap(_ L: OpaquePointer?) -> Int32 {
     lua_pushvalue(L, 3)
     lua_rawseti(L, -2, 1)
     lua_setfield(L, nodeIdx, "children")
+    return 1
+}
+
+// bottom_inset(...) — children rendered as .safeAreaInset(edge: .bottom) on parent scroll
+private func luaFn_bottomInset(_ L: OpaquePointer?) -> Int32 {
+    guard let L else { return 0 }
+    let argCount = lua_gettop(L)
+    newNodeTable(L, "bottom_inset")
+    let nodeIdx = lua_gettop(L)
+    addVarChildren(L, nodeAbsIdx: nodeIdx, startIdx: 1, argCount: argCount)
     return 1
 }
 

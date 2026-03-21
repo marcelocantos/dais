@@ -39,6 +39,17 @@ func CreateSyncSchema(sdb *sqlpipe.Database) error {
 			streaming_text TEXT NOT NULL DEFAULT ''
 		)`,
 
+		// Script version history for rollback.
+		`CREATE TABLE IF NOT EXISTS script_versions (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			snapshot   INTEGER NOT NULL,
+			name       TEXT    NOT NULL,
+			source     TEXT    NOT NULL,
+			created_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_script_versions_snapshot
+			ON script_versions (snapshot DESC)`,
+
 		// Client-owned tables.
 		`CREATE TABLE IF NOT EXISTS requests (
 			id         INTEGER PRIMARY KEY AUTOINCREMENT,
