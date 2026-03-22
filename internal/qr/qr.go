@@ -60,6 +60,15 @@ func Print(w io.Writer, url string) {
 	fmt.Fprintf(w, "  %s\n\n", url)
 }
 
+// LanIP returns the machine's LAN IP address, or "localhost" on error.
+func LanIP() string {
+	ip, err := lanIP()
+	if err != nil {
+		return "localhost"
+	}
+	return ip
+}
+
 // lanIP returns the machine's LAN IP address by dialing a UDP socket
 // to a public address (no packets are sent).
 func lanIP() (string, error) {

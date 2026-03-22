@@ -64,12 +64,18 @@ struct ConnectView: View {
             .navigationTitle("Jevon")
             .navigationBarTitleDisplayMode(.inline)
             .sheet(isPresented: $showScanner) {
-                QRScannerSheet { scannedHost, scannedPort in
-                    host = scannedHost
-                    portText = String(scannedPort)
-                    showScanner = false
-                    connection.connect(to: scannedHost, port: scannedPort)
-                }
+                QRScannerSheet(
+                    onScan: { scannedHost, scannedPort in
+                        host = scannedHost
+                        portText = String(scannedPort)
+                        showScanner = false
+                        connection.connect(to: scannedHost, port: scannedPort)
+                    },
+                    onScanURL: { url in
+                        showScanner = false
+                        connection.connect(to: url)
+                    }
+                )
             }
         }
         .onAppear {
@@ -84,12 +90,13 @@ struct ConnectView: View {
 /// Sheet wrapper for the QR scanner with a dismiss button.
 private struct QRScannerSheet: View {
     let onScan: (_ host: String, _ port: Int) -> Void
+    var onScanURL: ((_ url: URL) -> Void)?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             ZStack {
-                QRScannerView(onScan: onScan)
+                QRScannerView(onScan: onScan, onScanURL: onScanURL)
                     .ignoresSafeArea()
 
                 VStack {

@@ -84,6 +84,13 @@ final class Connection {
         doConnect(url: url)
     }
 
+    /// Connect via a full WebSocket URL (e.g. relay URL from QR code).
+    func connect(to url: URL) {
+        disconnect()
+        serverURL = url
+        doConnect(url: url)
+    }
+
     func disconnect() {
         reconnectTask?.cancel()
         reconnectTask = nil
