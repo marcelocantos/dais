@@ -15,10 +15,10 @@ package main
 import (
 	"context"
 	"crypto/rand"
-	"encoding/hex"
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 
 	"github.com/coder/websocket"
@@ -59,9 +59,12 @@ func (r *relay) get(id string) *instance {
 }
 
 func generateID() string {
-	b := make([]byte, 8)
+	// 4 bytes → base36 ≈ 6-7 chars. Plenty for session uniqueness
+	// (~4 billion possibilities) without being unwieldy in URLs.
+	b := make([]byte, 4)
 	rand.Read(b)
-	return hex.EncodeToString(b)
+	n := uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+	return strconv.FormatUint(uint64(n), 36)
 }
 
 func main() {

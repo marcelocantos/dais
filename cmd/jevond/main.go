@@ -117,6 +117,7 @@ Do not run other commands.
 
 func main() {
 	port := flag.Int("port", 13705, "listen port")
+	relayURL := flag.String("relay", "", "relay URL to register with (e.g. ws://localhost:8080)")
 	workDir := flag.String("workdir", ".", "default working directory for worker sessions")
 	model := flag.String("model", "", "default model for worker sessions")
 	jevonModel := flag.String("jevon-model", "", "model for Jevon (default: same as --model)")
@@ -581,8 +582,27 @@ func main() {
 	slog.Info("jevond starting", "addr", listenAddr, "version", cli.Version,
 		"jevon_model", jevModel, "worker_model", *model)
 
-	// Print QR code for mobile app discovery.
-	if url, err := qr.ServerURL(*port); err == nil {
+	// Connect to relay if specified, otherwise print direct QR code.
+	if *relayURL != "" {
+		instanceID, err := srv.ConnectRelay(ctx, *relayURL)
+		if err != nil {
+			slog.Error("relay connection failed", "err", err)
+			os.Exit(1)
+		}
+		// Replace localhost with LAN IP so the QR code works for devices.
+		relayWSURL := *relayURL + "/ws/" + instanceID
+		relayWSURL = strings.Replace(relayWSURL, "localhost", qr.LanIP(), 1)
+		relayWSURL = strings.Replace(relayWSURL, "127.0.0.1", qr.LanIP(), 1)
+		qr.Print(os.Stderr, relayWSURL)
+
+		// Write relay URL to a well-known file for programmatic access.
+		relayFile := filepath.Join(os.TempDir(), ".jevon-relay")
+		if err := os.WriteFile(relayFile, []byte(relayWSURL+"\n"), 0o644); err != nil {
+			slog.Warn("failed to write relay URL file", "path", relayFile, "err", err)
+		} else {
+			slog.Info("relay URL written", "path", relayFile)
+		}
+	} else if url, err := qr.ServerURL(*port); err == nil {
 		qr.Print(os.Stderr, url)
 	} else {
 		slog.Warn("cannot generate QR code", "err", err)

@@ -4,13 +4,16 @@
 import AVFoundation
 import SwiftUI
 
-/// A camera-based QR code scanner that detects `jevon://host:port` URLs.
+/// A camera-based QR code scanner that detects `jevon://host:port` or
+/// `ws://` relay URLs.
 struct QRScannerView: UIViewControllerRepresentable {
     let onScan: (_ host: String, _ port: Int) -> Void
+    var onScanURL: ((_ url: URL) -> Void)?
 
     func makeUIViewController(context: Context) -> QRScannerViewController {
         let vc = QRScannerViewController()
         vc.onScan = onScan
+        vc.onScanURL = onScanURL
         return vc
     }
 
@@ -19,6 +22,7 @@ struct QRScannerView: UIViewControllerRepresentable {
 
 final class QRScannerViewController: UIViewController {
     var onScan: ((_ host: String, _ port: Int) -> Void)?
+    var onScanURL: ((_ url: URL) -> Void)?
 
     private let captureSession = AVCaptureSession()
     private var previewLayer: AVCaptureVideoPreviewLayer?
@@ -26,9 +30,14 @@ final class QRScannerViewController: UIViewController {
 
     // Delegate runs on main queue, so we use a separate object that
     // is not @MainActor-isolated to satisfy Swift 6 concurrency.
-    private lazy var metadataDelegate = MetadataDelegate { [weak self] host, port in
-        self?.handleScan(host: host, port: port)
-    }
+    private lazy var metadataDelegate = MetadataDelegate(
+        onScan: { [weak self] host, port in
+            self?.handleScan(host: host, port: port)
+        },
+        onScanURL: { [weak self] url in
+            self?.handleScanURL(url: url)
+        }
+    )
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -50,6 +59,9 @@ final class QRScannerViewController: UIViewController {
         let preview = AVCaptureVideoPreviewLayer(session: captureSession)
         preview.videoGravity = .resizeAspectFill
         preview.frame = view.bounds
+        if let connection = preview.connection, connection.isVideoRotationAngleSupported(0) {
+            connection.videoRotationAngle = currentRotationAngle()
+        }
         view.layer.addSublayer(preview)
         previewLayer = preview
 
@@ -62,6 +74,21 @@ final class QRScannerViewController: UIViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         previewLayer?.frame = view.bounds
+        if let connection = previewLayer?.connection,
+           connection.isVideoRotationAngleSupported(currentRotationAngle()) {
+            connection.videoRotationAngle = currentRotationAngle()
+        }
+    }
+
+    private func currentRotationAngle() -> CGFloat {
+        guard let scene = view.window?.windowScene else { return 0 }
+        switch scene.interfaceOrientation {
+        case .portrait: return 90
+        case .portraitUpsideDown: return 270
+        case .landscapeLeft: return 180
+        case .landscapeRight: return 0
+        default: return 90
+        }
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -82,15 +109,29 @@ final class QRScannerViewController: UIViewController {
 
         onScan?(host, port)
     }
+
+    private func handleScanURL(url: URL) {
+        guard !hasScanned else { return }
+        hasScanned = true
+        captureSession.stopRunning()
+
+        let generator = UINotificationFeedbackGenerator()
+        generator.notificationOccurred(.success)
+
+        onScanURL?(url)
+    }
 }
 
 /// Separate delegate class to avoid @MainActor isolation conflicts
 /// with AVCaptureMetadataOutputObjectsDelegate under Swift 6.
 private final class MetadataDelegate: NSObject, AVCaptureMetadataOutputObjectsDelegate {
     private let onScan: (_ host: String, _ port: Int) -> Void
+    private let onScanURL: ((_ url: URL) -> Void)?
 
-    init(onScan: @escaping (_ host: String, _ port: Int) -> Void) {
+    init(onScan: @escaping (_ host: String, _ port: Int) -> Void,
+         onScanURL: ((_ url: URL) -> Void)?) {
         self.onScan = onScan
+        self.onScanURL = onScanURL
     }
 
     func metadataOutput(
@@ -100,12 +141,22 @@ private final class MetadataDelegate: NSObject, AVCaptureMetadataOutputObjectsDe
     ) {
         guard let object = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
               object.type == .qr,
-              let value = object.stringValue,
-              let (host, port) = parseJevonURL(value) else {
+              let value = object.stringValue else {
             return
         }
 
-        onScan(host, port)
+        // Try jevon:// scheme first (direct connection).
+        if let (host, port) = parseJevonURL(value) {
+            onScan(host, port)
+            return
+        }
+
+        // Try ws:// or wss:// relay URL.
+        if let url = URL(string: value),
+           (url.scheme == "ws" || url.scheme == "wss") {
+            onScanURL?(url)
+            return
+        }
     }
 
     private func parseJevonURL(_ string: String) -> (String, Int)? {
