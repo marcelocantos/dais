@@ -278,7 +278,7 @@ func main() {
 	defer luaRT.Close()
 
 	vs := ui.NewViewState()
-	vs.SetConnected(cli.Version)
+	vs.SetConnected(cli.Version, os.Getenv("HOME"))
 
 	srv := server.New(jev, mgr, database, cli.Version, luaRT, vs)
 	srvRef = srv // Wire the forward reference for syncMgr's onRequest callback.

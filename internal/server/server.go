@@ -94,7 +94,7 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 			for _, e := range entries {
 				vs.AddMessage(e.Role, e.Text)
 			}
-			vs.SetConnected(version)
+			vs.SetConnected(version, os.Getenv("HOME"))
 		}
 	}
 
@@ -298,6 +298,7 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(conn, ctx, map[string]any{
 		"type":    "init",
 		"version": s.version,
+		"home":    os.Getenv("HOME"),
 	})
 
 	// Send transcript history.

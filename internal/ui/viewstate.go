@@ -30,6 +30,7 @@ type ViewState struct {
 
 	connected     bool
 	version       string
+	home          string // server HOME directory for path condensing
 	status        string // "idle" or "thinking"
 	messages      []MessageEntry
 	streamingText string // partial text during streaming
@@ -45,11 +46,12 @@ func NewViewState() *ViewState {
 }
 
 // SetConnected marks the client as connected with the given server version.
-func (vs *ViewState) SetConnected(version string) {
+func (vs *ViewState) SetConnected(version, home string) {
 	vs.mu.Lock()
 	defer vs.mu.Unlock()
 	vs.connected = true
 	vs.version = version
+	vs.home = home
 }
 
 // SetDisconnected marks the client as disconnected.
@@ -187,6 +189,7 @@ func (vs *ViewState) snapshot() map[string]any {
 	state := map[string]any{
 		"connected":      vs.connected,
 		"version":        vs.version,
+		"home":           vs.home,
 		"status":         vs.status,
 		"messages":       msgs,
 		"streaming_text": vs.streamingText,
