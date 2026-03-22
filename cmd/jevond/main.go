@@ -596,7 +596,7 @@ func main() {
 		qr.Print(os.Stderr, relayWSURL)
 
 		// Write relay URL to a well-known file for programmatic access.
-		relayFile := filepath.Join(os.TempDir(), ".jevon-relay")
+		relayFile := filepath.Join(os.TempDir(), ".tern-relay")
 		if err := os.WriteFile(relayFile, []byte(relayWSURL+"\n"), 0o644); err != nil {
 			slog.Warn("failed to write relay URL file", "path", relayFile, "err", err)
 		} else {
