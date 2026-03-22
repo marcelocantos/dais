@@ -10,12 +10,20 @@ settings:
     SWIFT_VERSION: "6.0"
     DEVELOPMENT_TEAM: WG8QTTL954
 
+packages:
+  TernCrypto:
+    url: https://github.com/marcelocantos/tern
+    from: 0.1.0
+
 targets:
   Jevon:
     type: application
     platform: iOS
+    dependencies:
+      - package: TernCrypto
     sources:
       - path: Jevon
+        excludes: ["Models/E2ECrypto.swift", "Protocol/PairingCeremonyMachine.swift"]
       - path: Vendor/lua-5.1.5/src
         excludes: ["lua.c", "luac.c", "loslib.c", "liolib.c", "loadlib.c", "linit.c"]
         compilerFlags: "-w"

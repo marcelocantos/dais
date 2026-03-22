@@ -23,7 +23,7 @@ import (
 	"github.com/marcelocantos/jevon/internal/jevon"
 	"github.com/marcelocantos/jevon/internal/manager"
 	"github.com/marcelocantos/jevon/internal/mcpserver"
-	"github.com/marcelocantos/jevon/internal/qr"
+	"github.com/marcelocantos/tern/qr"
 	"github.com/marcelocantos/jevon/internal/server"
 	"github.com/marcelocantos/jevon/internal/session"
 	jvsync "github.com/marcelocantos/jevon/internal/sync"
@@ -602,10 +602,9 @@ func main() {
 		} else {
 			slog.Info("relay URL written", "path", relayFile)
 		}
-	} else if url, err := qr.ServerURL(*port); err == nil {
-		qr.Print(os.Stderr, url)
 	} else {
-		slog.Warn("cannot generate QR code", "err", err)
+		directURL := fmt.Sprintf("jevon://%s:%d", qr.LanIP(), *port)
+		qr.Print(os.Stderr, directURL)
 	}
 
 	if err := httpSrv.ListenAndServe(); err != http.ErrServerClosed {
