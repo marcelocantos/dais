@@ -43,7 +43,7 @@ local function status_color(status)
     end
 end
 
-local function session_row(s)
+local function session_row(s, home)
     local name_text = text_styled(s.name, {weight = "medium", max_lines = 1, truncate = "middle"})
     local status_badge = badge(string.upper(s.status), status_color(s.status))
 
@@ -52,7 +52,11 @@ local function session_row(s)
     }
 
     if s.workdir ~= "" and s.workdir ~= s.name then
-        local dir_text = text_styled(s.workdir, {font = "caption", color = "secondary", max_lines = 1, truncate = "middle"})
+        local display_dir = s.workdir
+        if home and home ~= "" and display_dir:sub(1, #home) == home then
+            display_dir = "~" .. display_dir:sub(#home + 1)
+        end
+        local dir_text = text_styled(display_dir, {font = "caption", color = "secondary", max_lines = 1, truncate = "middle"})
         table.insert(row_children, dir_text)
     end
 
@@ -176,7 +180,7 @@ function sessions_screen(state)
     else
         local rows = {}
         for i = 1, #state.sessions do
-            table.insert(rows, session_row(state.sessions[i]))
+            table.insert(rows, session_row(state.sessions[i], state.home))
         end
         body = list("sessions-list", unpack(rows))
     end
