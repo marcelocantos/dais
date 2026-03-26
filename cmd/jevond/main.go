@@ -594,13 +594,7 @@ func main() {
 	} else {
 		srv.SetProcess(chatProc)
 		chatProc.OnEvent(func(ev claude.Event) {
-			// Broadcast raw JSONL to /ws/chat listeners.
 			srv.BroadcastChat(string(ev.Raw))
-
-			// Also persist assistant responses to transcript.
-			if ev.Type == "assistant" && ev.Text != "" {
-				srv.AppendTranscript("jevon", ev.Text)
-			}
 		})
 		defer chatProc.Stop()
 	}

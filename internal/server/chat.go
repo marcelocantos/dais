@@ -4,9 +4,12 @@
 package server
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -23,7 +26,6 @@ func (s *Server) SetProcess(proc *claude.Process) {
 
 // handleChat is a direct WebSocket ↔ Claude PTY bridge.
 // Client sends plain text messages, server sends raw JSONL events.
-// No Lua, no sqlpipe, no viewstate — just the message exchange.
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
@@ -47,16 +49,12 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send transcript history on connect.
-	s.mu.RLock()
-	hist := make([]TranscriptEntry, len(s.transcript))
-	copy(hist, s.transcript)
-	s.mu.RUnlock()
-
+	// Send history from the session JSONL.
+	history := readJSONLHistory(proc.JSONLPath())
 	s.writeJSON(conn, ctx, map[string]any{
 		"type":    "init",
 		"version": s.version,
-		"history": hist,
+		"history": history,
 	})
 
 	// Subscribe to JSONL events from the Claude process.
@@ -106,38 +104,55 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 		slog.Info("chat: received", "msg", msg)
 
-		// Persist to transcript.
-		s.mu.Lock()
-		s.transcript = append(s.transcript, TranscriptEntry{
-			Role:      "user",
-			Text:      msg,
-			Timestamp: time.Now(),
-		})
-		s.mu.Unlock()
-
-		if err := s.db.AppendTranscript("user", msg); err != nil {
-			slog.Error("chat: persist failed", "err", err)
-		}
-
-		// Send to Claude.
 		if err := proc.Send(msg); err != nil {
 			slog.Error("chat: send to claude failed", "err", err)
 		}
 	}
 }
 
-// AppendTranscript adds an entry to the in-memory transcript and persists it.
-func (s *Server) AppendTranscript(role, text string) {
-	s.mu.Lock()
-	s.transcript = append(s.transcript, TranscriptEntry{
-		Role:      role,
-		Text:      text,
-		Timestamp: time.Now(),
-	})
-	s.mu.Unlock()
-	if err := s.db.AppendTranscript(role, text); err != nil {
-		slog.Error("persist transcript failed", "err", err)
+// readJSONLHistory reads user and assistant messages from the session JSONL.
+func readJSONLHistory(path string) []map[string]any {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
 	}
+	defer f.Close()
+
+	var history []map[string]any
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1<<20), 1<<20)
+	for scanner.Scan() {
+		var entry map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
+			continue
+		}
+		typ, _ := entry["type"].(string)
+		switch typ {
+		case "user", "assistant":
+			msg, _ := entry["message"].(map[string]any)
+			if msg == nil {
+				continue
+			}
+			content, _ := msg["content"].([]any)
+			for _, c := range content {
+				cm, _ := c.(map[string]any)
+				if cm["type"] == "text" {
+					text, _ := cm["text"].(string)
+					if text != "" {
+						role := "jevon"
+						if typ == "user" {
+							role = "user"
+						}
+						history = append(history, map[string]any{
+							"role": role,
+							"text": text,
+						})
+					}
+				}
+			}
+		}
+	}
+	return history
 }
 
 // BroadcastChat sends a JSONL line to all /ws/chat listeners.
