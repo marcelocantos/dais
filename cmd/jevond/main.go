@@ -17,7 +17,6 @@ import (
 
 	"github.com/marcelocantos/sqlpipe/go/sqlpipe"
 
-	"github.com/google/uuid"
 	"github.com/marcelocantos/jevon/internal/claude"
 	"github.com/marcelocantos/jevon/internal/cli"
 	"github.com/marcelocantos/jevon/internal/db"
@@ -588,28 +587,32 @@ func main() {
 	// Start Jevon event loop (legacy — manages its own Claude process).
 	go jev.Run(ctx)
 
-	// Load or create a persistent chat session ID.
-	chatSessionFile := filepath.Join(homeDir, ".jevon", "chat-session-id")
-	chatSessionID := ""
-	if data, err := os.ReadFile(chatSessionFile); err == nil {
-		chatSessionID = strings.TrimSpace(string(data))
-	}
-	if chatSessionID == "" {
-		chatSessionID = uuid.New().String()
-		os.WriteFile(chatSessionFile, []byte(chatSessionID+"\n"), 0o644)
-	}
-	slog.Info("chat session", "id", chatSessionID)
-
-	// Start a direct Claude process for the /ws/chat endpoint.
-	chatProc, err := claude.Start(claude.Config{WorkDir: jevDir, SessionID: chatSessionID})
+	// Agent registry — manages persistent Claude processes.
+	registryPath := filepath.Join(homeDir, ".jevon", "agents.json")
+	registry, err := claude.NewRegistry(registryPath)
 	if err != nil {
-		slog.Error("chat claude failed to start", "err", err)
-	} else {
+		slog.Error("agent registry failed", "err", err)
+		os.Exit(1)
+	}
+
+	// Ensure the primary chat agent exists.
+	chatDef, err := registry.EnsureAgent("chat", jevDir, "", true)
+	if err != nil {
+		slog.Error("chat agent setup failed", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("chat agent", "session", chatDef.SessionID)
+
+	// Start all auto-start agents.
+	registry.StartAll()
+	defer registry.StopAll()
+
+	// Wire the chat agent to the web UI.
+	if chatProc := registry.Get("chat"); chatProc != nil {
 		srv.SetProcess(chatProc)
 		chatProc.OnEvent(func(ev claude.Event) {
 			srv.BroadcastChat(string(ev.Raw))
 		})
-		defer chatProc.Stop()
 	}
 
 	listenAddr := fmt.Sprintf(":%d", *port)
