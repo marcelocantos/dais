@@ -7,8 +7,18 @@
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #1a1a2e; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; }
+
+#status { padding: 4px 16px; font-size: 0.75em; color: #555; background: #111; flex-shrink: 0; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.dot.on { background: #2ecc71; }
+.dot.off { background: #e74c3c; }
+
+#main { flex: 1; display: flex; overflow: hidden; }
+
+/* Left pane: chat */
+#chat-pane { flex: 1; display: flex; flex-direction: column; border-right: 1px solid #333; min-width: 0; }
 #messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
-.msg { max-width: 80%; padding: 10px 14px; border-radius: 12px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
+.msg { max-width: 90%; padding: 10px 14px; border-radius: 12px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
 .msg.user { align-self: flex-end; background: #0f3460; color: #fff; border-bottom-right-radius: 4px; }
 .msg.jevon { align-self: flex-start; background: #16213e; color: #e0e0e0; border-bottom-left-radius: 4px; }
 #input-bar { display: flex; gap: 8px; padding: 12px 16px; background: #16213e; border-top: 1px solid #333; }
@@ -17,18 +27,34 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 #send { padding: 10px 20px; border-radius: 8px; border: none; background: #0f3460; color: #fff; font-size: 15px; cursor: pointer; }
 #send:hover { background: #1a5276; }
 #send:disabled { opacity: 0.5; cursor: not-allowed; }
-#status { padding: 4px 16px; font-size: 0.75em; color: #555; background: #111; }
-.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
-.dot.on { background: #2ecc71; }
-.dot.off { background: #e74c3c; }
+
+/* Right pane: activity */
+#activity-pane { width: 400px; flex-shrink: 0; display: flex; flex-direction: column; background: #111; }
+#activity-header { padding: 8px 16px; font-size: 0.85em; font-weight: 600; color: #888; border-bottom: 1px solid #222; text-transform: uppercase; letter-spacing: 0.5px; }
+#activity { flex: 1; overflow-y: auto; padding: 8px; font-size: 0.8em; font-family: "SF Mono", Menlo, monospace; }
+.activity-item { padding: 4px 8px; border-radius: 4px; margin-bottom: 2px; }
+.activity-item.agent { color: #7ec8e3; }
+.activity-item.tool { color: #b8bb26; }
+.activity-item.text { color: #d0d0d0; }
+.activity-item.error { color: #fb4934; }
+.activity-item .agent-name { color: #fabd2f; font-weight: 600; margin-right: 6px; }
+.activity-item .timestamp { color: #555; margin-right: 6px; }
 </style>
 </head>
 <body>
 <div id="status"><span class="dot off" id="dot"></span><span id="status-text">connecting...</span></div>
-<div id="messages"></div>
-<div id="input-bar">
-  <input id="input" placeholder="Type a message..." autocomplete="off">
-  <button id="send" disabled>Send</button>
+<div id="main">
+  <div id="chat-pane">
+    <div id="messages"></div>
+    <div id="input-bar">
+      <input id="input" placeholder="Talk to Jevon..." autocomplete="off">
+      <button id="send" disabled>Send</button>
+    </div>
+  </div>
+  <div id="activity-pane">
+    <div id="activity-header">Activity</div>
+    <div id="activity"></div>
+  </div>
 </div>
 <script>
 const msgs = document.getElementById('messages');
@@ -36,13 +62,13 @@ const input = document.getElementById('input');
 const sendBtn = document.getElementById('send');
 const dot = document.getElementById('dot');
 const sTxt = document.getElementById('status-text');
+const activity = document.getElementById('activity');
 let ws, streaming = null;
 
 function connect() {
-  // Use 127.0.0.1 explicitly — browsers throttle WebSocket upgrades on "localhost".
   const h = location.hostname === 'localhost' ? '127.0.0.1:'+location.port : location.host;
   ws = new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+h+'/ws/chat');
-  ws.onopen = () => { dot.className='dot on'; sTxt.textContent='connected'; sendBtn.disabled=false; console.log('ws open', Date.now()); };
+  ws.onopen = () => { dot.className='dot on'; sTxt.textContent='connected'; sendBtn.disabled=false; };
   ws.onclose = () => { dot.className='dot off'; sTxt.textContent='reconnecting...'; sendBtn.disabled=true; streaming=null; setTimeout(connect,2000); };
   ws.onmessage = e => { try{handle(JSON.parse(e.data))}catch(x){} };
 }
@@ -50,31 +76,26 @@ function connect() {
 function handle(m) {
   if (m.type==='init') {
     sTxt.textContent='connected ('+m.version+')';
-    if (m.history) m.history.forEach(e => add(e.role==='user'?'user':'jevon', e.text));
-  } else if (m.type==='text') {
-    if (!streaming) streaming = add('jevon','');
-    streaming.textContent += m.content;
-    msgs.scrollTop = msgs.scrollHeight;
-  } else if (m.type==='status') {
-    if (m.state==='thinking') { sTxt.textContent='thinking...'; streaming=null; }
-    else { sTxt.textContent='connected'; streaming=null; }
+    msgs.innerHTML='';
+    if (m.history) m.history.forEach(e => addMsg(e.role, e.text));
   } else if (m.type==='assistant') {
-    // JSONL event from Claude process.
     const content = m.message?.content;
-    if (content) {
-      for (const c of content) {
-        if (c.type==='text') add('jevon', c.text);
-      }
-    }
+    if (content) content.forEach(c => {
+      if (c.type==='text') addMsg('jevon', c.text);
+      if (c.type==='tool_use') addActivity('tool', 'chat', c.name);
+    });
     streaming = null;
-    sTxt.textContent = 'connected';
+  } else if (m.type==='user') {
+    // User message echo from JSONL — already shown locally.
   } else if (m.type==='system') {
-    sTxt.textContent = 'connected';
     streaming = null;
+  } else if (m.type==='progress') {
+    const d = m.data;
+    if (d) addActivity('tool', m.sessionId||'chat', d.type||'progress');
   }
 }
 
-function add(role, text) {
+function addMsg(role, text) {
   const d = document.createElement('div');
   d.className = 'msg '+role;
   d.textContent = text;
@@ -83,10 +104,23 @@ function add(role, text) {
   return d;
 }
 
+function addActivity(type, agent, text) {
+  const d = document.createElement('div');
+  d.className = 'activity-item '+type;
+  const now = new Date().toLocaleTimeString('en-AU', {hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit'});
+  d.innerHTML = '<span class="timestamp">'+now+'</span><span class="agent-name">'+agent+'</span>'+escHtml(text);
+  activity.appendChild(d);
+  activity.scrollTop = activity.scrollHeight;
+  // Keep last 500 items.
+  while (activity.children.length > 500) activity.removeChild(activity.firstChild);
+}
+
+function escHtml(s) { const d=document.createElement('span'); d.textContent=s; return d.innerHTML; }
+
 function send() {
   const t = input.value.trim();
   if (!t||!ws||ws.readyState!==1) return;
-  add('user', t);
+  addMsg('user', t);
   ws.send(t);
   input.value = '';
   streaming = null;
@@ -96,7 +130,7 @@ input.addEventListener('keydown', e => { if(e.key==='Enter'&&!e.shiftKey){e.prev
 sendBtn.addEventListener('click', send);
 connect();
 
-// Hot reload — reconnects when server signals file change.
+// Hot reload.
 (function hotReload() {
   const rh = location.hostname === 'localhost' ? '127.0.0.1:'+location.port : location.host;
   const rws = new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+rh+'/ws/reload');
@@ -106,4 +140,3 @@ connect();
 </script>
 </body>
 </html>
-<!-- hot reload test -->
