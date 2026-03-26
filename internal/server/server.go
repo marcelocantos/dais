@@ -321,42 +321,22 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 	}()
 
+	t0 := time.Now()
 	slog.Info("remote connected", "clients", len(s.remotes))
 
-	// Send init message.
-	s.writeJSON(conn, ctx, map[string]any{
-		"type":    "init",
-		"version": s.version,
-		"home":    os.Getenv("HOME"),
-	})
-
-	// Send transcript history.
+	// Send init + history.
 	s.mu.RLock()
 	hist := make([]TranscriptEntry, len(s.transcript))
 	copy(hist, s.transcript)
 	s.mu.RUnlock()
+	slog.Info("history gathered", "entries", len(hist), "elapsed", time.Since(t0))
 
-	if len(hist) > 0 {
-		s.writeJSON(conn, ctx, map[string]any{
-			"type":    "history",
-			"entries": hist,
-		})
-	}
-
-	// Send Lua view scripts for client-side rendering (preferred),
-	// or fall back to server-rendered view trees.
-	if s.luaRT != nil {
-		if source, err := s.luaRT.Scripts(); err != nil {
-			slog.Error("failed to read lua scripts", "err", err)
-		} else if source != "" {
-			s.writeJSON(conn, ctx, map[string]any{
-				"type":   "scripts",
-				"source": source,
-			})
-		}
-	} else {
-		s.PushView()
-	}
+	s.writeJSON(conn, ctx, map[string]any{
+		"type":    "init",
+		"version": s.version,
+		"history": hist,
+	})
+	slog.Info("init sent", "elapsed", time.Since(t0))
 
 	// Read loop: process messages from remote.
 	for {
