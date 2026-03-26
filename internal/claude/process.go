@@ -8,6 +8,7 @@ package claude
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -187,6 +188,40 @@ func (p *Process) Send(msg string) error {
 	n, err := p.ptmx.Write(data)
 	slog.Info("pty write", "bytes", n, "err", err, "data", string(data))
 	return err
+}
+
+// WaitForResponse blocks until the next assistant response is complete
+// (signalled by a "system" event in the JSONL). Returns the assistant text.
+func (p *Process) WaitForResponse(ctx context.Context) (string, error) {
+	ch := make(chan string, 1)
+	var text strings.Builder
+
+	oldFn := p.onEvent
+	p.OnEvent(func(ev Event) {
+		if oldFn != nil {
+			oldFn(ev)
+		}
+		switch ev.Type {
+		case "assistant":
+			if ev.Text != "" {
+				text.WriteString(ev.Text)
+			}
+		case "system":
+			select {
+			case ch <- text.String():
+			default:
+			}
+		}
+	})
+
+	defer p.OnEvent(oldFn) // restore
+
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case result := <-ch:
+		return result, nil
+	}
 }
 
 // Stop terminates the Claude process.

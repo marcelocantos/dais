@@ -595,6 +595,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Wire registry into MCP server for agent tools.
+	mcpSrv.SetRegistry(registry)
+
 	// Ensure the primary chat agent exists.
 	chatDef, err := registry.EnsureAgent("chat", jevDir, "", true)
 	if err != nil {

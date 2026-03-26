@@ -15,6 +15,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"github.com/marcelocantos/jevon/internal/claude"
 	"github.com/marcelocantos/jevon/internal/manager"
 	"github.com/marcelocantos/jevon/internal/session"
 )
@@ -42,12 +43,14 @@ type TranscriptOps struct {
 // Server wraps an MCP server that provides worker management tools.
 type Server struct {
 	mgr          *manager.Manager
+	registry     *claude.Registry
 	workerWD     string
 	onDone       EventCallback
 	reloadViews  ReloadViewsFunc
 	execLua      ExecLuaFunc
 	screenshot   ScreenshotFunc
 	transcript   *TranscriptOps
+	mcpSrv       *server.MCPServer
 	transport    *server.StreamableHTTPServer
 }
 
@@ -66,6 +69,7 @@ func New(mgr *manager.Manager, workerWD string, onDone EventCallback, reloadView
 	}
 
 	mcpSrv := server.NewMCPServer("jevon", "1.0.0")
+	s.mcpSrv = mcpSrv
 
 	mcpSrv.AddTool(
 		mcp.NewTool("jevon_list_sessions",
