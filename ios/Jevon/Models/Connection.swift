@@ -52,6 +52,8 @@ final class Connection {
     private var activeSheet: String = ""
     /// Server version string, extracted from init message.
     private var serverVersion: String = ""
+    /// Server's HOME directory, for display path condensing.
+    private var serverHome: String = ""
 
     // MARK: - sqlpipe sync
 
@@ -381,9 +383,10 @@ final class Connection {
 
     private func handleMessage(_ msg: ServerMessage) {
         switch msg {
-        case .serverInit(let version):
+        case .serverInit(let version, let home):
             state = .connected(version: version)
             serverVersion = version
+            serverHome = home ?? ""
             hasConnected = true
             initSyncPeer()
             renderViews()
@@ -562,6 +565,7 @@ final class Connection {
             return [
                 "connected": isConnected,
                 "version": serverVersion,
+                "home": serverHome,
                 "status": serverState == .thinking ? "thinking" : "idle",
                 "messages": syncMessages,
                 "streaming_text": streamingText,
@@ -595,6 +599,7 @@ final class Connection {
         return [
             "connected": isConnected,
             "version": serverVersion,
+            "home": serverHome,
             "status": serverState == .thinking ? "thinking" : "idle",
             "messages": msgs,
             "streaming_text": streamingText,

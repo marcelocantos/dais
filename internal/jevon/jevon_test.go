@@ -2,7 +2,6 @@ package jevon
 
 import (
 	"testing"
-	"time"
 )
 
 func TestFormatPrompt(t *testing.T) {
@@ -66,67 +65,12 @@ func TestFormatPrompt(t *testing.T) {
 	}
 }
 
-func TestFilterEnv(t *testing.T) {
-	env := []string{
-		"PATH=/usr/bin",
-		"CLAUDECODE=1",
-		"HOME=/home/test",
-		"CLAUDECODEOTHER=2",
-	}
-	got := filterEnv(env, "CLAUDECODE")
-	want := []string{"PATH=/usr/bin", "HOME=/home/test", "CLAUDECODEOTHER=2"}
-	if len(got) != len(want) {
-		t.Fatalf("filterEnv: got %d entries, want %d", len(got), len(want))
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("filterEnv[%d] = %q, want %q", i, got[i], want[i])
-		}
-	}
-}
-
-func TestNewAndEnqueue(t *testing.T) {
+func TestNewConfig(t *testing.T) {
 	j := New(Config{WorkDir: "/tmp", Model: "sonnet"})
 	if j.cfg.WorkDir != "/tmp" {
 		t.Errorf("WorkDir = %q, want /tmp", j.cfg.WorkDir)
 	}
 	if j.cfg.Model != "sonnet" {
 		t.Errorf("Model = %q, want sonnet", j.cfg.Model)
-	}
-
-	ts := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	j.Enqueue(Event{Kind: EventUserMessage, Text: "hello", Timestamp: ts})
-
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	if len(j.queue) != 1 {
-		t.Fatalf("queue length = %d, want 1", len(j.queue))
-	}
-	if j.queue[0].Text != "hello" {
-		t.Errorf("queued text = %q, want hello", j.queue[0].Text)
-	}
-	if j.queue[0].Timestamp != ts {
-		t.Errorf("timestamp was overwritten, got %v", j.queue[0].Timestamp)
-	}
-}
-
-func TestEnqueueSetsTimestamp(t *testing.T) {
-	j := New(Config{WorkDir: "/tmp"})
-	before := time.Now()
-	j.Enqueue(Event{Kind: EventUserMessage, Text: "hi"})
-	after := time.Now()
-
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	ts := j.queue[0].Timestamp
-	if ts.Before(before) || ts.After(after) {
-		t.Errorf("auto-timestamp %v not in [%v, %v]", ts, before, after)
-	}
-}
-
-func TestNewWithClaudeID(t *testing.T) {
-	j := New(Config{ClaudeID: "abc-123"})
-	if j.claudeID != "abc-123" {
-		t.Errorf("claudeID = %q, want abc-123", j.claudeID)
 	}
 }

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jevon</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #1a1a2e; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; }
+#messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+.msg { max-width: 80%; padding: 10px 14px; border-radius: 12px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
+.msg.user { align-self: flex-end; background: #0f3460; color: #fff; border-bottom-right-radius: 4px; }
+.msg.jevon { align-self: flex-start; background: #16213e; color: #e0e0e0; border-bottom-left-radius: 4px; }
+#input-bar { display: flex; gap: 8px; padding: 12px 16px; background: #16213e; border-top: 1px solid #333; }
+#input { flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid #333; background: #1a1a2e; color: #e0e0e0; font-size: 15px; outline: none; font-family: inherit; }
+#input:focus { border-color: #0f3460; }
+#send { padding: 10px 20px; border-radius: 8px; border: none; background: #0f3460; color: #fff; font-size: 15px; cursor: pointer; }
+#send:hover { background: #1a5276; }
+#send:disabled { opacity: 0.5; cursor: not-allowed; }
+#status { padding: 4px 16px; font-size: 0.75em; color: #555; background: #111; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.dot.on { background: #2ecc71; }
+.dot.off { background: #e74c3c; }
+</style>
+</head>
+<body>
+<div id="status"><span class="dot off" id="dot"></span><span id="status-text">connecting...</span></div>
+<div id="messages"></div>
+<div id="input-bar">
+  <input id="input" placeholder="Type a message..." autocomplete="off">
+  <button id="send" disabled>Send</button>
+</div>
+<script>
+const msgs = document.getElementById('messages');
+const input = document.getElementById('input');
+const sendBtn = document.getElementById('send');
+const dot = document.getElementById('dot');
+const sTxt = document.getElementById('status-text');
+let ws, streaming = null;
+
+function connect() {
+  // Use 127.0.0.1 explicitly — browsers throttle WebSocket upgrades on "localhost".
+  const h = location.hostname === 'localhost' ? '127.0.0.1:'+location.port : location.host;
+  ws = new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+h+'/ws/chat');
+  ws.onopen = () => { dot.className='dot on'; sTxt.textContent='connected'; sendBtn.disabled=false; console.log('ws open', Date.now()); };
+  ws.onclose = () => { dot.className='dot off'; sTxt.textContent='reconnecting...'; sendBtn.disabled=true; streaming=null; setTimeout(connect,2000); };
+  ws.onmessage = e => { try{handle(JSON.parse(e.data))}catch(x){} };
+}
+
+function handle(m) {
+  if (m.type==='init') {
+    sTxt.textContent='connected ('+m.version+')';
+    if (m.history) m.history.forEach(e => add(e.role==='user'?'user':'jevon', e.text));
+  } else if (m.type==='text') {
+    if (!streaming) streaming = add('jevon','');
+    streaming.textContent += m.content;
+    msgs.scrollTop = msgs.scrollHeight;
+  } else if (m.type==='status') {
+    if (m.state==='thinking') { sTxt.textContent='thinking...'; streaming=null; }
+    else { sTxt.textContent='connected'; streaming=null; }
+  } else if (m.type==='assistant') {
+    // JSONL event from Claude process.
+    const content = m.message?.content;
+    if (content) {
+      for (const c of content) {
+        if (c.type==='text') add('jevon', c.text);
+      }
+    }
+    streaming = null;
+    sTxt.textContent = 'connected';
+  } else if (m.type==='system') {
+    sTxt.textContent = 'connected';
+    streaming = null;
+  }
+}
+
+function add(role, text) {
+  const d = document.createElement('div');
+  d.className = 'msg '+role;
+  d.textContent = text;
+  msgs.appendChild(d);
+  msgs.scrollTop = msgs.scrollHeight;
+  return d;
+}
+
+function send() {
+  const t = input.value.trim();
+  if (!t||!ws||ws.readyState!==1) return;
+  add('user', t);
+  ws.send(t);
+  input.value = '';
+  streaming = null;
+}
+
+input.addEventListener('keydown', e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();} });
+sendBtn.addEventListener('click', send);
+connect();
+</script>
+</body>
+</html>

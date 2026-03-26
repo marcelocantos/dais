@@ -418,10 +418,10 @@ with no manual IP entry or configuration.
 - `jevon` CLI binary is separate from `jevond` daemon.
 
 **Relay architecture:**
-- A small Go relay runs on Fly.io (`jevon-relay.fly.dev`).
-- Each jevond connects outbound to `wss://jevon-relay.fly.dev/register`
+- A small Go relay runs on Fly.io (`tern.fly.dev`).
+- Each jevond connects outbound to `wss://tern.fly.dev/register`
   on startup and gets an instance ID.
-- iOS app connects to `wss://jevon-relay.fly.dev/ws/<instance-id>`.
+- iOS app connects to `wss://tern.fly.dev/ws/<instance-id>`.
 - Relay bridges WebSocket traffic between jevond and the app.
 - No per-user DNS, no tunnels, fully dynamic. One relay serves all
   users.

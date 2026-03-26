@@ -5,7 +5,7 @@ import Foundation
 
 /// Messages received from jevond over WebSocket.
 enum ServerMessage: Sendable {
-    case serverInit(version: String)
+    case serverInit(version: String, home: String?)
     case history(entries: [HistoryEntry])
     case text(content: String)
     case status(state: ServerState)
@@ -48,7 +48,7 @@ extension ServerMessage {
         switch envelope.type {
         case "init":
             let msg = try decoder.decode(InitMessage.self, from: data)
-            self = .serverInit(version: msg.version)
+            self = .serverInit(version: msg.version, home: msg.home)
         case "history":
             let msg = try decoder.decode(HistoryMessage.self, from: data)
             self = .history(entries: msg.entries)
@@ -87,6 +87,7 @@ extension ServerMessage {
 
     private struct InitMessage: Codable {
         let version: String
+        let home: String?
     }
 
     private struct HistoryMessage: Codable {

@@ -17,13 +17,14 @@ import (
 
 	"github.com/marcelocantos/sqlpipe/go/sqlpipe"
 
+	"github.com/marcelocantos/jevon/internal/claude"
 	"github.com/marcelocantos/jevon/internal/cli"
 	"github.com/marcelocantos/jevon/internal/db"
 	"github.com/marcelocantos/jevon/internal/discovery"
 	"github.com/marcelocantos/jevon/internal/jevon"
 	"github.com/marcelocantos/jevon/internal/manager"
 	"github.com/marcelocantos/jevon/internal/mcpserver"
-	"github.com/marcelocantos/jevon/internal/qr"
+	"github.com/marcelocantos/tern/qr"
 	"github.com/marcelocantos/jevon/internal/server"
 	"github.com/marcelocantos/jevon/internal/session"
 	jvsync "github.com/marcelocantos/jevon/internal/sync"
@@ -117,7 +118,9 @@ Do not run other commands.
 
 func main() {
 	port := flag.Int("port", 13705, "listen port")
-	relayURL := flag.String("relay", "", "relay URL to register with (e.g. ws://localhost:8080)")
+	relayURL := flag.String("relay", "", "relay URL to register with (e.g. wss://tern.fly.dev)")
+	relayToken := flag.String("relay-token", "", "bearer token for relay authentication (or set TERN_TOKEN env var)")
+	relayInstanceID := flag.String("instance-id", "", "persistent relay instance ID (enables reconnect without re-pairing)")
 	workDir := flag.String("workdir", ".", "default working directory for worker sessions")
 	model := flag.String("model", "", "default model for worker sessions")
 	jevonModel := flag.String("jevon-model", "", "model for Jevon (default: same as --model)")
@@ -278,7 +281,7 @@ func main() {
 	defer luaRT.Close()
 
 	vs := ui.NewViewState()
-	vs.SetConnected(cli.Version)
+	vs.SetConnected(cli.Version, os.Getenv("HOME"))
 
 	srv := server.New(jev, mgr, database, cli.Version, luaRT, vs)
 	srvRef = srv // Wire the forward reference for syncMgr's onRequest callback.
@@ -565,8 +568,26 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	// Start Jevon event loop.
+	// Start Jevon event loop (legacy — manages its own Claude process).
 	go jev.Run(ctx)
+
+	// Start a direct Claude process for the /ws/chat endpoint.
+	chatProc, err := claude.Start(claude.Config{WorkDir: *workDir})
+	if err != nil {
+		slog.Error("chat claude failed to start", "err", err)
+	} else {
+		srv.SetProcess(chatProc)
+		chatProc.OnEvent(func(ev claude.Event) {
+			// Broadcast raw JSONL to /ws/chat listeners.
+			srv.BroadcastChat(string(ev.Raw))
+
+			// Also persist assistant responses to transcript.
+			if ev.Type == "assistant" && ev.Text != "" {
+				srv.AppendTranscript("jevon", ev.Text)
+			}
+		})
+		defer chatProc.Stop()
+	}
 
 	listenAddr := fmt.Sprintf(":%d", *port)
 	httpSrv := &http.Server{Addr: listenAddr, Handler: mux}
@@ -584,7 +605,11 @@ func main() {
 
 	// Connect to relay if specified, otherwise print direct QR code.
 	if *relayURL != "" {
-		instanceID, err := srv.ConnectRelay(ctx, *relayURL)
+		token := *relayToken
+		if token == "" {
+			token = os.Getenv("TERN_TOKEN")
+		}
+		instanceID, err := srv.ConnectRelay(ctx, *relayURL, token, *relayInstanceID)
 		if err != nil {
 			slog.Error("relay connection failed", "err", err)
 			os.Exit(1)
@@ -596,16 +621,15 @@ func main() {
 		qr.Print(os.Stderr, relayWSURL)
 
 		// Write relay URL to a well-known file for programmatic access.
-		relayFile := filepath.Join(os.TempDir(), ".jevon-relay")
+		relayFile := filepath.Join(os.TempDir(), ".tern-relay")
 		if err := os.WriteFile(relayFile, []byte(relayWSURL+"\n"), 0o644); err != nil {
 			slog.Warn("failed to write relay URL file", "path", relayFile, "err", err)
 		} else {
 			slog.Info("relay URL written", "path", relayFile)
 		}
-	} else if url, err := qr.ServerURL(*port); err == nil {
-		qr.Print(os.Stderr, url)
 	} else {
-		slog.Warn("cannot generate QR code", "err", err)
+		directURL := fmt.Sprintf("jevon://%s:%d", qr.LanIP(), *port)
+		qr.Print(os.Stderr, directURL)
 	}
 
 	if err := httpSrv.ListenAndServe(); err != http.ErrServerClosed {
