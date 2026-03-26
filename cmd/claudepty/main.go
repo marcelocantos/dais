@@ -1,54 +1,36 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// claudepty spawns a persistent Claude Code instance in a PTY and
-// exposes it over a WebSocket. The PTY keeps claude alive in
-// interactive mode; the session JSONL provides structured events.
-//
-// WebSocket protocol:
-//
-//	Client → Server: plain text user messages
-//	Server → Client: JSONL event lines from the session transcript
-//
-// Also serves:
-//
-//	GET  /status  — JSON: {alive, sessionID, jsonl}
-//	POST /stop    — kill the claude process
+// claudepty spawns a persistent Claude Code instance and exposes it
+// over a WebSocket with an embedded web UI.
 //
 // Usage: claudepty [--port 9119] [--workdir .]
 package main
 
 import (
-	"bufio"
-	"context"
 	_ "embed"
+	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/creack/pty"
-	"github.com/google/uuid"
+	"github.com/marcelocantos/jevon/internal/claude"
 )
 
-type server struct {
-	sessionID string
-	jsonlPath string
-	ptmx      *os.File
-	cmd       *exec.Cmd
+//go:embed index.html
+var indexHTML []byte
 
+type server struct {
+	proc      *claude.Process
 	mu        sync.Mutex
-	alive     bool
 	listeners []chan string
 }
 
@@ -69,71 +51,20 @@ func main() {
 			workdir = args[i]
 		}
 	}
-	workdir, _ = filepath.Abs(workdir)
 
-	// Derive JSONL path.
-	var escaped strings.Builder
-	for _, r := range workdir {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' {
-			escaped.WriteRune(r)
-		} else {
-			escaped.WriteByte('-')
-		}
-	}
-	sessionID := uuid.New().String()
-	jsonlDir := filepath.Join(os.Getenv("HOME"), ".claude", "projects", escaped.String())
-	jsonlPath := filepath.Join(jsonlDir, sessionID+".jsonl")
-
-	slog.Info("starting", "workdir", workdir, "session", sessionID, "port", port)
-
-	// Create a PTY pair manually. The child gets the slave as its
-	// stdin/stdout/stderr. We keep the master for writing messages.
-	ptmx, pts, err := pty.Open()
+	proc, err := claude.Start(claude.Config{WorkDir: workdir})
 	if err != nil {
-		slog.Error("pty.Open failed", "err", err)
-		os.Exit(1)
-	}
-
-	cmd := exec.Command("claude",
-		"--permission-mode", "bypassPermissions",
-		"--session-id", sessionID,
-	)
-	cmd.Dir = workdir
-	cmd.Env = filterEnv(os.Environ(), "CLAUDECODE")
-	cmd.Stdin = pts
-	cmd.Stdout = pts
-	cmd.Stderr = pts
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
-
-	if err := cmd.Start(); err != nil {
 		slog.Error("start failed", "err", err)
 		os.Exit(1)
 	}
-	// Close slave side in parent — child owns it now.
-	pts.Close()
+	slog.Info("started", "session", proc.SessionID(), "jsonl", proc.JSONLPath())
 
-	s := &server{
-		sessionID: sessionID,
-		jsonlPath: jsonlPath,
-		ptmx:      ptmx,
-		cmd:       cmd,
-		alive:     true,
-	}
+	s := &server{proc: proc}
 
-	// Drain PTY master output (discard — we read JSONL instead).
-	go io.Copy(io.Discard, ptmx)
-
-	// Monitor process exit.
-	go func() {
-		err := cmd.Wait()
-		slog.Info("claude exited", "err", err)
-		s.mu.Lock()
-		s.alive = false
-		s.mu.Unlock()
-	}()
-
-	// Tail JSONL and broadcast to listeners.
-	go s.tailJSONL()
+	proc.OnEvent(func(ev claude.Event) {
+		prettyPrint(string(ev.Raw))
+		s.broadcast(string(ev.Raw))
+	})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", serveIndex)
@@ -146,23 +77,16 @@ func main() {
 	go func() {
 		<-sigCh
 		slog.Info("shutting down")
-		// Signal the child's process group.
-		syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-		time.Sleep(time.Second)
-		cmd.Process.Kill()
-		ptmx.Close()
+		proc.Stop()
 		os.Exit(0)
 	}()
 
 	addr := ":" + port
-	slog.Info("listening", "addr", addr)
+	slog.Info("listening", "addr", addr, "ui", "http://localhost:"+port)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		slog.Error("server failed", "err", err)
 	}
 }
-
-//go:embed index.html
-var indexHTML []byte
 
 func serveIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -182,7 +106,6 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	slog.Info("client connected")
 
-	// Subscribe to JSONL events.
 	ch := make(chan string, 256)
 	s.mu.Lock()
 	s.listeners = append(s.listeners, ch)
@@ -200,7 +123,7 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		slog.Info("client disconnected")
 	}()
 
-	// Server → Client: forward JSONL events.
+	// Server → Client.
 	go func() {
 		for {
 			select {
@@ -217,7 +140,7 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Client → Server: read messages and write to PTY.
+	// Client → Server.
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
@@ -228,26 +151,23 @@ func (s *server) handleWS(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		slog.Info("received", "msg", msg)
-		// PTY uses \r (carriage return) to submit, not \n.
-		s.ptmx.Write([]byte(msg + "\r"))
+		if err := s.proc.Send(msg); err != nil {
+			slog.Error("send failed", "err", err)
+		}
 	}
 }
 
 func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	alive := s.alive
-	s.mu.Unlock()
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"alive":     alive,
-		"sessionID": s.sessionID,
-		"jsonl":     s.jsonlPath,
+		"alive":     s.proc.Alive(),
+		"sessionID": s.proc.SessionID(),
+		"jsonl":     s.proc.JSONLPath(),
 	})
 }
 
 func (s *server) handleStop(w http.ResponseWriter, r *http.Request) {
-	s.cmd.Process.Signal(syscall.SIGTERM)
+	s.proc.Stop()
 	fmt.Fprintf(w, "stopping\n")
 }
 
@@ -262,47 +182,16 @@ func (s *server) broadcast(line string) {
 	}
 }
 
-func (s *server) tailJSONL() {
-	for {
-		if _, err := os.Stat(s.jsonlPath); err == nil {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	slog.Info("JSONL found", "path", s.jsonlPath)
+// MARK: - Pretty printing
 
-	f, err := os.Open(s.jsonlPath)
-	if err != nil {
-		slog.Error("open JSONL failed", "err", err)
-		return
-	}
-	defer f.Close()
-
-	reader := bufio.NewReader(f)
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		prettyPrint(line)
-		s.broadcast(line)
-	}
-}
-
-// ANSI colour codes for JSON5 syntax highlighting.
 const (
 	cReset  = "\033[0m"
-	cKey    = "\033[38;5;117m" // light blue
-	cString = "\033[38;5;179m" // gold
-	cNumber = "\033[38;5;150m" // green
-	cBool   = "\033[38;5;204m" // pink
-	cNull   = "\033[38;5;243m" // grey
-	cBrace  = "\033[38;5;243m" // grey
+	cKey    = "\033[38;5;117m"
+	cString = "\033[38;5;179m"
+	cNumber = "\033[38;5;150m"
+	cBool   = "\033[38;5;204m"
+	cNull   = "\033[38;5;243m"
+	cBrace  = "\033[38;5;243m"
 )
 
 func prettyPrint(line string) {
@@ -377,15 +266,4 @@ func json5Key(k string) string {
 		}
 	}
 	return k
-}
-
-func filterEnv(env []string, exclude string) []string {
-	var out []string
-	prefix := exclude + "="
-	for _, e := range env {
-		if !strings.HasPrefix(e, prefix) {
-			out = append(out, e)
-		}
-	}
-	return out
 }

@@ -6,6 +6,7 @@ package server
 
 import (
 	"context"
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -233,7 +234,14 @@ func (s *Server) syncBroadcast(wire []byte, err error) {
 
 // RegisterRoutes adds HTTP and WebSocket routes to the mux.
 // Additional routes (e.g. MCP server) should be registered separately.
+//go:embed index.html
+var indexHTML []byte
+
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(indexHTML)
+	})
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("/ws/remote", s.handleRemote)
 	mux.HandleFunc("GET /api/sessions", s.handleListSessions)

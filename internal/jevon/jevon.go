@@ -1,24 +1,19 @@
 package jevon
 
 import (
-	"bufio"
 	"context"
-	"fmt"
 	"log/slog"
-	"os"
-	"os/exec"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/marcelocantos/jevon/internal/session"
+	"github.com/marcelocantos/jevon/internal/claude"
 )
 
 // Config holds Jevon configuration.
 type Config struct {
 	WorkDir  string // working directory (contains CLAUDE.md and .mcp.json)
 	Model    string // model for Jevon (e.g. "opus", "sonnet")
-	ClaudeID string // restored claude session ID for --resume
+	ClaudeID string // restored claude session ID for --resume (unused with persistent process)
 }
 
 // OutputFunc receives text from Jevon to stream to the user.
@@ -30,32 +25,25 @@ type StatusFunc func(state string)
 // RawLogFunc receives raw NDJSON lines from the Claude process.
 type RawLogFunc func(line []byte)
 
-// Jevon coordinates between the user and Claude Code workers.
-type Jevon struct {
-	cfg        Config
-	onOutput   OutputFunc
-	onStatus   StatusFunc
-	onRawLog   RawLogFunc
-	onClaudeID ClaudeIDFunc
-
-	mu           sync.Mutex
-	queue        []Event
-	notify       chan struct{}
-	claudeID     string              // claude session ID for --resume
-	running      bool
-	cancelInvoke context.CancelFunc  // cancels the active invoke, nil if idle
-}
-
 // ClaudeIDFunc is called when Jevon's claude session ID changes.
 type ClaudeIDFunc func(id string)
 
+// Jevon coordinates between the user and a persistent Claude Code process.
+type Jevon struct {
+	cfg      Config
+	onOutput OutputFunc
+	onStatus StatusFunc
+	onRawLog RawLogFunc
+	onClaudeID ClaudeIDFunc
+
+	mu      sync.Mutex
+	proc    *claude.Process
+	waiting bool // true while waiting for a response
+}
+
 // New creates a Jevon with the given config.
 func New(cfg Config) *Jevon {
-	return &Jevon{
-		cfg:      cfg,
-		claudeID: cfg.ClaudeID,
-		notify:   make(chan struct{}, 1),
-	}
+	return &Jevon{cfg: cfg}
 }
 
 // SetOutput sets the callback for Jevon text output.
@@ -87,222 +75,109 @@ func (j *Jevon) SetClaudeIDCallback(fn ClaudeIDFunc) {
 	j.onClaudeID = fn
 }
 
-// Enqueue adds an event to Jevon's queue. If Jevon is idle,
-// it will be woken up to process the event.
+// Run starts the persistent Claude Code process and blocks until ctx
+// is cancelled.
+func (j *Jevon) Run(ctx context.Context) {
+	slog.Info("jevon starting persistent claude", "workdir", j.cfg.WorkDir)
+
+	proc, err := claude.Start(claude.Config{
+		WorkDir: j.cfg.WorkDir,
+		Model:   j.cfg.Model,
+		ExtraArgs: []string{
+			"--disallowedTools", "AskUserQuestion,EnterPlanMode,ExitPlanMode," +
+				"Agent,TeamCreate,TeamDelete,SendMessage," +
+				"TaskCreate,TaskUpdate,TaskList,TaskGet,TaskOutput,TaskStop," +
+				"EnterWorktree,Skill,NotebookEdit",
+		},
+	})
+	if err != nil {
+		slog.Error("jevon: failed to start claude", "err", err)
+		return
+	}
+
+	j.mu.Lock()
+	j.proc = proc
+	j.mu.Unlock()
+
+	slog.Info("jevon started", "session", proc.SessionID())
+
+	// Notify the claude ID callback.
+	j.mu.Lock()
+	if j.onClaudeID != nil {
+		j.onClaudeID(proc.SessionID())
+	}
+	j.mu.Unlock()
+
+	// Handle events from the JSONL.
+	proc.OnEvent(func(ev claude.Event) {
+		j.mu.Lock()
+		onOutput := j.onOutput
+		onRawLog := j.onRawLog
+		wasWaiting := j.waiting
+		j.mu.Unlock()
+
+		// Forward raw log.
+		if onRawLog != nil {
+			onRawLog(ev.Raw)
+		}
+
+		switch ev.Type {
+		case "assistant":
+			if ev.Text != "" && onOutput != nil {
+				onOutput(ev.Text)
+			}
+		case "system":
+			// Turn complete.
+			if wasWaiting {
+				j.mu.Lock()
+				j.waiting = false
+				j.mu.Unlock()
+				j.emitStatus("idle")
+			}
+		}
+	})
+
+	// Wait for context cancellation.
+	<-ctx.Done()
+	slog.Info("jevon stopping")
+	proc.Stop()
+}
+
+// Enqueue adds an event to Jevon. For user messages, it sends directly
+// to the persistent Claude process.
 func (j *Jevon) Enqueue(ev Event) {
 	if ev.Timestamp.IsZero() {
 		ev.Timestamp = time.Now()
 	}
 
-	j.mu.Lock()
-	j.queue = append(j.queue, ev)
-	// Interrupt the active invocation when a new user message arrives.
-	// The event loop will restart with the accumulated context.
-	if ev.Kind == EventUserMessage && j.cancelInvoke != nil {
-		slog.Info("interrupting active invocation for new user input")
-		j.cancelInvoke()
+	if ev.Kind != EventUserMessage {
+		return
 	}
+
+	j.mu.Lock()
+	proc := j.proc
 	j.mu.Unlock()
 
-	select {
-	case j.notify <- struct{}{}:
-	default:
+	if proc == nil {
+		slog.Warn("jevon: message received before claude started")
+		return
 	}
-}
 
-// Run starts the Jevon event loop. It blocks until ctx is cancelled.
-func (j *Jevon) Run(ctx context.Context) {
-	slog.Info("jevon started", "workdir", j.cfg.WorkDir)
+	j.mu.Lock()
+	j.waiting = true
+	j.mu.Unlock()
+	j.emitStatus("thinking")
 
-	for {
-		select {
-		case <-ctx.Done():
-			slog.Info("jevon stopped")
-			return
-		case <-j.notify:
-		}
+	prompt := FormatPrompt([]Event{ev})
+	slog.Debug("jevon sending", "prompt", prompt)
 
+	if err := proc.Send(prompt); err != nil {
+		slog.Error("jevon: send failed", "err", err)
 		j.mu.Lock()
-		if len(j.queue) == 0 {
-			j.mu.Unlock()
-			continue
-		}
-		batch := j.queue
-		j.queue = nil
-		j.running = true
+		j.waiting = false
 		j.mu.Unlock()
-
-		j.emitStatus("thinking")
-
-		prompt := FormatPrompt(batch)
-		slog.Debug("jevon invoking", "prompt", prompt)
-
-		// Create a cancellable context for this invocation.
-		// Enqueue cancels it when a new user message interrupts.
-		invokeCtx, invokeCancel := context.WithCancel(ctx)
-		j.mu.Lock()
-		j.cancelInvoke = invokeCancel
-		j.mu.Unlock()
-
-		err := j.invoke(invokeCtx, prompt)
-		invokeCancel() // clean up if invoke returned normally
-
-		j.mu.Lock()
-		j.cancelInvoke = nil
-		j.running = false
-		hasMore := len(j.queue) > 0
-		j.mu.Unlock()
-
-		if err != nil && invokeCtx.Err() == context.Canceled {
-			slog.Info("invocation interrupted by new user input")
-		} else if err != nil {
-			slog.Error("jevon invoke failed", "err", err)
-		}
-
 		j.emitStatus("idle")
-
-		if hasMore {
-			select {
-			case j.notify <- struct{}{}:
-			default:
-			}
-		}
 	}
-}
-
-func (j *Jevon) invoke(ctx context.Context, prompt string) error {
-	// Apply timeout on top of the caller's context (which may be
-	// cancelled by Enqueue for interruption).
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-
-	args := []string{
-		"-p",
-		"--verbose",
-		"--output-format", "stream-json",
-		"--include-partial-messages",
-		"--permission-mode", "bypassPermissions",
-		"--disallowedTools", "AskUserQuestion,EnterPlanMode,ExitPlanMode," +
-		"Agent,TeamCreate,TeamDelete,SendMessage," +
-		"TaskCreate,TaskUpdate,TaskList,TaskGet,TaskOutput,TaskStop," +
-		"EnterWorktree,Skill,NotebookEdit",
-	}
-
-	j.mu.Lock()
-	claudeID := j.claudeID
-	j.mu.Unlock()
-
-	if claudeID != "" {
-		args = append(args, "--resume", claudeID)
-	}
-
-	if j.cfg.Model != "" {
-		args = append(args, "--model", j.cfg.Model)
-	}
-
-	// Pass prompt via stdin.
-	slog.Debug("spawning jevon claude", "args", args)
-
-	cmd := exec.CommandContext(ctx, "claude", args...)
-	cmd.Dir = j.cfg.WorkDir
-	cmd.Stdin = strings.NewReader(prompt)
-
-	// Remove CLAUDECODE to avoid nested session detection.
-	cmd.Env = filterEnv(os.Environ(), "CLAUDECODE")
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("stdout pipe: %w", err)
-	}
-
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return fmt.Errorf("stderr pipe: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start claude: %w", err)
-	}
-
-	// Log stderr.
-	go func() {
-		scanner := bufio.NewScanner(stderr)
-		scanner.Buffer(make([]byte, 256*1024), 256*1024)
-		for scanner.Scan() {
-			slog.Debug("jevon stderr", "line", scanner.Text())
-		}
-	}()
-
-	// Parse stdout NDJSON.
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-
-		j.mu.Lock()
-		rawFn := j.onRawLog
-		j.mu.Unlock()
-		if rawFn != nil {
-			rawFn(line)
-		}
-
-		events := session.ParseLine(line)
-		for _, ev := range events {
-			switch ev.Type {
-			case session.EventInit:
-				j.mu.Lock()
-				isNew := j.claudeID == ""
-				if isNew {
-					j.claudeID = ev.SessionID
-					slog.Info("jevon session established", "claude_id", ev.SessionID)
-				}
-				fn := j.onClaudeID
-				j.mu.Unlock()
-				if isNew && fn != nil {
-					fn(ev.SessionID)
-				}
-
-			case session.EventText:
-				j.mu.Lock()
-				fn := j.onOutput
-				j.mu.Unlock()
-				if fn != nil {
-					fn(ev.Content)
-				}
-
-			case session.EventToolUse:
-				slog.Debug("jevon tool call",
-					"tool", ev.ToolName, "input", ev.ToolInput)
-
-			case session.EventResult:
-				slog.Debug("jevon turn complete",
-					"duration_ms", ev.DurationMs,
-					"cost_usd", ev.CostUSD,
-					"input_tokens", ev.Usage.InputTokens,
-					"output_tokens", ev.Usage.OutputTokens,
-					"cache_creation", ev.Usage.CacheCreationInputTokens,
-					"cache_read", ev.Usage.CacheReadInputTokens)
-
-			case session.EventError:
-				slog.Warn("jevon error", "msg", ev.ErrorMsg)
-				j.mu.Lock()
-				fn := j.onOutput
-				j.mu.Unlock()
-				if fn != nil {
-					fn("I encountered an error: " + ev.ErrorMsg)
-				}
-			}
-		}
-	}
-
-	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("claude exited: %w", err)
-	}
-	return nil
 }
 
 func (j *Jevon) emitStatus(state string) {
@@ -312,15 +187,4 @@ func (j *Jevon) emitStatus(state string) {
 	if fn != nil {
 		fn(state)
 	}
-}
-
-func filterEnv(env []string, exclude string) []string {
-	prefix := exclude + "="
-	var result []string
-	for _, e := range env {
-		if !strings.HasPrefix(e, prefix) {
-			result = append(result, e)
-		}
-	}
-	return result
 }
