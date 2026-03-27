@@ -350,10 +350,10 @@ function applyTheme(pref) {
 document.getElementById('theme-toggle').addEventListener('click', e => {
   const btn = e.target.closest('button');
   if (!btn) return;
-  localStorage.setItem('theme', btn.dataset.t);
+  document.cookie = 'theme='+btn.dataset.t+';path=/;max-age=31536000';
   applyTheme(btn.dataset.t);
 });
-applyTheme(localStorage.getItem('theme') || 'system');
+applyTheme((document.cookie.match(/(?:^|; )theme=([^;]*)/)||[])[1] || 'system');
 
 // Hot reload.
 (function hotReload() {
