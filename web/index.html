@@ -28,15 +28,24 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 #send:hover { background: #1a5276; }
 #send:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Collapsible turn details */
+.turn-details { align-self: flex-start; max-width: 90%; font-size: 0.8em; }
+.turn-details summary { cursor: pointer; color: #888; padding: 4px 8px; border-radius: 6px; user-select: none; }
+.turn-details summary:hover { color: #aaa; }
+.turn-details[open] summary { margin-bottom: 4px; }
+.turn-details .turn-items { display: flex; flex-direction: column; gap: 2px; padding: 4px 8px; border-left: 2px solid #333; margin-left: 8px; }
+.turn-item { font-family: "SF Mono", Menlo, monospace; font-size: 0.85em; padding: 2px 0; }
+.turn-item.tool-use { color: #b8bb26; }
+.turn-item.tool-result { color: #83a598; }
+.turn-item.text { color: #d0d0d0; }
+.turn-item.error { color: #fb4934; }
+
 /* Right pane: activity */
 #activity-pane { width: 400px; flex-shrink: 0; display: flex; flex-direction: column; background: #111; }
 #activity-header { padding: 8px 16px; font-size: 0.85em; font-weight: 600; color: #888; border-bottom: 1px solid #222; text-transform: uppercase; letter-spacing: 0.5px; }
 #activity { flex: 1; overflow-y: auto; padding: 8px; font-size: 0.8em; font-family: "SF Mono", Menlo, monospace; }
 .activity-item { padding: 4px 8px; border-radius: 4px; margin-bottom: 2px; }
-.activity-item.agent { color: #7ec8e3; }
 .activity-item.tool { color: #b8bb26; }
-.activity-item.text { color: #d0d0d0; }
-.activity-item.error { color: #fb4934; }
 .activity-item .agent-name { color: #fabd2f; font-weight: 600; margin-right: 6px; }
 .activity-item .timestamp { color: #555; margin-right: 6px; }
 </style>
@@ -63,61 +72,150 @@ const sendBtn = document.getElementById('send');
 const dot = document.getElementById('dot');
 const sTxt = document.getElementById('status-text');
 const activity = document.getElementById('activity');
-let ws, streaming = null;
+let ws;
+
+// Current turn's collapsible details element (between user msg and final response).
+let turnDetails = null;
+let turnItems = null;
+let turnCount = 0;
 
 function connect() {
   const h = location.hostname === 'localhost' ? '127.0.0.1:'+location.port : location.host;
   ws = new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+h+'/ws/chat');
-  ws.onopen = () => { dot.className='dot on'; sTxt.textContent='connected'; sendBtn.disabled=false; msgs.innerHTML=''; };
+  ws.onopen = () => { dot.className='dot on'; sTxt.textContent='connected'; sendBtn.disabled=false; msgs.innerHTML=''; turnDetails=null; turnItems=null; turnCount=0; };
   ws.onclose = () => { dot.className='dot off'; sTxt.textContent='reconnecting...'; sendBtn.disabled=true; setTimeout(connect,2000); };
-  ws.onmessage = e => { try{handle(JSON.parse(e.data))}catch(x){} };
+  ws.onmessage = e => { try{handle(JSON.parse(e.data))}catch(x){console.error(x)} };
 }
 
 function handle(m) {
   const typ = m.type;
+
   if (typ==='user') {
+    // Close any previous open turn.
+    closeTurn();
     const content = m.message?.content;
     if (typeof content === 'string') addMsg('user', content);
     else if (Array.isArray(content)) content.forEach(c => {
       if (c.type==='text') addMsg('user', c.text);
     });
+    // Start a new collapsible turn for the work that follows.
+    startTurn();
+
   } else if (typ==='assistant') {
     const content = m.message?.content;
-    if (Array.isArray(content)) content.forEach(c => {
-      if (c.type==='text') addMsg('jevon', c.text);
-      if (c.type==='tool_use') addActivity('tool', 'chat', c.name);
+    if (!Array.isArray(content)) return;
+    // Tool calls go into the collapsible section.
+    content.forEach(c => {
+      if (c.type==='tool_use') {
+        addTurnItem('tool-use', c.name + (c.input ? ': ' + summariseInput(c.input) : ''));
+        addActivity('tool', 'chat', c.name);
+      }
     });
+    // Text responses are top-level messages. Close the turn first.
+    content.forEach(c => {
+      if (c.type==='text' && c.text) {
+        closeTurn();
+        addMsg('jevon', c.text);
+      }
+    });
+
+  } else if (typ==='tool_result' || typ==='result') {
+    // Tool results go into the collapsible section.
+    const content = m.content || m.message?.content;
+    if (Array.isArray(content)) {
+      content.forEach(c => {
+        if (c.type==='text' && c.text) {
+          addTurnItem('tool-result', truncate(c.text, 120));
+        }
+      });
+    } else if (typeof content === 'string') {
+      addTurnItem('tool-result', truncate(content, 120));
+    }
+
+  } else if (typ==='system') {
+    // Turn complete — close the details section.
+    closeTurn();
   }
+}
+
+function startTurn() {
+  turnDetails = document.createElement('details');
+  turnDetails.className = 'turn-details';
+  turnDetails.open = true; // Latest turn starts open.
+  const summary = document.createElement('summary');
+  summary.textContent = 'working...';
+  turnDetails.appendChild(summary);
+  turnItems = document.createElement('div');
+  turnItems.className = 'turn-items';
+  turnDetails.appendChild(turnItems);
+  msgs.appendChild(turnDetails);
+  turnCount++;
+  scrollDown();
+}
+
+function closeTurn() {
+  if (!turnDetails) return;
+  const n = turnItems ? turnItems.children.length : 0;
+  if (n === 0) {
+    // No intermediate events — remove the empty details.
+    turnDetails.remove();
+  } else {
+    // Update summary with count and collapse.
+    turnDetails.querySelector('summary').textContent = n + ' action' + (n===1?'':'s');
+    turnDetails.open = false;
+  }
+  turnDetails = null;
+  turnItems = null;
+}
+
+function addTurnItem(cls, text) {
+  if (!turnItems) startTurn();
+  const d = document.createElement('div');
+  d.className = 'turn-item ' + cls;
+  d.textContent = text;
+  turnItems.appendChild(d);
+  // Update live summary.
+  const n = turnItems.children.length;
+  turnDetails.querySelector('summary').textContent = 'working... (' + n + ' action' + (n===1?'':'s') + ')';
+  scrollDown();
 }
 
 function addMsg(role, text) {
   const d = document.createElement('div');
-  d.className = 'msg '+role;
+  d.className = 'msg ' + role;
   d.textContent = text;
   msgs.appendChild(d);
-  msgs.scrollTop = msgs.scrollHeight;
+  scrollDown();
   return d;
 }
 
 function addActivity(type, agent, text) {
   const d = document.createElement('div');
-  d.className = 'activity-item '+type;
+  d.className = 'activity-item ' + type;
   const now = new Date().toLocaleTimeString('en-AU', {hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit'});
   d.innerHTML = '<span class="timestamp">'+now+'</span><span class="agent-name">'+agent+'</span>'+escHtml(text);
   activity.appendChild(d);
   activity.scrollTop = activity.scrollHeight;
-  // Keep last 500 items.
   while (activity.children.length > 500) activity.removeChild(activity.firstChild);
 }
 
+function scrollDown() { msgs.scrollTop = msgs.scrollHeight; }
 function escHtml(s) { const d=document.createElement('span'); d.textContent=s; return d.innerHTML; }
+function truncate(s, n) { return s.length > n ? s.slice(0, n-3) + '...' : s; }
+function summariseInput(obj) {
+  if (typeof obj === 'string') return truncate(obj, 60);
+  const keys = Object.keys(obj);
+  if (keys.length === 0) return '';
+  // Show first key's value as summary.
+  const v = obj[keys[0]];
+  return typeof v === 'string' ? truncate(v, 60) : keys.join(', ');
+}
 
 function send() {
   const t = input.value.trim();
   if (!t||!ws||ws.readyState!==1) return;
   ws.send(t);
   input.value = '';
-  streaming = null;
 }
 
 input.addEventListener('keydown', e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();} });
