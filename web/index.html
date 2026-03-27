@@ -331,7 +331,7 @@ function send() {
 }
 
 input.addEventListener('keydown', e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();} });
-input.addEventListener('blur', () => { if (!window.getSelection().toString()) setTimeout(() => input.focus(), 0); });
+document.addEventListener('keydown', e => { if (e.target !== input && !e.metaKey && !e.ctrlKey && !e.altKey) input.focus(); });
 sendBtn.addEventListener('click', send);
 input.focus();
 connect();
