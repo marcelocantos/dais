@@ -181,6 +181,18 @@ func (p *Process) OnEvent(fn EventFunc) {
 	p.onEvent = fn
 }
 
+// Interrupt sends Esc to the Claude process to cancel the current turn.
+func (p *Process) Interrupt() error {
+	p.mu.Lock()
+	alive := p.alive
+	p.mu.Unlock()
+	if !alive {
+		return fmt.Errorf("claude process not running")
+	}
+	_, err := p.ptmx.Write([]byte("\x1b"))
+	return err
+}
+
 // Send writes a user message to the Claude process.
 func (p *Process) Send(msg string) error {
 	p.mu.Lock()

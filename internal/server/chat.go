@@ -102,8 +102,15 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		if msg == "" {
 			continue
 		}
-		slog.Info("chat: received", "msg", msg)
+		if strings.EqualFold(msg, "stop") {
+			slog.Info("chat: interrupt")
+			if err := proc.Interrupt(); err != nil {
+				slog.Error("chat: interrupt failed", "err", err)
+			}
+			continue
+		}
 
+		slog.Info("chat: received", "msg", msg)
 		if err := proc.Send(msg); err != nil {
 			slog.Error("chat: send to claude failed", "err", err)
 		}
