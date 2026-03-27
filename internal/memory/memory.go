@@ -69,13 +69,16 @@ type StatsResult struct {
 	ByType        []TypeStats `json:"by_type"`
 }
 
-// sessionTypeExpr is the SQL CASE expression for deriving session type from project.
-const sessionTypeExpr = `CASE
-	WHEN project = 'subagents' THEN 'subagent'
-	WHEN project LIKE '%worktrees%' THEN 'worktree'
-	WHEN project LIKE '%-private-tmp%' THEN 'ephemeral'
+// sessionTypeSQL returns a SQL CASE expression for deriving session type.
+// The col parameter is the qualified column name (e.g. "m.project" or "project").
+func sessionTypeSQL(col string) string {
+	return `CASE
+	WHEN ` + col + ` = 'subagents' THEN 'subagent'
+	WHEN ` + col + ` LIKE '%worktrees%' THEN 'worktree'
+	WHEN ` + col + ` LIKE '%-private-tmp%' THEN 'ephemeral'
 	ELSE 'interactive'
 END`
+}
 
 // New creates or opens a transcript memory store.
 func New(dbPath, projectDir string) (*Store, error) {
@@ -138,7 +141,7 @@ func New(dbPath, projectDir string) (*Store, error) {
 		SELECT
 			session_id,
 			project,
-			` + sessionTypeExpr + ` AS session_type,
+			` + sessionTypeSQL("project") + ` AS session_type,
 			COUNT(*) AS total_msgs,
 			SUM(CASE WHEN is_noise = 0 THEN 1 ELSE 0 END) AS substantive_msgs,
 			MIN(timestamp) AS first_msg,
@@ -317,7 +320,7 @@ func (s *Store) Search(query string, limit int, sessionType string) ([]SearchRes
 			FROM messages_fts f
 			JOIN messages m ON m.id = f.rowid
 			WHERE messages_fts MATCH ?
-			  AND (` + sessionTypeExpr + `) = ?
+			  AND (` + sessionTypeSQL("m.project") + `) = ?
 			ORDER BY rank
 			LIMIT ?
 		`
@@ -406,7 +409,7 @@ func (s *Store) Stats() (*StatsResult, error) {
 
 	rows, err := s.db.Query(`
 		SELECT
-			` + sessionTypeExpr + ` AS session_type,
+			` + sessionTypeSQL("project") + ` AS session_type,
 			COUNT(DISTINCT session_id) AS sessions,
 			COUNT(*) AS total_msgs,
 			SUM(CASE WHEN is_noise = 0 THEN 1 ELSE 0 END) AS substantive_msgs,
