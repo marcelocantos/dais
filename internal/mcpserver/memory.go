@@ -28,7 +28,7 @@ func (s *Server) SetMemory(mem *memory.Store) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevon_memory_query",
-			mcp.WithDescription("Run a read-only SQL query against the transcript memory database. Tables: messages (id, session_id, project, role, text, timestamp, type), messages_fts (FTS5 virtual table on text/role/project/session_id), ingest_state (path, offset)."),
+			mcp.WithDescription("Run a read-only SQL query against the transcript memory database. Supports sqldeep syntax (FROM-first, nested JSON objects). Tables: messages (id, session_id, project, role, text, timestamp, type), messages_fts (FTS5 virtual table on text/role/project/session_id), ingest_state (path, offset)."),
 			mcp.WithString("query", mcp.Required(), mcp.Description("SQL SELECT query")),
 		),
 		s.handleMemoryQuery,
