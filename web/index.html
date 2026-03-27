@@ -68,33 +68,25 @@ let ws, streaming = null;
 function connect() {
   const h = location.hostname === 'localhost' ? '127.0.0.1:'+location.port : location.host;
   ws = new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+h+'/ws/chat');
-  ws.onopen = () => { dot.className='dot on'; sTxt.textContent='connected'; sendBtn.disabled=false; };
-  ws.onclose = () => { dot.className='dot off'; sTxt.textContent='reconnecting...'; sendBtn.disabled=true; streaming=null; setTimeout(connect,2000); };
+  ws.onopen = () => { dot.className='dot on'; sTxt.textContent='connected'; sendBtn.disabled=false; msgs.innerHTML=''; };
+  ws.onclose = () => { dot.className='dot off'; sTxt.textContent='reconnecting...'; sendBtn.disabled=true; setTimeout(connect,2000); };
   ws.onmessage = e => { try{handle(JSON.parse(e.data))}catch(x){} };
 }
 
 function handle(m) {
-  if (m.type==='init') {
-    sTxt.textContent='connected ('+m.version+')';
-    msgs.innerHTML='';
-    if (m.history) m.history.forEach(e => addMsg(e.role, e.text));
-  } else if (m.type==='assistant') {
+  const typ = m.type;
+  if (typ==='user') {
     const content = m.message?.content;
-    if (content) content.forEach(c => {
+    if (typeof content === 'string') addMsg('user', content);
+    else if (Array.isArray(content)) content.forEach(c => {
+      if (c.type==='text') addMsg('user', c.text);
+    });
+  } else if (typ==='assistant') {
+    const content = m.message?.content;
+    if (Array.isArray(content)) content.forEach(c => {
       if (c.type==='text') addMsg('jevon', c.text);
       if (c.type==='tool_use') addActivity('tool', 'chat', c.name);
     });
-    streaming = null;
-  } else if (m.type==='user') {
-    const content = m.message?.content;
-    if (content) content.forEach(c => {
-      if (c.type==='text') addMsg('user', c.text);
-    });
-  } else if (m.type==='system') {
-    streaming = null;
-  } else if (m.type==='progress') {
-    const d = m.data;
-    if (d) addActivity('tool', m.sessionId||'chat', d.type||'progress');
   }
 }
 
