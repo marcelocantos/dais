@@ -42,6 +42,41 @@ type SearchResult struct {
 	Rank      float64 `json:"rank"`
 }
 
+// SessionInfo is a summary of a transcript session.
+type SessionInfo struct {
+	SessionID       string `json:"session_id"`
+	Project         string `json:"project"`
+	SessionType     string `json:"session_type"`
+	TotalMsgs       int    `json:"total_msgs"`
+	SubstantiveMsgs int    `json:"substantive_msgs"`
+	FirstMsg        string `json:"first_msg"`
+	LastMsg         string `json:"last_msg"`
+}
+
+// TypeStats holds per-session-type statistics.
+type TypeStats struct {
+	SessionType     string `json:"session_type"`
+	Sessions        int    `json:"sessions"`
+	TotalMsgs       int    `json:"total_msgs"`
+	SubstantiveMsgs int    `json:"substantive_msgs"`
+	NoiseMsgs       int    `json:"noise_msgs"`
+}
+
+// StatsResult holds full memory statistics.
+type StatsResult struct {
+	TotalSessions int         `json:"total_sessions"`
+	TotalMessages int         `json:"total_messages"`
+	ByType        []TypeStats `json:"by_type"`
+}
+
+// sessionTypeExpr is the SQL CASE expression for deriving session type from project.
+const sessionTypeExpr = `CASE
+	WHEN project = 'subagents' THEN 'subagent'
+	WHEN project LIKE '%worktrees%' THEN 'worktree'
+	WHEN project LIKE '%-private-tmp%' THEN 'ephemeral'
+	ELSE 'interactive'
+END`
+
 // New creates or opens a transcript memory store.
 func New(dbPath, projectDir string) (*Store, error) {
 	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL")
@@ -49,6 +84,7 @@ func New(dbPath, projectDir string) (*Store, error) {
 		return nil, err
 	}
 
+	// Create base tables.
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS messages (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,15 +95,6 @@ func New(dbPath, projectDir string) (*Store, error) {
 			timestamp TEXT,
 			type TEXT
 		);
-		CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-			text, role, project, session_id,
-			content=messages,
-			content_rowid=id
-		);
-		CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
-			INSERT INTO messages_fts(rowid, text, role, project, session_id)
-			VALUES (new.id, new.text, new.role, new.project, new.session_id);
-		END;
 		CREATE TABLE IF NOT EXISTS ingest_state (
 			path TEXT PRIMARY KEY,
 			offset INTEGER NOT NULL
@@ -76,6 +103,52 @@ func New(dbPath, projectDir string) (*Store, error) {
 	if err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create tables: %w", err)
+	}
+
+	// Migrate: add is_noise column if missing.
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+
+	// Ensure FTS table and trigger exist (idempotent).
+	_, err = db.Exec(`
+		CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+			text, role, project, session_id,
+			content=messages,
+			content_rowid=id
+		);
+		DROP TRIGGER IF EXISTS messages_ai;
+		CREATE TRIGGER messages_ai AFTER INSERT ON messages
+		WHEN new.is_noise = 0
+		BEGIN
+			INSERT INTO messages_fts(rowid, text, role, project, session_id)
+			VALUES (new.id, new.text, new.role, new.project, new.session_id);
+		END;
+	`)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("create FTS: %w", err)
+	}
+
+	// Create or replace the sessions view.
+	_, err = db.Exec(`
+		DROP VIEW IF EXISTS sessions;
+		CREATE VIEW sessions AS
+		SELECT
+			session_id,
+			project,
+			` + sessionTypeExpr + ` AS session_type,
+			COUNT(*) AS total_msgs,
+			SUM(CASE WHEN is_noise = 0 THEN 1 ELSE 0 END) AS substantive_msgs,
+			MIN(timestamp) AS first_msg,
+			MAX(timestamp) AS last_msg
+		FROM messages
+		GROUP BY session_id;
+	`)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("create sessions view: %w", err)
 	}
 
 	s := &Store{
@@ -96,6 +169,64 @@ func New(dbPath, projectDir string) (*Store, error) {
 	}
 
 	return s, nil
+}
+
+// migrate adds the is_noise column and backfills it if needed.
+func migrate(db *sql.DB) error {
+	// Check if is_noise column exists.
+	var colCount int
+	err := db.QueryRow(`
+		SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name = 'is_noise'
+	`).Scan(&colCount)
+	if err != nil {
+		return err
+	}
+	if colCount > 0 {
+		return nil // already migrated
+	}
+
+	slog.Info("memory: migrating — adding is_noise column and rebuilding FTS index")
+
+	_, err = db.Exec(`ALTER TABLE messages ADD COLUMN is_noise INTEGER NOT NULL DEFAULT 0`)
+	if err != nil {
+		return fmt.Errorf("add column: %w", err)
+	}
+
+	// Backfill is_noise for existing rows.
+	_, err = db.Exec(`
+		UPDATE messages SET is_noise = 1
+		WHERE text LIKE '%[Request interrupted%'
+		   OR text LIKE '%Your task is to create a detailed summary%'
+		   OR text IN ('Tool loaded.', 'Tool loaded')
+		   OR text LIKE '%<local-command-caveat>%'
+		   OR (text LIKE '%<command-name>%' AND LENGTH(text) < 200)
+	`)
+	if err != nil {
+		return fmt.Errorf("backfill is_noise: %w", err)
+	}
+
+	// Rebuild FTS to exclude noise rows.
+	// Drop and recreate since we can't partially rebuild content-sync FTS.
+	_, err = db.Exec(`
+		DROP TRIGGER IF EXISTS messages_ai;
+		DROP TABLE IF EXISTS messages_fts;
+		CREATE VIRTUAL TABLE messages_fts USING fts5(
+			text, role, project, session_id,
+			content=messages,
+			content_rowid=id
+		);
+		INSERT INTO messages_fts(rowid, text, role, project, session_id)
+			SELECT id, text, role, project, session_id FROM messages WHERE is_noise = 0;
+	`)
+	if err != nil {
+		return fmt.Errorf("rebuild FTS: %w", err)
+	}
+
+	var noiseCount int
+	db.QueryRow(`SELECT COUNT(*) FROM messages WHERE is_noise = 1`).Scan(&noiseCount)
+	slog.Info("memory: migration complete", "noise_rows_flagged", noiseCount)
+
+	return nil
 }
 
 // Close closes the store.
@@ -157,19 +288,43 @@ func (s *Store) Watch() error {
 }
 
 // Search performs a full-text search and returns matching messages.
-func (s *Store) Search(query string, limit int) ([]SearchResult, error) {
+// sessionType filters by session type: "interactive" (default), "all",
+// "subagent", "worktree", "ephemeral".
+func (s *Store) Search(query string, limit int, sessionType string) ([]SearchResult, error) {
 	if limit <= 0 {
 		limit = 20
 	}
-	rows, err := s.db.Query(`
-		SELECT m.session_id, m.project, m.role, m.text, m.timestamp,
-		       rank
-		FROM messages_fts f
-		JOIN messages m ON m.id = f.rowid
-		WHERE messages_fts MATCH ?
-		ORDER BY rank
-		LIMIT ?
-	`, query, limit)
+	if sessionType == "" {
+		sessionType = "interactive"
+	}
+
+	var sqlQuery string
+	var args []any
+
+	if sessionType == "all" {
+		sqlQuery = `
+			SELECT m.session_id, m.project, m.role, m.text, m.timestamp, rank
+			FROM messages_fts f
+			JOIN messages m ON m.id = f.rowid
+			WHERE messages_fts MATCH ?
+			ORDER BY rank
+			LIMIT ?
+		`
+		args = []any{query, limit}
+	} else {
+		sqlQuery = `
+			SELECT m.session_id, m.project, m.role, m.text, m.timestamp, rank
+			FROM messages_fts f
+			JOIN messages m ON m.id = f.rowid
+			WHERE messages_fts MATCH ?
+			  AND (` + sessionTypeExpr + `) = ?
+			ORDER BY rank
+			LIMIT ?
+		`
+		args = []any{query, sessionType, limit}
+	}
+
+	rows, err := s.db.Query(sqlQuery, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -189,10 +344,91 @@ func (s *Store) Search(query string, limit int) ([]SearchResult, error) {
 	return results, nil
 }
 
-// Stats returns index statistics.
-func (s *Store) Stats() (sessions int, messages int, err error) {
-	err = s.db.QueryRow("SELECT COUNT(DISTINCT session_id), COUNT(*) FROM messages").Scan(&sessions, &messages)
-	return
+// ListSessions returns session summaries, filtered and sorted.
+func (s *Store) ListSessions(sessionType string, minMessages int, limit int, projectFilter string) ([]SessionInfo, error) {
+	if sessionType == "" {
+		sessionType = "interactive"
+	}
+	if minMessages <= 0 {
+		minMessages = 6
+	}
+	if limit <= 0 {
+		limit = 30
+	}
+
+	where := []string{"substantive_msgs >= ?"}
+	args := []any{minMessages}
+
+	if sessionType != "all" {
+		where = append(where, "session_type = ?")
+		args = append(args, sessionType)
+	}
+	if projectFilter != "" {
+		where = append(where, "project LIKE ?")
+		args = append(args, "%"+projectFilter+"%")
+	}
+
+	args = append(args, limit)
+
+	q := `SELECT session_id, project, session_type, total_msgs, substantive_msgs, first_msg, last_msg
+		FROM sessions
+		WHERE ` + strings.Join(where, " AND ") + `
+		ORDER BY last_msg DESC
+		LIMIT ?`
+
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []SessionInfo
+	for rows.Next() {
+		var si SessionInfo
+		if err := rows.Scan(&si.SessionID, &si.Project, &si.SessionType,
+			&si.TotalMsgs, &si.SubstantiveMsgs, &si.FirstMsg, &si.LastMsg); err != nil {
+			continue
+		}
+		results = append(results, si)
+	}
+	return results, nil
+}
+
+// Stats returns detailed index statistics broken down by session type.
+func (s *Store) Stats() (*StatsResult, error) {
+	var result StatsResult
+
+	err := s.db.QueryRow("SELECT COUNT(DISTINCT session_id), COUNT(*) FROM messages").
+		Scan(&result.TotalSessions, &result.TotalMessages)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.Query(`
+		SELECT
+			` + sessionTypeExpr + ` AS session_type,
+			COUNT(DISTINCT session_id) AS sessions,
+			COUNT(*) AS total_msgs,
+			SUM(CASE WHEN is_noise = 0 THEN 1 ELSE 0 END) AS substantive_msgs,
+			SUM(CASE WHEN is_noise = 1 THEN 1 ELSE 0 END) AS noise_msgs
+		FROM messages
+		GROUP BY session_type
+		ORDER BY sessions DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var ts TypeStats
+		if err := rows.Scan(&ts.SessionType, &ts.Sessions, &ts.TotalMsgs,
+			&ts.SubstantiveMsgs, &ts.NoiseMsgs); err != nil {
+			continue
+		}
+		result.ByType = append(result.ByType, ts)
+	}
+	return &result, nil
 }
 
 // Query runs a read-only SQL query and returns rows as maps.
@@ -231,6 +467,26 @@ func (s *Store) Query(query string) ([]map[string]any, error) {
 	return results, nil
 }
 
+// isNoise returns true if a message text matches noise patterns.
+func isNoise(text string) bool {
+	if strings.Contains(text, "[Request interrupted") {
+		return true
+	}
+	if strings.Contains(text, "Your task is to create a detailed summary") {
+		return true
+	}
+	if text == "Tool loaded." || text == "Tool loaded" {
+		return true
+	}
+	if strings.Contains(text, "<local-command-caveat>") {
+		return true
+	}
+	if strings.Contains(text, "<command-name>") && len(text) < 200 {
+		return true
+	}
+	return false
+}
+
 func (s *Store) ingestFile(path string) error {
 	s.mu.Lock()
 	offset := s.offsets[path]
@@ -259,7 +515,7 @@ func (s *Store) ingestFile(path string) error {
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`INSERT INTO messages (session_id, project, role, text, timestamp, type) VALUES (?, ?, ?, ?, ?, ?)`)
+	stmt, err := tx.Prepare(`INSERT INTO messages (session_id, project, role, text, timestamp, type, is_noise) VALUES (?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
@@ -293,19 +549,26 @@ func (s *Store) ingestFile(path string) error {
 
 		role := typ
 
+		insertMsg := func(text string) {
+			noise := 0
+			if isNoise(text) {
+				noise = 1
+			}
+			stmt.Exec(sessionID, project, role, text, ts, typ, noise)
+			count++
+		}
+
 		switch content := msg["content"].(type) {
 		case string:
 			if content != "" {
-				stmt.Exec(sessionID, project, role, content, ts, typ)
-				count++
+				insertMsg(content)
 			}
 		case []any:
 			for _, c := range content {
 				cm, _ := c.(map[string]any)
 				if cm["type"] == "text" {
 					if text, _ := cm["text"].(string); text != "" {
-						stmt.Exec(sessionID, project, role, text, ts, typ)
-						count++
+						insertMsg(text)
 					}
 				}
 			}

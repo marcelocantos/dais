@@ -572,8 +572,10 @@ func main() {
 			if err := mem.IngestAll(); err != nil {
 				slog.Error("memory: initial ingest failed", "err", err)
 			}
-			sessions, messages, _ := mem.Stats()
-			slog.Info("memory: initial ingest complete", "sessions", sessions, "messages", messages)
+			stats, _ := mem.Stats()
+			if stats != nil {
+				slog.Info("memory: initial ingest complete", "sessions", stats.TotalSessions, "messages", stats.TotalMessages)
+			}
 			if err := mem.Watch(); err != nil {
 				slog.Error("memory: watch failed", "err", err)
 			}
