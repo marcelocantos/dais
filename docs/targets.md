@@ -493,6 +493,69 @@ considers the full accumulated input before continuing.
 - Extended silence closes the OpenAI connection (back to local VAD).
 - No API keys stored on device — ephemeral token flow via jevond.
 
+### 🎯T16 Session-to-agent migration
+
+- **Value**: 13
+- **Cost**: 13
+- **Weight**: 1.0 (value 13 / cost 13)
+- **Status**: identified
+- **Discovered**: 2026-03-27
+- **Depends on**: 🎯T8 (worker dispatch)
+
+**Desired state:** Standalone Claude Code sessions — the ones Marcelo
+runs directly in terminals — are progressively absorbed into Jevon's
+agent hierarchy (PO → Boss → Worker). Jevon has full visibility into
+where active work is happening across all repos and can manage those
+sessions as first-class agents.
+
+**Sub-targets:**
+
+#### 🎯T16.1 Active work dashboard
+
+- **Value**: 8
+- **Cost**: 5
+- **Weight**: 1.6 (value 8 / cost 5)
+- **Parent**: 🎯T16
+- **Status**: identified — plan in `docs/plans/active-work-dashboard.md`
+- **Discovered**: 2026-03-27
+
+**Desired state:** `jevon_active_work` MCP tool cross-references three
+signals (recent transcript sessions, dirty working trees, open PRs) to
+produce a unified per-repo view of where active work is happening.
+
+**Acceptance criteria:**
+- Tool queries memory DB for recent interactive sessions, groups by repo.
+- Tool scans `~/work/github.com/` for repos with uncommitted changes or
+  non-default branches.
+- Tool checks GitHub API for open PRs on repos with activity.
+- Output is a unified table: repo, last session activity, working tree
+  state, open PRs, agent assignment.
+- Repos with no activity across any signal are omitted by default.
+
+#### 🎯T16.2 Session grandfathering
+
+- **Value**: 8
+- **Cost**: 8
+- **Weight**: 1.0 (value 8 / cost 8)
+- **Parent**: 🎯T16
+- **Depends on**: 🎯T16.1
+- **Status**: identified
+- **Discovered**: 2026-03-27
+
+**Desired state:** A standalone Claude Code session can be registered
+("grandfathered") as an agent in Jevon's agent registry, making it
+visible in `jevon_agent_list` and addressable via `jevon_agent_send`.
+
+**Acceptance criteria:**
+- A session from the memory DB can be linked to an agent definition
+  with a name, repo association, and session ID.
+- Grandfathered agents appear in `jevon_agent_list` with their status.
+- Grandfathered agents can receive messages via `jevon_agent_send`.
+- A grandfathered session can be promoted to PO status (owns the repo,
+  can spawn bosses) or assigned under an existing PO.
+- Sessions idle beyond a configurable threshold are flagged for
+  retirement.
+
 ## Achieved
 
 ### 🎯T15 Protocol state machines are formally verifiable

@@ -8,12 +8,28 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/jevon/internal/claude"
 )
+
+// displayWorkDir formats a workdir for display. Paths under
+// ~/work/github.com/ are shortened to " org/repo".
+func displayWorkDir(path string) string {
+	home, _ := os.UserHomeDir()
+	ghPrefix := filepath.Join(home, "work", "github.com")
+	if rest, ok := strings.CutPrefix(path, ghPrefix+"/"); ok {
+		// rest is "org/repo" or "org/repo/sub/path"
+		parts := strings.SplitN(rest, "/", 3)
+		if len(parts) >= 2 {
+			return "\uf09b " + parts[0] + "/" + parts[1]
+		}
+	}
+	return path
+}
 
 // SetRegistry attaches the agent registry to the MCP server and
 // registers agent management tools.
@@ -68,7 +84,7 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		if proc != nil && proc.Alive() {
 			status = "running"
 		}
-		fmt.Fprintf(&b, "%-20s %-10s %s (session: %s)\n", d.Name, status, d.WorkDir, d.SessionID[:8])
+		fmt.Fprintf(&b, "%-20s %-10s %s (session: %s)\n", d.Name, status, displayWorkDir(d.WorkDir), d.SessionID[:8])
 	}
 	return mcp.NewToolResultText(b.String()), nil
 }
