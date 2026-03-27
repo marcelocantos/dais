@@ -28,7 +28,21 @@ func (s *Server) SetMemory(mem *memory.Store) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevon_memory_query",
-			mcp.WithDescription("Run a read-only SQL query against the transcript memory database. Supports sqldeep syntax (FROM-first, nested JSON objects). Tables: messages (id, session_id, project, role, text, timestamp, type), messages_fts (FTS5 virtual table on text/role/project/session_id), ingest_state (path, offset)."),
+			mcp.WithDescription(`Run a read-only SQL query against the transcript memory database.
+
+Supports sqldeep syntax — a superset of SQL with FROM-first clause order and nested JSON object literals:
+  FROM messages WHERE role = 'user' ORDER BY timestamp DESC SELECT session_id, text LIMIT 10
+  FROM messages m WHERE project LIKE '%jevon%' SELECT { session_id, role, text, timestamp }
+
+Tables:
+  messages (id, session_id, project, role, text, timestamp, type)
+  messages_fts — FTS5 virtual table. Use: WHERE messages_fts MATCH 'search terms'
+  ingest_state (path, offset)
+
+FTS5 example:
+  FROM messages m JOIN messages_fts f ON m.id = f.rowid WHERE messages_fts MATCH 'relay protocol' SELECT m.session_id, m.role, m.text, rank LIMIT 20
+
+Results capped at 100 rows.`),
 			mcp.WithString("query", mcp.Required(), mcp.Description("SQL SELECT query")),
 		),
 		s.handleMemoryQuery,
