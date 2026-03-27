@@ -45,6 +45,7 @@ type Config struct {
 	SessionID      string   // persistent session ID (empty = new random session)
 	Model          string   // model override (empty = default)
 	PermissionMode string   // permission mode (default: bypassPermissions)
+	MCPConfig      string   // path to MCP config JSON (empty = use default discovery)
 	ExtraArgs      []string // additional CLI args
 }
 
@@ -96,6 +97,9 @@ func Start(cfg Config) (*Process, error) {
 		args = append(args, "--resume", sessionID)
 	} else {
 		args = append(args, "--session-id", sessionID)
+	}
+	if cfg.MCPConfig != "" {
+		args = append(args, "--mcp-config", cfg.MCPConfig)
 	}
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/google/uuid"
@@ -106,10 +107,16 @@ func (r *Registry) Start(name string) (*Process, error) {
 		return nil, fmt.Errorf("agent %q not registered", name)
 	}
 
+	mcpConfig := filepath.Join(def.WorkDir, ".mcp.json")
+	if _, err := os.Stat(mcpConfig); err != nil {
+		mcpConfig = "" // no MCP config in workdir
+	}
+
 	proc, err := Start(Config{
 		WorkDir:   def.WorkDir,
 		SessionID: def.SessionID,
 		Model:     def.Model,
+		MCPConfig: mcpConfig,
 	})
 	if err != nil {
 		return nil, err
