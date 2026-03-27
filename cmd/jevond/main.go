@@ -201,7 +201,7 @@ func main() {
 
 	// Write .mcp.json for Jevon to discover the MCP server.
 	mcpJSON := fmt.Sprintf(
-		`{"mcpServers":{"jevon":{"url":"http://localhost:%d/mcp"}}}`, *port)
+		`{"mcpServers":{"jevon":{"type":"http","url":"http://localhost:%d/mcp"}}}`, *port)
 	mcpJSONPath := filepath.Join(jevDir, ".mcp.json")
 	if err := os.WriteFile(mcpJSONPath, []byte(mcpJSON), 0o644); err != nil {
 		slog.Error("cannot write .mcp.json", "err", err)
