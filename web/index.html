@@ -29,9 +29,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; b
 #send:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Collapsible turn details */
-.turn-details { align-self: flex-start; max-width: 90%; font-size: 0.8em; }
-.turn-details summary { cursor: pointer; color: #888; padding: 4px 8px; border-radius: 6px; user-select: none; }
-.turn-details summary:hover { color: #aaa; }
+.turn-details { align-self: flex-start; max-width: 90%; font-size: 0.8em; margin: 0; }
+.turn-details summary { cursor: pointer; color: #555; padding: 0 8px; font-size: 0.7em; list-style: none; user-select: none; line-height: 1.2; }
+.turn-details summary::before { content: '\25b6'; margin-right: 4px; display: inline-block; transition: transform 0.15s; }
+.turn-details[open] summary::before { transform: rotate(90deg); }
+.turn-details summary::-webkit-details-marker { display: none; }
+.turn-details summary:hover { color: #888; }
 .turn-details[open] summary { margin-bottom: 4px; }
 .turn-details .turn-items { display: flex; flex-direction: column; gap: 2px; padding: 4px 8px; border-left: 2px solid #333; margin-left: 8px; }
 .turn-item { font-family: "SF Mono", Menlo, monospace; font-size: 0.85em; padding: 2px 0; }
@@ -148,7 +151,6 @@ function startTurn() {
   turnDetails.className = 'turn-details';
   turnDetails.open = true; // Latest turn starts open.
   const summary = document.createElement('summary');
-  summary.textContent = 'working...';
   turnDetails.appendChild(summary);
   turnItems = document.createElement('div');
   turnItems.className = 'turn-items';
@@ -165,8 +167,6 @@ function closeTurn() {
     // No intermediate events — remove the empty details.
     turnDetails.remove();
   } else {
-    // Update summary with count and collapse.
-    turnDetails.querySelector('summary').textContent = n + ' action' + (n===1?'':'s');
     turnDetails.open = false;
   }
   turnDetails = null;
@@ -179,9 +179,6 @@ function addTurnItem(cls, text) {
   d.className = 'turn-item ' + cls;
   d.textContent = text;
   turnItems.appendChild(d);
-  // Update live summary.
-  const n = turnItems.children.length;
-  turnDetails.querySelector('summary').textContent = 'working... (' + n + ' action' + (n===1?'':'s') + ')';
   scrollDown();
 }
 
