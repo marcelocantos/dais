@@ -90,11 +90,12 @@ func Start(cfg Config) (*Process, error) {
 
 	args := []string{
 		"--permission-mode", cfg.PermissionMode,
-		"--session-id", sessionID,
 		"--disallowedTools", disallowed,
 	}
 	if resuming {
 		args = append(args, "--resume", sessionID)
+	} else {
+		args = append(args, "--session-id", sessionID)
 	}
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)
