@@ -287,7 +287,7 @@ func (s *Store) ingestFile(path string) error {
 	s.db.Exec("INSERT OR REPLACE INTO ingest_state (path, offset) VALUES (?, ?)", path, newOffset)
 
 	if count > 0 {
-		slog.Info("memory: ingested", "file", filepath.Base(path), "messages", count)
+		slog.Debug("memory: ingested", "file", filepath.Base(path), "messages", count)
 	}
 	return nil
 }
