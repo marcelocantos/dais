@@ -83,9 +83,15 @@ func Start(cfg Config) (*Process, error) {
 	_, statErr := os.Stat(jsonlPath)
 	resuming := statErr == nil
 
+	// All agents spawned by jevond are forbidden from creating their own
+	// sub-agents. Jevond owns the process lifecycle exclusively. Agents
+	// request new workers via jevond's MCP tools.
+	disallowed := "Agent,TeamCreate,TeamDelete,SendMessage,EnterWorktree"
+
 	args := []string{
 		"--permission-mode", cfg.PermissionMode,
 		"--session-id", sessionID,
+		"--disallowedTools", disallowed,
 	}
 	if resuming {
 		args = append(args, "--resume", sessionID)
@@ -97,7 +103,6 @@ func Start(cfg Config) (*Process, error) {
 
 	cmd := exec.Command("claude", args...)
 	cmd.Dir = workDir
-	cmd.Env = filterEnv(os.Environ(), "CLAUDECODE")
 
 	ptmx, pts, err := pty.Open()
 	if err != nil {
@@ -329,13 +334,3 @@ func projectDir(workDir string) string {
 	return filepath.Join(os.Getenv("HOME"), ".claude", "projects", escaped.String())
 }
 
-func filterEnv(env []string, exclude string) []string {
-	var out []string
-	prefix := exclude + "="
-	for _, e := range env {
-		if !strings.HasPrefix(e, prefix) {
-			out = append(out, e)
-		}
-	}
-	return out
-}
