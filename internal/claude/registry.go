@@ -21,7 +21,8 @@ type AgentDef struct {
 	SessionID string `json:"session_id"`          // persistent Claude session ID
 	Model     string `json:"model,omitempty"`     // model override
 	AutoStart bool   `json:"auto_start"`          // start on jevond startup
-	Parent    string `json:"parent,omitempty"`    // parent agent name (for tree display)
+	Parent        string `json:"parent,omitempty"`         // parent agent name (for tree display)
+	DisallowTools string `json:"disallow_tools,omitempty"` // extra tools to disallow
 }
 
 // Registry manages persistent agent definitions and their running processes.
@@ -113,9 +114,10 @@ func (r *Registry) Start(name string) (*Process, error) {
 	}
 
 	proc, err := Start(Config{
-		WorkDir:   def.WorkDir,
-		SessionID: def.SessionID,
-		Model:     def.Model,
+		WorkDir:       def.WorkDir,
+		SessionID:     def.SessionID,
+		Model:         def.Model,
+		DisallowTools: def.DisallowTools,
 		MCPConfig: mcpConfig,
 	})
 	if err != nil {

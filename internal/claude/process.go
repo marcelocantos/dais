@@ -46,6 +46,7 @@ type Config struct {
 	Model          string   // model override (empty = default)
 	PermissionMode string   // permission mode (default: bypassPermissions)
 	MCPConfig      string   // path to MCP config JSON (empty = use default discovery)
+	DisallowTools  string   // additional comma-separated tools to disallow
 	ExtraArgs      []string // additional CLI args
 }
 
@@ -88,6 +89,9 @@ func Start(cfg Config) (*Process, error) {
 	// sub-agents. Jevond owns the process lifecycle exclusively. Agents
 	// request new workers via jevond's MCP tools.
 	disallowed := "Agent,TeamCreate,TeamDelete,SendMessage,EnterWorktree"
+	if cfg.DisallowTools != "" {
+		disallowed += "," + cfg.DisallowTools
+	}
 
 	args := []string{
 		"--permission-mode", cfg.PermissionMode,

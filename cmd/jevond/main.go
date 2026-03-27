@@ -588,6 +588,9 @@ func main() {
 		slog.Error("jevon agent setup failed", "err", err)
 		os.Exit(1)
 	}
+	// Overseer must not use local tools — it delegates everything via MCP.
+	jevonDef.DisallowTools = "Bash,Read,Write,Edit,Glob,Grep,NotebookEdit"
+	registry.Register(*jevonDef)
 	slog.Info("jevon agent", "session", jevonDef.SessionID)
 
 	srv.SetRegistry(registry)
