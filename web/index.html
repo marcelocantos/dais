@@ -214,6 +214,7 @@ function handle(m) {
       content.forEach(c => {
         if (c.type==='text' && c.text) addMsg('jevon', c.text);
       });
+      input.focus();
     }
   } else if (typ==='tool_result' || typ==='result') {
     const content = m.content || m.message?.content;
@@ -331,7 +332,6 @@ function send() {
 }
 
 input.addEventListener('keydown', e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();} });
-document.addEventListener('keydown', e => { if (e.target !== input && !e.metaKey && !e.ctrlKey && !e.altKey) input.focus(); });
 sendBtn.addEventListener('click', send);
 input.focus();
 connect();
