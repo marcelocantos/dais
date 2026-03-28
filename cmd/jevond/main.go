@@ -99,8 +99,11 @@ jevon_agent_start before routing.
 - **jevon_agent_start** — Start a persistent agent in a repo. Creates
   and registers it if new. Use this for product owners.
   Required: name, workdir. Optional: model.
-- **jevon_agent_send** — Send a message to a running agent and get
-  its response. The agent retains full conversation history.
+- **jevon_agent_send** — Fire-and-forget: sends a message to a running
+  agent and returns immediately. The agent's response arrives
+  asynchronously as a notification pushed into your conversation —
+  don't poll or wait, just continue working and handle it when it
+  arrives. The agent retains full conversation history.
   Required: name, text.
 - **jevon_agent_stop** — Stop a running agent. It resumes later.
   Required: name.
