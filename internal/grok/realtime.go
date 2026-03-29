@@ -96,10 +96,34 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 		pendingCalls: make(map[string]bool),
 	}
 
+	slog.Info("grok: WebSocket connected, sending session config")
+
 	// Configure the session.
 	if err := c.configureSession(ctx); err != nil {
 		conn.CloseNow()
 		return nil, fmt.Errorf("grok: session config failed: %w", err)
+	}
+
+	slog.Info("grok: session config sent, waiting for response")
+
+	// Read the first message to check for immediate errors.
+	_, firstMsg, err := conn.Read(ctx)
+	if err != nil {
+		conn.CloseNow()
+		return nil, fmt.Errorf("grok: first read failed: %w", err)
+	}
+	slog.Info("grok: first message", "data", string(firstMsg))
+
+	var firstEvent map[string]any
+	if err := json.Unmarshal(firstMsg, &firstEvent); err == nil {
+		if firstEvent["type"] == "error" {
+			conn.CloseNow()
+			if errObj, ok := firstEvent["error"].(map[string]any); ok {
+				return nil, fmt.Errorf("grok: server rejected session: %v", errObj["message"])
+			}
+			return nil, fmt.Errorf("grok: server rejected session: %s", string(firstMsg))
+		}
+		c.handleEvent(ctx, firstEvent)
 	}
 
 	// Start read loop.
@@ -230,7 +254,8 @@ func (c *Client) readLoop(ctx context.Context) {
 			closed := c.closed
 			c.mu.Unlock()
 			if !closed {
-				slog.Error("grok: read error", "err", err)
+				status := websocket.CloseStatus(err)
+				slog.Error("grok: read error", "err", err, "close_status", status)
 				if c.cfg.OnError != nil {
 					c.cfg.OnError(err)
 				}
@@ -258,7 +283,7 @@ func (c *Client) handleEvent(ctx context.Context, msg map[string]any) {
 			c.cfg.OnSessionReady()
 		}
 
-	case "response.audio.delta":
+	case "response.output_audio.delta":
 		// Audio output from Grok — decode and forward.
 		if delta, ok := msg["delta"].(string); ok && c.cfg.OnAudio != nil {
 			pcm, err := base64.StdEncoding.DecodeString(delta)
@@ -269,7 +294,7 @@ func (c *Client) handleEvent(ctx context.Context, msg map[string]any) {
 			c.cfg.OnAudio(pcm)
 		}
 
-	case "response.audio_transcript.delta":
+	case "response.output_audio_transcript.delta":
 		// What the model is saying (text).
 		if delta, ok := msg["delta"].(string); ok && c.cfg.OnTranscript != nil {
 			c.cfg.OnTranscript(delta)
@@ -303,7 +328,7 @@ func (c *Client) handleEvent(ctx context.Context, msg map[string]any) {
 		slog.Debug("grok: response complete")
 
 	default:
-		slog.Debug("grok: event", "type", eventType)
+		slog.Info("grok: unhandled event", "type", eventType)
 	}
 }
 
@@ -356,6 +381,13 @@ func (c *Client) send(ctx context.Context, v any) error {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return fmt.Errorf("grok: marshal failed: %w", err)
+	}
+
+	// Log non-audio messages for debugging.
+	if m, ok := v.(map[string]any); ok {
+		if t, _ := m["type"].(string); t != "input_audio_buffer.append" {
+			slog.Debug("grok: sending", "json", string(data))
+		}
 	}
 
 	writeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
