@@ -590,15 +590,13 @@ async function startAudioCapture() {
   const source = audioCtx.createMediaStreamSource(mediaStream);
 
   // ScriptProcessorNode for raw PCM access. Deprecated but universally supported.
-  scriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
+  // 2048 frames at 48kHz ≈ 43ms per chunk — low enough for responsive VAD.
+  scriptNode = audioCtx.createScriptProcessor(2048, 1, 1);
   scriptNode.onaudioprocess = e => {
     if (!voiceWs || voiceWs.readyState !== 1) return;
     const input = e.inputBuffer.getChannelData(0);
-    // Check if mic is actually producing audio.
-    let maxAmp = 0;
-    for (let i = 0; i < input.length; i += 100) maxAmp = Math.max(maxAmp, Math.abs(input[i]));
-    if (!scriptNode._logged) { console.log('voice: mic sampleRate='+audioCtx.sampleRate+' bufLen='+input.length+' maxAmp='+maxAmp.toFixed(4)); scriptNode._logged = true; }
-    if (maxAmp < 0.001) return; // Skip silence to reduce bandwidth.
+    // Log first frame for debugging.
+    if (!scriptNode._logged) { let m=0; for(let i=0;i<input.length;i+=100)m=Math.max(m,Math.abs(input[i])); console.log('voice: mic sampleRate='+audioCtx.sampleRate+' bufLen='+input.length+' maxAmp='+m.toFixed(4)); scriptNode._logged=true; }
     // Downsample from 48kHz to 24kHz and convert to PCM16.
     const ratio = audioCtx.sampleRate / 24000;
     const outLen = Math.floor(input.length / ratio);

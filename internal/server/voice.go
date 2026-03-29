@@ -227,7 +227,8 @@ conversationally for the user. Be concise and natural.`,
 
 		OnUserTranscript: func(text string) {
 			slog.Info("voice: user said", "text", text)
-			// Broadcast user transcript to web UI.
+			// Broadcast user transcript to web UI for display only.
+			// Don't send to Claude — only send_to_jevon tool calls go there.
 			vb.mu.Lock()
 			ws := vb.voiceWS
 			wsCtx := vb.voiceCtx
@@ -238,8 +239,6 @@ conversationally for the user. Be concise and natural.`,
 					"text": text,
 				})
 			}
-			// Also record in the main transcript.
-			vb.srv.HandleUserMessage(text)
 		},
 
 		OnFunctionCall: func(name string, args json.RawMessage) (string, error) {
