@@ -17,6 +17,8 @@ import (
 	"time"
 
 
+	"golang.org/x/term"
+
 	"github.com/marcelocantos/jevon/internal/claude"
 	"github.com/marcelocantos/jevon/internal/cli"
 	"github.com/marcelocantos/jevon/internal/db"
@@ -140,27 +142,17 @@ func main() {
 	model := flag.String("model", "", "default model for worker sessions")
 	jevonModel := flag.String("jevon-model", "", "model for Jevon (default: same as --model)")
 	debug := flag.Bool("debug", false, "enable debug logging")
-	setOpenAIKey := flag.String("set-openai-key", "", "store OpenAI API key in macOS Keychain and exit")
-	setXAIKey := flag.String("set-xai-key", "", "store xAI API key in macOS Keychain and exit")
+	setOpenAIKey := flag.Bool("set-openai-key", false, "prompt for OpenAI API key, store in macOS Keychain, and exit")
+	setXAIKey := flag.Bool("set-xai-key", false, "prompt for xAI API key, store in macOS Keychain, and exit")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	helpAgent := flag.Bool("help-agent", false, "print agent guide and exit")
 	flag.Parse()
 
-	if *setOpenAIKey != "" {
-		if err := storeKeychainKey("openai-api-key", *setOpenAIKey); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to store key: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Println("OpenAI API key stored in macOS Keychain.")
-		os.Exit(0)
+	if *setOpenAIKey {
+		promptAndStoreKey("OpenAI API", "openai-api-key")
 	}
-	if *setXAIKey != "" {
-		if err := storeKeychainKey("xai-api-key", *setXAIKey); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to store key: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Println("xAI API key stored in macOS Keychain.")
-		os.Exit(0)
+	if *setXAIKey {
+		promptAndStoreKey("xAI API", "xai-api-key")
 	}
 
 	if *showVersion {
@@ -699,6 +691,61 @@ func main() {
 
 	// Block until shutdown signal.
 	<-ctx.Done()
+}
+
+// promptAndStoreKey prompts for a key with hidden input, stores it, and exits.
+func promptAndStoreKey(label, service string) {
+	fmt.Fprintf(os.Stderr, "%s key: ", label)
+	key, err := readSecret()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\nFailed to read key: %v\n", err)
+		os.Exit(1)
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		fmt.Fprintln(os.Stderr, "\nNo key entered.")
+		os.Exit(1)
+	}
+	if err := storeKeychainKey(service, key); err != nil {
+		fmt.Fprintf(os.Stderr, "\nFailed to store key: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "\n%s key stored in macOS Keychain.\n", label)
+	os.Exit(0)
+}
+
+// readSecret reads a line from stdin with echo disabled.
+func readSecret() (string, error) {
+	fd := int(os.Stdin.Fd())
+	old, err := term.MakeRaw(fd)
+	if err != nil {
+		// Fallback: not a terminal, just read a line.
+		var line string
+		_, err := fmt.Scanln(&line)
+		return line, err
+	}
+	defer term.Restore(fd, old)
+
+	var buf []byte
+	b := make([]byte, 1)
+	for {
+		if _, err := os.Stdin.Read(b); err != nil {
+			return string(buf), err
+		}
+		if b[0] == '\n' || b[0] == '\r' {
+			return string(buf), nil
+		}
+		if b[0] == 3 { // Ctrl-C
+			return "", fmt.Errorf("interrupted")
+		}
+		if b[0] == 127 || b[0] == 8 { // Backspace
+			if len(buf) > 0 {
+				buf = buf[:len(buf)-1]
+			}
+			continue
+		}
+		buf = append(buf, b[0])
+	}
 }
 
 // storeKeychainKey stores a value in the macOS Keychain under the "jevon" account.
