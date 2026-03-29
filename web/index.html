@@ -75,7 +75,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 
 /* Chat pane */
 #chat-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-#messages { flex: 1; overflow-y: auto; padding: 24px 20px; display: flex; flex-direction: column; gap: 6px; scrollbar-width: thin; scrollbar-color: var(--surface-high) transparent; }
+#messages { flex: 1; overflow-y: auto; padding: 24px 20px; display: flex; flex-direction: column; gap: 8px; scrollbar-width: thin; scrollbar-color: var(--surface-high) transparent; }
 #messages::-webkit-scrollbar { width: 6px; }
 #messages::-webkit-scrollbar-track { background: transparent; }
 #messages::-webkit-scrollbar-thumb { background: var(--surface-high); border-radius: 3px; }
@@ -115,12 +115,13 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #send:disabled { opacity: 0.3; cursor: not-allowed; }
 
 /* Collapsible turn details */
-.turn-details { align-self: flex-start; max-width: 85%; margin: 0; }
+.turn-details { align-self: flex-start; max-width: 85%; margin: 2px 0 0 0; }
 .turn-details summary { cursor: pointer; color: var(--text-muted); padding: 4px 4px; font-size: 16px; list-style: none; user-select: none; line-height: 1; }
 .turn-details summary::before { content: '\25b8'; margin-right: 3px; display: inline-block; transition: transform 0.15s; font-size: 16px; }
 .turn-details[open] summary::before { transform: rotate(90deg); }
 .turn-details summary::-webkit-details-marker { display: none; }
-.msg-time { font-size: 10px; color: var(--text-muted); margin-top: 2px; font-family: var(--mono); letter-spacing: -0.02em; user-select: none; }
+.msg-time { font-size: 10px; color: var(--text-muted); margin-top: 4px; padding-top: 2px; font-family: var(--mono); letter-spacing: -0.02em; user-select: none; line-height: 1; }
+.msg.user .msg-time { text-align: right; }
 .turn-details summary:hover { color: var(--text-dim); }
 .turn-details[open] summary { margin-bottom: 4px; }
 .turn-details .turn-items { display: flex; flex-direction: column; gap: 1px; padding: 4px 10px; border-left: 1px solid var(--border); margin-left: 6px; }
