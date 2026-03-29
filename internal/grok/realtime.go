@@ -16,16 +16,12 @@ import (
 )
 
 // Tool defines a function tool available to the Grok model.
+// For custom functions: Type="function", Name, Description, Parameters.
 type Tool struct {
-	Type     string         `json:"type"`
-	Function ToolFunction   `json:"function"`
-}
-
-// ToolFunction describes a callable function.
-type ToolFunction struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Parameters  json.RawMessage `json:"parameters"`
+	Type        string          `json:"type"`
+	Name        string          `json:"name,omitempty"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
 }
 
 // Config holds configuration for a Grok Realtime session.
@@ -79,7 +75,7 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("grok: API key required")
 	}
 	if cfg.Voice == "" {
-		cfg.Voice = "eve"
+		cfg.Voice = "Eve"
 	}
 
 	conn, _, err := websocket.Dial(ctx, "wss://api.x.ai/v1/realtime", &websocket.DialOptions{
@@ -196,16 +192,19 @@ func (c *Client) configureSession(ctx context.Context) error {
 			"silence_duration_ms": 800,
 			"prefix_padding_ms":   300,
 		},
-		"input_audio_format": map[string]any{
-			"type": "audio/pcm",
-			"rate": 24000,
-		},
-		"output_audio_format": map[string]any{
-			"type": "audio/pcm",
-			"rate": 24000,
-		},
-		"input_audio_transcription": map[string]any{
-			"model": "grok-2-latest",
+		"audio": map[string]any{
+			"input": map[string]any{
+				"format": map[string]any{
+					"type": "audio/pcm",
+					"rate": 24000,
+				},
+			},
+			"output": map[string]any{
+				"format": map[string]any{
+					"type": "audio/pcm",
+					"rate": 24000,
+				},
+			},
 		},
 	}
 

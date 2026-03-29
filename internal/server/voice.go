@@ -152,7 +152,7 @@ func (vb *VoiceBridge) ensureGrokSession(ctx context.Context) error {
 
 	client, err := grok.Connect(ctx, grok.Config{
 		APIKey: vb.apiKey,
-		Voice:  "eve",
+		Voice:  "Eve",
 		SystemPrompt: `You are Jevon, a personal AI assistant. You are the voice
 interface for a multi-agent system. When the user asks you to do
 something that requires code, file operations, research, or any
@@ -166,21 +166,19 @@ conversationally for the user. Be concise and natural.`,
 
 		Tools: []grok.Tool{
 			{
-				Type: "function",
-				Function: grok.ToolFunction{
-					Name:        "send_to_jevon",
-					Description: "Send a message to the Jevon agent system for processing. Use this for any request that requires code, file operations, research, or substantive work. The message should be a clear natural language description of what the user wants.",
-					Parameters: json.RawMessage(`{
-						"type": "object",
-						"properties": {
-							"message": {
-								"type": "string",
-								"description": "The user's request, rephrased as a clear instruction for the agent system"
-							}
-						},
-						"required": ["message"]
-					}`),
-				},
+				Type:        "function",
+				Name:        "send_to_jevon",
+				Description: "Send a message to the Jevon agent system for processing. Use this for any request that requires code, file operations, research, or substantive work. The message should be a clear natural language description of what the user wants.",
+				Parameters: json.RawMessage(`{
+					"type": "object",
+					"properties": {
+						"message": {
+							"type": "string",
+							"description": "The user's request, rephrased as a clear instruction for the agent system"
+						}
+					},
+					"required": ["message"]
+				}`),
 			},
 		},
 
