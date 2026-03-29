@@ -590,14 +590,33 @@ async function startAudioCapture() {
   const source = audioCtx.createMediaStreamSource(mediaStream);
 
   // ScriptProcessorNode for raw PCM access. Deprecated but universally supported.
-  // 2048 frames at 48kHz ≈ 43ms per chunk — low enough for responsive VAD.
+  // 2048 frames at 48kHz ≈ 43ms per chunk.
   scriptNode = audioCtx.createScriptProcessor(2048, 1, 1);
+
+  // Local adaptive VAD state.
+  const vad = {
+    noiseFloor: 0.01,       // Adaptive noise estimate (RMS).
+    speaking: false,         // Currently in speech?
+    holdUntil: 0,            // Timestamp: keep streaming until this time.
+    holdMs: 800,             // Hold speech state for this long after drop.
+    onsetRatio: 3.0,         // RMS must exceed noiseFloor * this to trigger speech.
+    offsetRatio: 1.8,        // RMS must drop below noiseFloor * this to start hold timer.
+    noiseAlpha: 0.02,        // Noise floor EMA rate (slow adaptation).
+    preBuffer: [],            // Ring buffer of recent PCM16 chunks.
+    preBufferMax: 7,          // ~300ms at 43ms/chunk.
+    flushedPre: false,       // Have we sent the pre-buffer for this utterance?
+  };
+
   scriptNode.onaudioprocess = e => {
     if (!voiceWs || voiceWs.readyState !== 1) return;
     const input = e.inputBuffer.getChannelData(0);
-    // Log first frame for debugging.
-    if (!scriptNode._logged) { let m=0; for(let i=0;i<input.length;i+=100)m=Math.max(m,Math.abs(input[i])); console.log('voice: mic sampleRate='+audioCtx.sampleRate+' bufLen='+input.length+' maxAmp='+m.toFixed(4)); scriptNode._logged=true; }
-    // Downsample from 48kHz to 24kHz and convert to PCM16.
+
+    // Compute RMS.
+    let sum = 0;
+    for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
+    const rms = Math.sqrt(sum / input.length);
+
+    // Downsample to 24kHz PCM16.
     const ratio = audioCtx.sampleRate / 24000;
     const outLen = Math.floor(input.length / ratio);
     const pcm16 = new Int16Array(outLen);
@@ -606,7 +625,47 @@ async function startAudioCapture() {
       const s = Math.max(-1, Math.min(1, input[idx]));
       pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
     }
-    voiceWs.send(pcm16.buffer);
+
+    const now = Date.now();
+
+    if (!vad.speaking) {
+      // Update noise floor from non-speech frames.
+      vad.noiseFloor += vad.noiseAlpha * (rms - vad.noiseFloor);
+
+      // Keep pre-buffer ring.
+      vad.preBuffer.push(pcm16);
+      if (vad.preBuffer.length > vad.preBufferMax) vad.preBuffer.shift();
+
+      // Check onset.
+      if (rms > vad.noiseFloor * vad.onsetRatio && rms > 0.005) {
+        vad.speaking = true;
+        vad.holdUntil = now + vad.holdMs;
+        vad.flushedPre = false;
+        voiceStatusText.textContent = 'hearing you';
+        voiceBtn.style.boxShadow = '0 0 12px rgba(248,113,113,0.7)';
+      }
+    }
+
+    if (vad.speaking) {
+      // Flush pre-buffer on first speech frame.
+      if (!vad.flushedPre) {
+        for (const chunk of vad.preBuffer) voiceWs.send(chunk.buffer);
+        vad.preBuffer = [];
+        vad.flushedPre = true;
+      }
+
+      // Send this frame.
+      voiceWs.send(pcm16.buffer);
+
+      // Check offset.
+      if (rms > vad.noiseFloor * vad.offsetRatio) {
+        vad.holdUntil = now + vad.holdMs;
+      } else if (now > vad.holdUntil) {
+        vad.speaking = false;
+        voiceStatusText.textContent = 'listening';
+        voiceBtn.style.boxShadow = '';
+      }
+    }
   };
 
   source.connect(scriptNode);
