@@ -693,8 +693,28 @@ func main() {
 	<-ctx.Done()
 }
 
+// keyInstructions maps service names to instructions for obtaining the key.
+var keyInstructions = map[string]string{
+	"xai-api-key": `To get an xAI API key:
+  1. Go to https://console.x.ai/
+  2. Sign in with your X (Twitter) account
+  3. Navigate to API Keys
+  4. Click "Create API Key"
+  5. Copy the key and paste it below
+`,
+	"openai-api-key": `To get an OpenAI API key:
+  1. Go to https://platform.openai.com/api-keys
+  2. Sign in or create an account
+  3. Click "Create new secret key"
+  4. Copy the key and paste it below
+`,
+}
+
 // promptAndStoreKey prompts for a key with hidden input, stores it, and exits.
 func promptAndStoreKey(label, service string) {
+	if instructions, ok := keyInstructions[service]; ok {
+		fmt.Fprint(os.Stderr, instructions)
+	}
 	fmt.Fprintf(os.Stderr, "%s key: ", label)
 	key, err := readSecret()
 	if err != nil {
