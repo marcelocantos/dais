@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Jevon</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F916;</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm/lib/xterm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit/lib/addon-fit.min.js"></script>
@@ -582,8 +583,10 @@ function stopVoice() {
   if (voiceWs) { voiceWs.close(); voiceWs = null; }
 }
 
-function startAudioCapture() {
+async function startAudioCapture() {
   audioCtx = audioCtx || new AudioContext({ sampleRate: 48000 });
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
+  console.log('voice: AudioContext state='+audioCtx.state+' sampleRate='+audioCtx.sampleRate);
   const source = audioCtx.createMediaStreamSource(mediaStream);
 
   // ScriptProcessorNode for raw PCM access. Deprecated but universally supported.
@@ -591,6 +594,11 @@ function startAudioCapture() {
   scriptNode.onaudioprocess = e => {
     if (!voiceWs || voiceWs.readyState !== 1) return;
     const input = e.inputBuffer.getChannelData(0);
+    // Check if mic is actually producing audio.
+    let maxAmp = 0;
+    for (let i = 0; i < input.length; i += 100) maxAmp = Math.max(maxAmp, Math.abs(input[i]));
+    if (!scriptNode._logged) { console.log('voice: mic sampleRate='+audioCtx.sampleRate+' bufLen='+input.length+' maxAmp='+maxAmp.toFixed(4)); scriptNode._logged = true; }
+    if (maxAmp < 0.001) return; // Skip silence to reduce bandwidth.
     // Downsample from 48kHz to 24kHz and convert to PCM16.
     const ratio = audioCtx.sampleRate / 24000;
     const outLen = Math.floor(input.length / ratio);
