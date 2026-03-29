@@ -120,6 +120,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .turn-details summary::before { content: '\25b8'; margin-right: 3px; display: inline-block; transition: transform 0.15s; font-size: 16px; }
 .turn-details[open] summary::before { transform: rotate(90deg); }
 .turn-details summary::-webkit-details-marker { display: none; }
+.msg-time { font-size: 10px; color: var(--text-muted); margin-top: 2px; font-family: var(--mono); letter-spacing: -0.02em; user-select: none; }
 .turn-details summary:hover { color: var(--text-dim); }
 .turn-details[open] summary { margin-bottom: 4px; }
 .turn-details .turn-items { display: flex; flex-direction: column; gap: 1px; padding: 4px 10px; border-left: 1px solid var(--border); margin-left: 6px; }
@@ -285,6 +286,11 @@ function addMsg(role, text) {
   } else {
     d.textContent = text;
   }
+  const ts = document.createElement('div');
+  ts.className = 'msg-time';
+  ts.dataset.ts = Date.now();
+  ts.textContent = relTime(Date.now());
+  d.appendChild(ts);
   msgs.appendChild(d);
   scrollDown();
   return d;
@@ -337,6 +343,31 @@ function summariseInput(obj) {
   const v = obj[keys[0]];
   return typeof v === 'string' ? truncate(v, 60) : keys.join(', ');
 }
+
+function relTime(ms) {
+  const s = Math.floor((Date.now() - ms) / 1000);
+  if (s < 60) return 'now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + 'm';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h';
+  const d = Math.floor(h / 24);
+  if (d < 7) return d + 'd';
+  const dt = new Date(ms);
+  const now = new Date();
+  if (dt.getFullYear() === now.getFullYear()) {
+    const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    if (d < 14) return days[dt.getDay()] + ' ' + String(dt.getHours()).padStart(2,'0') + ':' + String(dt.getMinutes()).padStart(2,'0');
+    return months[dt.getMonth()] + ' ' + dt.getDate();
+  }
+  return dt.toLocaleDateString();
+}
+setInterval(() => {
+  document.querySelectorAll('.msg-time[data-ts]').forEach(el => {
+    el.textContent = relTime(parseInt(el.dataset.ts));
+  });
+}, 30000);
 
 function send() {
   const t = input.value.trim();
