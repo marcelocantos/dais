@@ -61,16 +61,27 @@ struct ContentView: View {
         case .disconnected:
             ConnectView()
         case .connecting:
-            if connection.hasConnected {
-                ChatView()
+            if connection.hasConnected, let url = connection.httpBaseURL {
+                WebUIView(url: url)
+                    .ignoresSafeArea()
             } else {
                 ProgressView("Connecting...")
             }
         case .connected:
-            ChatView()
+            if let url = connection.httpBaseURL {
+                WebUIView(url: url)
+                    .ignoresSafeArea()
+            } else {
+                ChatView()
+            }
         case .error:
             if connection.hasConnected {
-                ChatView()
+                if let url = connection.httpBaseURL {
+                    WebUIView(url: url)
+                        .ignoresSafeArea()
+                } else {
+                    ChatView()
+                }
             } else {
                 ConnectView()
             }
