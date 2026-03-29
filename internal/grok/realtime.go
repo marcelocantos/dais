@@ -31,8 +31,11 @@ type Config struct {
 	// OnAudio is called with base64-decoded PCM audio from Grok.
 	OnAudio func(pcm []byte)
 
-	// OnTranscript is called with text the model speaks.
+	// OnTranscript is called with text deltas the model speaks.
 	OnTranscript func(text string)
+
+	// OnTranscriptDone is called when the model finishes speaking.
+	OnTranscriptDone func()
 
 	// OnUserTranscript is called with transcribed user speech.
 	OnUserTranscript func(text string)
@@ -298,6 +301,11 @@ func (c *Client) handleEvent(ctx context.Context, msg map[string]any) {
 		// What the model is saying (text).
 		if delta, ok := msg["delta"].(string); ok && c.cfg.OnTranscript != nil {
 			c.cfg.OnTranscript(delta)
+		}
+
+	case "response.output_audio_transcript.done":
+		if c.cfg.OnTranscriptDone != nil {
+			c.cfg.OnTranscriptDone()
 		}
 
 	case "conversation.item.input_audio_transcription.completed":

@@ -23,6 +23,7 @@ type VoiceBridge struct {
 	client *grok.Client
 	voiceWS *websocket.Conn // the connected browser/iOS client
 	voiceCtx context.Context
+	audioLogged bool
 }
 
 // NewVoiceBridge creates a voice bridge with the given xAI API key.
@@ -94,6 +95,10 @@ func (vb *VoiceBridge) HandleVoiceWS(w http.ResponseWriter, r *http.Request) {
 			client := vb.client
 			vb.mu.Unlock()
 			if client != nil {
+				if !vb.audioLogged {
+					slog.Info("voice: forwarding audio to grok", "bytes", len(data))
+					vb.audioLogged = true
+				}
 				if err := client.SendAudio(ctx, data); err != nil {
 					slog.Warn("voice: audio forward failed", "err", err)
 				}
@@ -196,7 +201,6 @@ conversationally for the user. Be concise and natural.`,
 		},
 
 		OnTranscript: func(text string) {
-			// Broadcast what Grok is saying as text too.
 			vb.mu.Lock()
 			ws := vb.voiceWS
 			wsCtx := vb.voiceCtx
@@ -205,6 +209,18 @@ conversationally for the user. Be concise and natural.`,
 				vb.sendJSON(ws, wsCtx, map[string]any{
 					"type": "assistant_transcript",
 					"text": text,
+				})
+			}
+		},
+
+		OnTranscriptDone: func() {
+			vb.mu.Lock()
+			ws := vb.voiceWS
+			wsCtx := vb.voiceCtx
+			vb.mu.Unlock()
+			if ws != nil {
+				vb.sendJSON(ws, wsCtx, map[string]any{
+					"type": "assistant_transcript_done",
 				})
 			}
 		},

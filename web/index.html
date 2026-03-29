@@ -649,6 +649,27 @@ function handleVoiceMsg(msg) {
     voiceStatusText.textContent = 'listening';
   } else if (msg.type === 'assistant_transcript') {
     voiceStatusText.textContent = 'speaking';
+    // Accumulate transcript deltas into a streaming message.
+    if (!handleVoiceMsg._assistantEl) {
+      handleVoiceMsg._assistantEl = addMsg('jevon', '');
+    }
+    handleVoiceMsg._assistantBuf = (handleVoiceMsg._assistantBuf || '') + msg.text;
+    // Update the message content (plain text, not markdown, since it streams).
+    const el = handleVoiceMsg._assistantEl;
+    const timeEl = el.querySelector('.msg-time');
+    el.textContent = handleVoiceMsg._assistantBuf;
+    if (timeEl) el.appendChild(timeEl);
+    scrollDown();
+  } else if (msg.type === 'assistant_transcript_done') {
+    // Finalize: re-render as markdown.
+    if (handleVoiceMsg._assistantEl && handleVoiceMsg._assistantBuf) {
+      const el = handleVoiceMsg._assistantEl;
+      const timeEl = el.querySelector('.msg-time');
+      el.innerHTML = marked.parse(handleVoiceMsg._assistantBuf);
+      if (timeEl) el.appendChild(timeEl);
+    }
+    handleVoiceMsg._assistantEl = null;
+    handleVoiceMsg._assistantBuf = '';
   } else if (msg.type === 'status') {
     if (msg.status === 'ready') {
       voiceStatusText.textContent = 'listening';
