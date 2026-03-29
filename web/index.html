@@ -197,11 +197,13 @@ function connect() {
 function handle(m) {
   const typ = m.type;
 
+  const msgTs = m.timestamp ? new Date(m.timestamp).getTime() : Date.now();
+
   if (typ==='user') {
     const content = m.message?.content;
     if (typeof content === 'string') {
       closeTurn();
-      addMsg('user', content);
+      addMsg('user', content, msgTs);
       startTurn();
     } else if (Array.isArray(content)) {
       content.forEach(c => {
@@ -226,7 +228,7 @@ function handle(m) {
     if (hasText) {
       closeTurn();
       content.forEach(c => {
-        if (c.type==='text' && c.text) addMsg('jevon', c.text);
+        if (c.type==='text' && c.text) addMsg('jevon', c.text, msgTs);
       });
       input.focus();
     }
@@ -279,7 +281,7 @@ function addTurnItem(cls, text) {
   scrollDown();
 }
 
-function addMsg(role, text) {
+function addMsg(role, text, when) {
   const d = document.createElement('div');
   d.className = 'msg ' + role;
   if (role === 'jevon') {
@@ -287,10 +289,11 @@ function addMsg(role, text) {
   } else {
     d.textContent = text;
   }
+  const ms = when || Date.now();
   const ts = document.createElement('div');
   ts.className = 'msg-time';
-  ts.dataset.ts = Date.now();
-  ts.textContent = relTime(Date.now());
+  ts.dataset.ts = ms;
+  ts.textContent = relTime(ms);
   d.appendChild(ts);
   msgs.appendChild(d);
   scrollDown();
