@@ -495,92 +495,25 @@ considers the full accumulated input before continuing.
 
 ### 🎯T17 Jevon UI renders via ge engine
 
-- **Value**: 13
+- **Value**: 3
 - **Cost**: 21
-- **Weight**: 0.6 (value 13 / cost 21)
-- **Status**: not started
+- **Weight**: 0.1 (value 3 / cost 21)
+- **Status**: deferred — bgfx requires reimplementing markdown rendering,
+  terminal emulation, text input, and layout from scratch. Web view
+  (WKWebView) or native SwiftUI (🎯T9) are better paths for the
+  car-mounted iPad use case.
 - **Discovered**: 2026-03-29
 
 **Desired state:** Jevon's UI is a C++ ge application running as a
 separate process alongside jevond (Go). The ge app renders the UI and
 communicates with jevond over WebSocket/HTTP (same protocol the web UI
-uses today). For desktop development, the ge app uses SessionDirect
-(local GPU rendering). When the ge scene protocol matures, the iPad
-runs the ge player and the ge app runs headless on the server — enabling
-remote UI updates without app rebuilds (critical for the car-mounted
-iPad use case).
+uses today).
 
-**Why:** Jevon will be permanently installed on a car-mounted iPad.
-Server-driven rendering via ge enables fixing UI issues remotely without
-app rebuilds, and converges with the yourworld2/ge rendering
-infrastructure.
-
-**Sub-targets:**
-
-#### 🎯T17.1 jevon-ui C++ ge application scaffold
-
-- **Value**: 5
-- **Cost**: 5
-- **Weight**: 1.0 (value 5 / cost 5)
-- **Parent**: 🎯T17
-- **Status**: not started
-- **Discovered**: 2026-03-29
-
-**Desired state:** A minimal C++ ge application connects to jevond via
-WebSocket, receives chat messages, and renders them. Uses SessionDirect
-for local desktop rendering. Built via ge's existing Makefile
-infrastructure.
-
-**Acceptance criteria:**
-- `bin/jevon-ui` builds via `make jevon-ui` using ge's Makefile include.
-- Connects to jevond's WebSocket endpoint on startup.
-- Displays received chat messages in a scrolling text view.
-- Accepts text input and sends it to jevond.
-
-#### 🎯T17.2 jevon-ui feature parity with web UI
-
-- **Value**: 8
-- **Cost**: 8
-- **Weight**: 1.0 (value 8 / cost 8)
-- **Parent**: 🎯T17
-- **Depends on**: 🎯T17.1
-- **Status**: not started
-- **Discovered**: 2026-03-29
-
-**Desired state:** The ge-rendered UI has full feature parity with the
-web UI: chat display, message input, status indicators, agent
-management — everything the web UI does today, rendered by ge.
-
-**Acceptance criteria:**
-- Chat messages with markdown rendering.
-- Agent tree display with status indicators.
-- Terminal viewer for selected agents.
-- Theme support.
-- Message timestamps.
-
-#### 🎯T17.3 jevon-ui runs headless with scene protocol
-
-- **Value**: 8
-- **Cost**: 13
-- **Weight**: 0.6 (value 8 / cost 13)
-- **Parent**: 🎯T17
-- **Depends on**: 🎯T17.2, yourworld2 🎯T52 (scene protocol)
-- **Status**: not started
-- **Discovered**: 2026-03-29
-
-**Desired state:** jevon-ui renders server-side and streams to the ge
-player on iPad via the scene wire protocol. This replaces the Lua VDOM →
-SwiftUI pathway.
-
-**Acceptance criteria:**
-- jevon-ui runs headless (no local GPU) with ge's SessionWire.
-- iPad ge player connects and displays the full Jevon UI.
-- UI updates are immediate — no app rebuild required.
-- Lua VDOM pathway can be deprecated.
-
-**Dependencies note:** Lua VDOM remains the active UI pathway until
-🎯T17.2 is achieved. 🎯T17.3 depends on yourworld2's scene protocol
-work (🎯T52).
+**Why deferred:** The current web UI already works well. Rebuilding it
+in bgfx means solving text rendering, markdown, terminal emulation,
+scrolling, layout, and text input — months of work for no functional
+gain. Revisit only if ge's scene protocol matures to the point where
+streaming rendered frames to iPad becomes practical.
 
 ### 🎯T16 Session-to-agent migration
 
