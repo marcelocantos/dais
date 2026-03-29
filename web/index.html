@@ -113,11 +113,15 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #send { padding: 11px 22px; border-radius: 8px; border: none; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; font-family: var(--sans); cursor: pointer; letter-spacing: 0.02em; transition: opacity 0.15s; }
 #send:hover { opacity: 0.85; }
 #send:disabled { opacity: 0.3; cursor: not-allowed; }
-#voice-btn { padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text-dim); font-size: 16px; cursor: pointer; transition: all 0.15s; line-height: 1; }
+#voice-btn { padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text-dim); font-size: 16px; cursor: pointer; transition: all 0.15s; line-height: 1; position: relative; }
 #voice-btn:hover { border-color: var(--accent); color: var(--accent); }
-#voice-btn.active { background: var(--red); color: #fff; border-color: var(--red); animation: pulse 1.5s ease-in-out infinite; }
-#voice-btn.connecting { opacity: 0.5; cursor: wait; }
-@keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(248,113,113,0.4); } 50% { box-shadow: 0 0 0 6px rgba(248,113,113,0); } }
+#voice-btn.active { background: var(--red); color: #fff; border-color: var(--red); box-shadow: 0 0 12px rgba(248,113,113,0.5); animation: pulse 1.5s ease-in-out infinite; }
+#voice-btn.connecting { background: var(--amber); color: #fff; border-color: var(--amber); animation: pulse 1.5s ease-in-out infinite; cursor: wait; }
+@keyframes pulse { 0%,100% { box-shadow: 0 0 4px 0 rgba(248,113,113,0.4); } 50% { box-shadow: 0 0 12px 4px rgba(248,113,113,0.15); } }
+#voice-status { display: none; align-items: center; gap: 5px; margin-left: 8px; font-size: 11px; }
+#voice-status.on { display: flex; color: var(--red); }
+#voice-status .voice-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--red); animation: voice-blink 1s ease-in-out infinite; }
+@keyframes voice-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
 .voice-indicator { font-size: 11px; color: var(--text-muted); padding: 4px 4px; align-self: center; font-style: italic; }
 
 /* Collapsible turn details */
@@ -163,7 +167,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 </style>
 </head>
 <body>
-<div id="status"><span class="dot off" id="dot"></span><span id="status-text">connecting</span><div id="theme-toggle"><button data-t="light" title="Light">&#9788;</button><button data-t="system" title="System" class="active">&#9680;</button><button data-t="dark" title="Dark">&#9790;</button></div></div>
+<div id="status"><span class="dot off" id="dot"></span><span id="status-text">connecting</span><span id="voice-status"><span class="voice-dot"></span><span id="voice-status-text">listening</span></span><div id="theme-toggle"><button data-t="light" title="Light">&#9788;</button><button data-t="system" title="System" class="active">&#9680;</button><button data-t="dark" title="Dark">&#9790;</button></div></div>
 <div id="main">
   <div id="chat-pane">
     <div id="messages"></div>
@@ -508,6 +512,8 @@ if (savedInput) { input.value = savedInput; sessionStorage.removeItem('jevon-inp
 
 // Voice bridge.
 const voiceBtn = document.getElementById('voice-btn');
+const voiceStatus = document.getElementById('voice-status');
+const voiceStatusText = document.getElementById('voice-status-text');
 let voiceWs = null;
 let voiceActive = false;
 let audioCtx = null;
@@ -536,6 +542,8 @@ async function startVoice() {
       voiceBtn.classList.remove('connecting');
       voiceBtn.classList.add('active');
       voiceActive = true;
+      voiceStatus.classList.add('on');
+      voiceStatusText.textContent = 'connecting to grok...';
       startAudioCapture();
     };
 
@@ -567,6 +575,7 @@ async function startVoice() {
 function stopVoice() {
   voiceActive = false;
   voiceBtn.classList.remove('active', 'connecting');
+  voiceStatus.classList.remove('on');
 
   if (scriptNode) { scriptNode.disconnect(); scriptNode = null; }
   if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
@@ -629,12 +638,18 @@ function drainPlayback() {
 function handleVoiceMsg(msg) {
   if (msg.type === 'user_transcript') {
     addMsg('user', msg.text + ' \u{1F3A4}');
+    voiceStatusText.textContent = 'listening';
   } else if (msg.type === 'assistant_transcript') {
-    // Grok speaking — could show inline, but it'll also come through as agent text.
+    voiceStatusText.textContent = 'speaking';
   } else if (msg.type === 'status') {
-    console.log('voice status:', msg.status);
+    if (msg.status === 'ready') {
+      voiceStatusText.textContent = 'listening';
+    } else {
+      voiceStatusText.textContent = msg.status;
+    }
   } else if (msg.type === 'error') {
     console.error('voice error:', msg.error);
+    voiceStatusText.textContent = 'error';
     const d = document.createElement('div');
     d.className = 'voice-indicator';
     d.textContent = 'Voice error: ' + msg.error;
