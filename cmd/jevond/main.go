@@ -141,6 +141,7 @@ func main() {
 	jevonModel := flag.String("jevon-model", "", "model for Jevon (default: same as --model)")
 	debug := flag.Bool("debug", false, "enable debug logging")
 	setOpenAIKey := flag.String("set-openai-key", "", "store OpenAI API key in macOS Keychain and exit")
+	setXAIKey := flag.String("set-xai-key", "", "store xAI API key in macOS Keychain and exit")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	helpAgent := flag.Bool("help-agent", false, "print agent guide and exit")
 	flag.Parse()
@@ -151,6 +152,14 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println("OpenAI API key stored in macOS Keychain.")
+		os.Exit(0)
+	}
+	if *setXAIKey != "" {
+		if err := storeKeychainKey("xai-api-key", *setXAIKey); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to store key: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("xAI API key stored in macOS Keychain.")
 		os.Exit(0)
 	}
 
@@ -260,6 +269,23 @@ func main() {
 	} else if key := os.Getenv("OPENAI_API_KEY"); key != "" {
 		srv.SetOpenAIKey(key)
 		slog.Info("OpenAI API key loaded from environment")
+	}
+
+	// Load xAI API key for Grok Realtime voice bridge.
+	var xaiKey string
+	if key, err := loadKeychainKey("xai-api-key"); err == nil && key != "" {
+		xaiKey = key
+		slog.Info("xAI API key loaded from Keychain")
+	} else if key := os.Getenv("XAI_API_KEY"); key != "" {
+		xaiKey = key
+		slog.Info("xAI API key loaded from environment")
+	}
+	if xaiKey != "" {
+		vb := server.NewVoiceBridge(srv, xaiKey)
+		srv.SetVoiceBridge(vb)
+		slog.Info("Grok voice bridge configured")
+	} else {
+		slog.Info("no xAI API key — voice bridge disabled (set XAI_API_KEY or store via: security add-generic-password -a jevon -s xai-api-key -w YOUR_KEY)")
 	}
 
 	// Transcript reader for Lua access to Claude session transcripts.

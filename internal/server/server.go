@@ -79,6 +79,8 @@ type Server struct {
 	proc          *claude.Process
 	registry      *claude.Registry
 	chatListeners []chan string
+
+	voiceBridge *VoiceBridge
 }
 
 // New creates a Server with the given Jevon instance, manager, database, version string,
@@ -159,6 +161,11 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 				if err := s.db.AppendTranscript("jevon", turnText); err != nil {
 					slog.Error("failed to persist jevon turn", "err", err)
 				}
+
+				// If voice bridge is active, inject the response for TTS.
+				if s.voiceBridge != nil {
+					s.voiceBridge.InjectResponse(turnText)
+				}
 			}
 
 			if s.viewState != nil {
@@ -218,6 +225,18 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{id}", s.handleGetSession)
 	mux.HandleFunc("POST /api/sessions/{id}/kill", s.handleKillSession)
 	mux.HandleFunc("POST /api/realtime/token", s.handleRealtimeToken)
+	mux.HandleFunc("/ws/voice", s.handleVoice)
+}
+
+func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	vb := s.voiceBridge
+	s.mu.RUnlock()
+	if vb == nil {
+		http.Error(w, "voice not configured (no XAI_API_KEY)", http.StatusServiceUnavailable)
+		return
+	}
+	vb.HandleVoiceWS(w, r)
 }
 
 // handleRealtimeToken proxies an ephemeral token request to the OpenAI
@@ -255,6 +274,16 @@ func (s *Server) handleRealtimeToken(w http.ResponseWriter, r *http.Request) {
 
 // SetOpenAIKey sets the OpenAI API key for Realtime API token proxying.
 func (s *Server) SetOpenAIKey(key string) { s.openAIKey = key }
+
+// SetVoiceBridge attaches a Grok voice bridge for the /ws/voice endpoint.
+func (s *Server) SetVoiceBridge(vb *VoiceBridge) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.voiceBridge = vb
+}
+
+// VoiceBridgeRef returns the voice bridge, if configured.
+func (s *Server) VoiceBridgeRef() *VoiceBridge { return s.voiceBridge }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")

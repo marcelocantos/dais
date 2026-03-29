@@ -113,6 +113,12 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 #send { padding: 11px 22px; border-radius: 8px; border: none; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; font-family: var(--sans); cursor: pointer; letter-spacing: 0.02em; transition: opacity 0.15s; }
 #send:hover { opacity: 0.85; }
 #send:disabled { opacity: 0.3; cursor: not-allowed; }
+#voice-btn { padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text-dim); font-size: 16px; cursor: pointer; transition: all 0.15s; line-height: 1; }
+#voice-btn:hover { border-color: var(--accent); color: var(--accent); }
+#voice-btn.active { background: var(--red); color: #fff; border-color: var(--red); animation: pulse 1.5s ease-in-out infinite; }
+#voice-btn.connecting { opacity: 0.5; cursor: wait; }
+@keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(248,113,113,0.4); } 50% { box-shadow: 0 0 0 6px rgba(248,113,113,0); } }
+.voice-indicator { font-size: 11px; color: var(--text-muted); padding: 4px 4px; align-self: center; font-style: italic; }
 
 /* Collapsible turn details */
 .turn-details { align-self: flex-start; max-width: 85%; margin: 2px 0 0 0; }
@@ -164,6 +170,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
     <div id="input-bar">
       <input id="input" placeholder="Talk to Jevon..." autocomplete="off">
       <button id="send" disabled>Send</button>
+      <button id="voice-btn" title="Hold to talk (or click to toggle)">&#127908;</button>
     </div>
   </div>
   <div id="activity-pane">
@@ -498,6 +505,143 @@ function closeTerminal() {
 // Preserve input across hot reloads.
 const savedInput = sessionStorage.getItem('jevon-input');
 if (savedInput) { input.value = savedInput; sessionStorage.removeItem('jevon-input'); }
+
+// Voice bridge.
+const voiceBtn = document.getElementById('voice-btn');
+let voiceWs = null;
+let voiceActive = false;
+let audioCtx = null;
+let mediaStream = null;
+let scriptNode = null;
+
+voiceBtn.addEventListener('click', () => {
+  if (voiceActive) stopVoice(); else startVoice();
+});
+
+async function startVoice() {
+  voiceBtn.classList.add('connecting');
+
+  try {
+    // Get mic permission.
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: { sampleRate: 48000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
+    });
+
+    // Connect to voice WebSocket.
+    const h = location.hostname === 'localhost' ? '127.0.0.1:'+location.port : location.host;
+    voiceWs = new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+h+'/ws/voice');
+    voiceWs.binaryType = 'arraybuffer';
+
+    voiceWs.onopen = () => {
+      voiceBtn.classList.remove('connecting');
+      voiceBtn.classList.add('active');
+      voiceActive = true;
+      startAudioCapture();
+    };
+
+    voiceWs.onmessage = e => {
+      if (e.data instanceof ArrayBuffer) {
+        playAudio(new Int16Array(e.data));
+      } else {
+        try {
+          const msg = JSON.parse(e.data);
+          handleVoiceMsg(msg);
+        } catch(x) { console.error('voice msg parse', x); }
+      }
+    };
+
+    voiceWs.onclose = () => {
+      stopVoice();
+    };
+
+    voiceWs.onerror = () => {
+      stopVoice();
+    };
+  } catch(err) {
+    console.error('voice start failed', err);
+    voiceBtn.classList.remove('connecting');
+    alert('Mic access denied or voice not available: ' + err.message);
+  }
+}
+
+function stopVoice() {
+  voiceActive = false;
+  voiceBtn.classList.remove('active', 'connecting');
+
+  if (scriptNode) { scriptNode.disconnect(); scriptNode = null; }
+  if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+  if (voiceWs) { voiceWs.close(); voiceWs = null; }
+}
+
+function startAudioCapture() {
+  audioCtx = audioCtx || new AudioContext({ sampleRate: 48000 });
+  const source = audioCtx.createMediaStreamSource(mediaStream);
+
+  // ScriptProcessorNode for raw PCM access. Deprecated but universally supported.
+  scriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
+  scriptNode.onaudioprocess = e => {
+    if (!voiceWs || voiceWs.readyState !== 1) return;
+    const input = e.inputBuffer.getChannelData(0);
+    // Downsample from 48kHz to 24kHz and convert to PCM16.
+    const ratio = audioCtx.sampleRate / 24000;
+    const outLen = Math.floor(input.length / ratio);
+    const pcm16 = new Int16Array(outLen);
+    for (let i = 0; i < outLen; i++) {
+      const idx = Math.floor(i * ratio);
+      const s = Math.max(-1, Math.min(1, input[idx]));
+      pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    }
+    voiceWs.send(pcm16.buffer);
+  };
+
+  source.connect(scriptNode);
+  scriptNode.connect(audioCtx.destination); // Required for processing to work.
+}
+
+// Audio playback queue for Grok's TTS output.
+let playbackQueue = [];
+let isPlaying = false;
+
+function playAudio(pcm16) {
+  audioCtx = audioCtx || new AudioContext({ sampleRate: 24000 });
+  // Convert PCM16 to float32.
+  const float32 = new Float32Array(pcm16.length);
+  for (let i = 0; i < pcm16.length; i++) {
+    float32[i] = pcm16[i] / (pcm16[i] < 0 ? 0x8000 : 0x7FFF);
+  }
+  playbackQueue.push(float32);
+  if (!isPlaying) drainPlayback();
+}
+
+function drainPlayback() {
+  if (playbackQueue.length === 0) { isPlaying = false; return; }
+  isPlaying = true;
+  const samples = playbackQueue.shift();
+  const buf = audioCtx.createBuffer(1, samples.length, 24000);
+  buf.copyToChannel(samples, 0);
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(audioCtx.destination);
+  src.onended = drainPlayback;
+  src.start();
+}
+
+function handleVoiceMsg(msg) {
+  if (msg.type === 'user_transcript') {
+    addMsg('user', msg.text + ' \u{1F3A4}');
+  } else if (msg.type === 'assistant_transcript') {
+    // Grok speaking — could show inline, but it'll also come through as agent text.
+  } else if (msg.type === 'status') {
+    console.log('voice status:', msg.status);
+  } else if (msg.type === 'error') {
+    console.error('voice error:', msg.error);
+    const d = document.createElement('div');
+    d.className = 'voice-indicator';
+    d.textContent = 'Voice error: ' + msg.error;
+    msgs.appendChild(d);
+    scrollDown();
+  }
+}
 
 // Hot reload.
 (function hotReload() {
