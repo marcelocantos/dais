@@ -651,8 +651,12 @@ function handleVoiceMsg(msg) {
     console.error('voice error:', msg.error);
     voiceStatusText.textContent = 'error';
     const d = document.createElement('div');
-    d.className = 'voice-indicator';
-    d.textContent = 'Voice error: ' + msg.error;
+    d.className = 'msg jevon';
+    d.style.color = 'var(--red)';
+    d.style.border = '1px solid var(--red)';
+    d.style.borderRadius = 'var(--radius)';
+    d.style.padding = '10px 16px';
+    d.textContent = msg.error;
     msgs.appendChild(d);
     scrollDown();
   }

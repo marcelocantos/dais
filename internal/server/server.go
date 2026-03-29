@@ -233,7 +233,20 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 	vb := s.voiceBridge
 	s.mu.RUnlock()
 	if vb == nil {
-		http.Error(w, "voice not configured (no XAI_API_KEY)", http.StatusServiceUnavailable)
+		// Accept the WebSocket so the client gets a clear JSON error
+		// (failed upgrades don't surface error text to JavaScript).
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+			InsecureSkipVerify: true,
+		})
+		if err != nil {
+			return
+		}
+		data, _ := json.Marshal(map[string]any{
+			"type":  "error",
+			"error": "Voice not configured. Run: bin/jevond --set-xai-key",
+		})
+		conn.Write(r.Context(), websocket.MessageText, data)
+		conn.Close(websocket.StatusNormalClosure, "no API key")
 		return
 	}
 	vb.HandleVoiceWS(w, r)
