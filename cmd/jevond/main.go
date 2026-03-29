@@ -761,10 +761,12 @@ func readSecret() (string, error) {
 		if b[0] == 127 || b[0] == 8 { // Backspace
 			if len(buf) > 0 {
 				buf = buf[:len(buf)-1]
+				fmt.Fprint(os.Stderr, "\b \b")
 			}
 			continue
 		}
 		buf = append(buf, b[0])
+		fmt.Fprint(os.Stderr, "*")
 	}
 }
 
