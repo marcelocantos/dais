@@ -337,7 +337,11 @@ function shortDir(d) {
 setInterval(refreshAgents, 3000);
 refreshAgents();
 
-function scrollDown() { msgs.scrollTop = msgs.scrollHeight; }
+let autoScroll = true;
+msgs.addEventListener('scroll', () => {
+  autoScroll = msgs.scrollTop + msgs.clientHeight >= msgs.scrollHeight - 30;
+});
+function scrollDown() { if (autoScroll) msgs.scrollTop = msgs.scrollHeight; }
 function escHtml(s) { const d=document.createElement('span'); d.textContent=s; return d.innerHTML; }
 function truncate(s, n) { return s.length > n ? s.slice(0, n-3) + '...' : s; }
 function summariseInput(obj) {
@@ -384,6 +388,11 @@ input.addEventListener('keydown', e => { if(e.key==='Enter'&&!e.shiftKey){e.prev
 sendBtn.addEventListener('click', send);
 input.focus();
 connect();
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'PageUp') { e.preventDefault(); msgs.scrollBy(0, -msgs.clientHeight * 0.8); }
+  if (e.key === 'PageDown') { e.preventDefault(); msgs.scrollBy(0, msgs.clientHeight * 0.8); }
+});
 
 // Theme toggle.
 function applyTheme(pref) {
