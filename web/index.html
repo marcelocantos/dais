@@ -189,7 +189,7 @@ let turnCount = 0;
 function connect() {
   const h = location.hostname === 'localhost' ? '127.0.0.1:'+location.port : location.host;
   ws = new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+h+'/ws/chat');
-  ws.onopen = () => { dot.className='dot on'; sTxt.textContent='connected'; sendBtn.disabled=false; msgs.innerHTML=''; turnDetails=null; turnItems=null; turnCount=0; };
+  ws.onopen = () => { const v=input.value; dot.className='dot on'; sTxt.textContent='connected'; sendBtn.disabled=false; msgs.innerHTML=''; turnDetails=null; turnItems=null; turnCount=0; input.value=v; };
   ws.onclose = () => { dot.className='dot off'; sTxt.textContent='reconnecting'; sendBtn.disabled=true; setTimeout(connect,2000); };
   ws.onmessage = e => { try{handle(JSON.parse(e.data))}catch(x){console.error(x)} };
 }
@@ -495,11 +495,15 @@ function closeTerminal() {
   document.querySelectorAll('.agent-node').forEach(n => n.classList.remove('selected'));
 }
 
+// Preserve input across hot reloads.
+const savedInput = sessionStorage.getItem('jevon-input');
+if (savedInput) { input.value = savedInput; sessionStorage.removeItem('jevon-input'); }
+
 // Hot reload.
 (function hotReload() {
   const rh = location.hostname === 'localhost' ? '127.0.0.1:'+location.port : location.host;
   const rws = new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+rh+'/ws/reload');
-  rws.onmessage = () => location.reload();
+  rws.onmessage = () => { sessionStorage.setItem('jevon-input', input.value); location.reload(); };
   rws.onclose = () => setTimeout(hotReload, 2000);
 })();
 </script>
