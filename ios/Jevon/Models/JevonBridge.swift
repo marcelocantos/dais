@@ -3,29 +3,49 @@
 
 import AVFoundation
 import Foundation
+import Tern
 import WebKit
 import os
 
 private let logger = Logger(subsystem: "com.marcelocantos.jevon", category: "JevonBridge")
 
+/// Connection mode determines how the bridge communicates with jevond.
+enum BridgeMode {
+    /// Direct LAN connection via WebSocket (http://host:port).
+    case direct(URL)
+    /// Relay connection via tern QUIC (relay host:port + instance ID).
+    case relay(host: String, port: UInt16, instanceID: String)
+}
+
 /// Bridges the web UI running in WKWebView to jevond.
 ///
 /// JSON messages flow through the JS bridge (postMessage / evaluateJavaScript).
 /// Audio bytes stay in the native layer — JS only sees opaque handles + RMS values.
+///
+/// Supports two transport modes:
+/// - **Direct** (LAN): WebSocket to jevond for chat and voice
+/// - **Relay**: TernConn QUIC for chat, voice routed through tern StreamChannel
 @MainActor
 final class JevonBridge: NSObject, WKScriptMessageHandler {
 
     private weak var webView: WKWebView?
 
-    /// Base URL of jevond (http://host:port).
-    private let serverURL: URL
+    /// How we connect to jevond.
+    private let mode: BridgeMode
 
-    // MARK: - Chat WebSocket
+    /// E2E encryption channel (nil = plaintext). Set after key exchange.
+    private var e2eChannel: E2EChannel?
+
+    // MARK: - Direct mode: WebSocket
 
     private var chatWS: URLSessionWebSocketTask?
     private var chatSession: URLSession?
 
-    // MARK: - Voice WebSocket
+    // MARK: - Relay mode: TernConn
+
+    private var ternConn: TernConn?
+
+    // MARK: - Voice (WebSocket in direct mode, tern StreamChannel in relay mode)
 
     private var voiceWS: URLSessionWebSocketTask?
     private var voiceSession: URLSession?
@@ -55,9 +75,14 @@ final class JevonBridge: NSObject, WKScriptMessageHandler {
 
     // MARK: - Init
 
-    init(serverURL: URL) {
-        self.serverURL = serverURL
+    init(mode: BridgeMode) {
+        self.mode = mode
         super.init()
+    }
+
+    /// Convenience init for direct LAN connection.
+    convenience init(serverURL: URL) {
+        self.init(mode: .direct(serverURL))
     }
 
     /// Attach to a WKWebView. Call this after the web view is created.
@@ -112,8 +137,18 @@ final class JevonBridge: NSObject, WKScriptMessageHandler {
     private func connectChat() {
         disconnectChat()
 
-        var wsURL = serverURL
-        wsURL = wsURL.appendingPathComponent("ws/chat")
+        switch mode {
+        case .direct(let serverURL):
+            connectChatWebSocket(serverURL)
+        case .relay(let host, let port, let instanceID):
+            connectChatTern(host: host, port: port, instanceID: instanceID)
+        }
+    }
+
+    // MARK: Direct mode: WebSocket
+
+    private func connectChatWebSocket(_ serverURL: URL) {
+        var wsURL = serverURL.appendingPathComponent("ws/chat")
         var components = URLComponents(url: wsURL, resolvingAgainstBaseURL: false)!
         components.scheme = serverURL.scheme == "https" ? "wss" : "ws"
 
@@ -129,26 +164,12 @@ final class JevonBridge: NSObject, WKScriptMessageHandler {
         ws.resume()
 
         injectJS("window._jevonTransport._onOpen()")
-        logger.info("Chat WebSocket connected")
+        logger.info("Chat WebSocket connected (direct)")
 
-        Task { await chatReceiveLoop(ws) }
+        Task { await chatWSReceiveLoop(ws) }
     }
 
-    private func disconnectChat() {
-        chatWS?.cancel(with: .goingAway, reason: nil)
-        chatWS = nil
-        chatSession = nil
-    }
-
-    private func sendChat(_ text: String) {
-        chatWS?.send(.string(text)) { error in
-            if let error {
-                logger.error("Chat send failed: \(error.localizedDescription)")
-            }
-        }
-    }
-
-    private func chatReceiveLoop(_ ws: URLSessionWebSocketTask) async {
+    private func chatWSReceiveLoop(_ ws: URLSessionWebSocketTask) async {
         while !Task.isCancelled {
             let message: URLSessionWebSocketTask.Message
             do {
@@ -169,8 +190,95 @@ final class JevonBridge: NSObject, WKScriptMessageHandler {
                 continue
             }
 
-            await MainActor.run {
-                injectMessage(json)
+            await MainActor.run { injectMessage(json) }
+        }
+    }
+
+    // MARK: Relay mode: TernConn
+
+    private func connectChatTern(host: String, port: UInt16, instanceID: String) {
+        Task {
+            do {
+                let conn = try await TernConn.connect(
+                    host: host, port: port, instanceID: instanceID
+                )
+                self.ternConn = conn
+                logger.info("Chat connected via tern relay (instance: \(instanceID))")
+                injectJS("window._jevonTransport._onOpen()")
+                await ternReceiveLoop(conn)
+            } catch {
+                logger.error("Tern connect failed: \(error.localizedDescription)")
+                injectError("Relay connection failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func ternReceiveLoop(_ conn: TernConn) async {
+        while !Task.isCancelled {
+            let data: Data
+            do {
+                data = try await conn.recv()
+            } catch {
+                if !Task.isCancelled {
+                    logger.info("Tern connection closed: \(error.localizedDescription)")
+                    await MainActor.run {
+                        injectJS("window._jevonTransport._onClose()")
+                    }
+                }
+                return
+            }
+
+            // Decrypt if E2E channel is active.
+            let plaintext: Data
+            if let channel = e2eChannel {
+                do {
+                    plaintext = try channel.decrypt(data)
+                } catch {
+                    logger.error("E2E decrypt failed: \(error.localizedDescription)")
+                    continue
+                }
+            } else {
+                plaintext = data
+            }
+
+            guard let json = try? JSONSerialization.jsonObject(with: plaintext) else {
+                continue
+            }
+
+            await MainActor.run { injectMessage(json) }
+        }
+    }
+
+    // MARK: - Send (both modes)
+
+    private func disconnectChat() {
+        chatWS?.cancel(with: .goingAway, reason: nil)
+        chatWS = nil
+        chatSession = nil
+        ternConn?.close()
+        ternConn = nil
+    }
+
+    private func sendChat(_ text: String) {
+        switch mode {
+        case .direct:
+            chatWS?.send(.string(text)) { error in
+                if let error {
+                    logger.error("Chat send failed: \(error.localizedDescription)")
+                }
+            }
+        case .relay:
+            guard let conn = ternConn else { return }
+            Task {
+                do {
+                    var payload = Data(text.utf8)
+                    if let channel = e2eChannel {
+                        payload = try channel.encrypt(payload)
+                    }
+                    try await conn.send(payload)
+                } catch {
+                    logger.error("Tern send failed: \(error.localizedDescription)")
+                }
             }
         }
     }
@@ -186,7 +294,17 @@ final class JevonBridge: NSObject, WKScriptMessageHandler {
     private func startVoice() {
         stopVoice()
 
-        // Connect voice WebSocket.
+        switch mode {
+        case .direct(let serverURL):
+            startVoiceWebSocket(serverURL)
+        case .relay:
+            // TODO: Route voice through tern StreamChannel.
+            // For now, voice only works in direct mode.
+            injectVoiceEvent(["type": "error", "error": "Voice over relay not yet supported. Connect directly to use voice."])
+        }
+    }
+
+    private func startVoiceWebSocket(_ serverURL: URL) {
         var wsURL = serverURL.appendingPathComponent("ws/voice")
         var components = URLComponents(url: wsURL, resolvingAgainstBaseURL: false)!
         components.scheme = serverURL.scheme == "https" ? "wss" : "ws"
@@ -204,10 +322,8 @@ final class JevonBridge: NSObject, WKScriptMessageHandler {
 
         injectVoiceEvent(["type": "status", "status": "connected"])
 
-        // Start mic capture.
         startMicCapture()
 
-        // Start voice receive loop.
         Task { await voiceReceiveLoop(ws) }
     }
 
