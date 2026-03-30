@@ -578,6 +578,59 @@ visible in `jevon_agent_list` and addressable via `jevon_agent_send`.
 - Sessions idle beyond a configurable threshold are flagged for
   retirement.
 
+### 🎯T18 Grok is a first-class agent
+
+- **Value**: 13
+- **Cost**: 8
+- **Weight**: 1.6 (value 13 / cost 8)
+- **Status**: identified — Grok Realtime voice bridge built and working
+  (voice I/O, function calling, `send_to_jevon` tool). Transport
+  abstraction and native iOS bridge in place.
+- **Discovered**: 2026-03-30
+
+**Desired state:** Grok can operate in any role in the agent hierarchy,
+including as the root jevon overseer. The agent system is model-agnostic
+— Claude and Grok agents are interchangeable via a common interface.
+When Grok is the overseer, voice is native (no STT/TTS bridge layer);
+it hears the user directly and calls MCP tools as Grok functions.
+
+**Architecture:**
+- **Agent interface.** Abstract `Agent` with `Start`, `Send`, `OnEvent`,
+  `Stop`. Claude implementation wraps the existing PTY process. Grok
+  implementation connects via xAI Realtime WebSocket with function
+  calling.
+- **MCP-to-function mapping.** jevond's MCP tool definitions
+  (agent management, worker dispatch, transcript, etc.) are
+  automatically mapped to Grok function definitions with matching
+  names, descriptions, and JSON schemas.
+- **Voice collapse.** When Grok is the overseer, the voice bridge
+  collapses into the agent's I/O — no `send_to_jevon` indirection.
+  User speaks → Grok hears → Grok calls tools → Grok speaks result.
+- **Registry.** Agent registry supports both Claude and Grok agent
+  types. Agent definitions specify model type (`claude`, `grok`).
+  The jevon overseer's model is configurable at startup.
+
+**What exists (current commit):**
+- Grok Realtime client (`internal/grok/realtime.go`): WebSocket,
+  session config, function calling, audio forwarding
+- Voice bridge (`internal/server/voice.go`): bridges browser/iOS
+  audio to Grok, with `send_to_jevon` delegating to Claude
+- Transport abstraction (`web/transport.js`): browser/native dual
+  mode with handle-based audio
+- Native iOS bridge (`JevonBridge.swift`): mic capture, audio
+  playback, chat over WebSocket or tern QUIC
+
+**Acceptance criteria:**
+- `Agent` interface in Go with Claude and Grok implementations.
+- Grok agent receives all MCP tools as function definitions.
+- Grok agent can be started, sent messages, and emits events in the
+  same format as Claude agents.
+- Registry supports mixed agent types.
+- `--jevon-model grok` starts Grok as the overseer with native voice.
+- `--jevon-model claude` (default) preserves current behavior.
+- Voice works end-to-end when Grok is the overseer: speak → Grok
+  hears → tool calls → spoken response.
+
 ## Achieved
 
 ### 🎯T15 Protocol state machines are formally verifiable
