@@ -456,42 +456,53 @@ no user interaction.
 - jevond runs as a brew service.
 - Relay runs on Fly.io.
 
-### 🎯T13 Full-duplex voice input
+### 🎯T13 Full-duplex voice interaction
 
 - **Value**: 13
-- **Cost**: 8
-- **Weight**: 1.6 (value 13 / cost 8)
-- **Status**: converging — iOS VoiceManager complete (local VAD, OpenAI Realtime streaming, utterance detection), token proxy endpoint in jevond, interruption handling added (cancel active invocation on new user input). Remaining: test on real device with Pippa.
+- **Cost**: 5
+- **Weight**: 2.6 (value 13 / cost 5)
+- **Status**: converging — Grok Realtime voice bridge working in browser
+  (speech → transcription → response → TTS). Adaptive local VAD,
+  transport abstraction, native iOS bridge all built. Remaining: test
+  voice end-to-end on iPad via WKWebView, verify latency is acceptable.
 - **Discovered**: 2026-03-21
 
-**Desired state:** The user speaks continuously into the iOS app. Each
-utterance is transcribed in real-time via OpenAI's Realtime API
-(`gpt-4o-transcribe`) and delivered to jevond as a user message
-immediately. The agent can begin responding while the user is still
-speaking. New utterances interrupt the current response — the agent
-considers the full accumulated input before continuing.
+**Desired state:** The user has a full-duplex voice conversation with
+jevon. Speech is transcribed, responses are spoken aloud, and barge-in
+interruption works naturally. Works in both browser and iOS app.
 
-**Architecture:**
-- **Local VAD:** `AVAudioEngine` monitors mic levels on-device (always
-  on, no network cost). On speech detection, opens OpenAI WebSocket.
-- **Cloud transcription:** OpenAI Realtime API with `gpt-4o-transcribe`
-  model. 24kHz mono PCM16 audio streamed via WebSocket. Semantic VAD
-  detects utterance boundaries.
-- **Ephemeral tokens:** jevond proxies OpenAI API key. iOS app requests
-  a short-lived token per voice session. No secrets on-device.
-- **Sentence delivery:** On `transcription.completed`, send transcript
-  to jevond as a regular user message.
-- **Interruption:** When a new utterance arrives while the agent is
-  responding, jevond cancels the current Claude process and restarts
-  with the full accumulated context.
+**Architecture (Option B: Grok voice + Claude brain):**
+- **Grok Realtime API** (`wss://api.x.ai/v1/realtime`): handles
+  full-duplex voice I/O with server-side VAD and barge-in. Grok is
+  the conversational voice layer — it speaks, listens, and decides
+  when to delegate.
+- **`send_to_jevon` tool**: when Grok determines the user wants
+  substantive work done, it calls this function to delegate to the
+  Claude jevon process. Returns immediately; Claude's response is
+  injected back into the Grok session for TTS.
+- **Local adaptive VAD**: browser/iOS runs noise-adaptive VAD
+  (RMS with hysteresis, 300ms pre-buffer, 800ms hold). Only sends
+  audio to Grok during detected speech — prevents car/ambient noise
+  from triggering Grok's VAD.
+- **Transport abstraction**: `transport.js` provides identical API
+  for browser (WebSocket) and iOS (native JS bridge with handle-based
+  audio). VAD runs in JS in both modes.
+- **Native audio** (iOS): mic capture via `AVAudioEngine`, playback
+  via `AVAudioPlayerNode`. Audio bytes never touch JS — only handles
+  and RMS values cross the bridge.
+
+**Supersedes:** OpenAI Realtime STT-only approach. Grok provides both
+STT and TTS in a single full-duplex session.
+
+**Collapses into 🎯T18:** When Grok becomes the overseer agent, the
+voice bridge and agent become one — no `send_to_jevon` indirection.
 
 **Acceptance criteria:**
-- Local VAD detects speech onset and opens OpenAI Realtime connection.
-- Audio streams to OpenAI, transcription deltas displayed in real-time.
-- Completed utterances sent to jevond immediately as user messages.
-- Agent response interrupted and restarted when new input arrives.
-- Extended silence closes the OpenAI connection (back to local VAD).
-- No API keys stored on device — ephemeral token flow via jevond.
+- Speak in browser → Grok transcribes → response spoken aloud.
+- Speak on iPad (WKWebView) → same flow via native audio bridge.
+- Barge-in: speak during Grok's response to interrupt.
+- Local VAD filters background noise (car cabin test).
+- Latency: utterance end to first audio response < 3 seconds.
 
 ### 🎯T17 Jevon UI renders via ge engine
 
