@@ -11,7 +11,7 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
-	github.com/marcelocantos/tern v0.7.0
+	github.com/marcelocantos/tern v0.9.0
 	github.com/mark3labs/mcp-go v0.44.1
 	github.com/mattn/go-sqlite3 v1.14.37
 	github.com/peterh/liner v1.2.2
