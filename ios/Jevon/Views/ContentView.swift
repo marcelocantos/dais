@@ -62,14 +62,14 @@ struct ContentView: View {
             ConnectView()
         case .connecting:
             if connection.hasConnected, let url = connection.httpBaseURL {
-                WebUIView(url: url)
+                WebUIView(serverURL: url)
                     .ignoresSafeArea()
             } else {
                 ProgressView("Connecting...")
             }
         case .connected:
             if let url = connection.httpBaseURL {
-                WebUIView(url: url)
+                WebUIView(serverURL: url)
                     .ignoresSafeArea()
             } else {
                 ChatView()
@@ -77,7 +77,7 @@ struct ContentView: View {
         case .error:
             if connection.hasConnected {
                 if let url = connection.httpBaseURL {
-                    WebUIView(url: url)
+                    WebUIView(serverURL: url)
                         .ignoresSafeArea()
                 } else {
                     ChatView()

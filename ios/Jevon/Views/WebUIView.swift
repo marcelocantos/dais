@@ -4,34 +4,47 @@
 import SwiftUI
 import WebKit
 
-/// Wraps the jevond web UI in a WKWebView with mic access enabled.
+/// Wraps the jevond web UI in a WKWebView with the native JS bridge.
+///
+/// In native mode, the web UI uses the bridge for all communication
+/// (chat messages via JS, audio bytes via native handles).
 struct WebUIView: UIViewRepresentable {
-    let url: URL
+    let serverURL: URL
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(serverURL: serverURL)
+    }
 
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
 
-        // Allow inline media playback (required for AudioContext).
+        // Allow inline media (for fallback browser-mode audio if needed).
         config.allowsInlineMediaPlayback = true
-        // Don't require user gesture to start audio capture/playback.
         config.mediaTypesRequiringUserActionForPlayback = []
 
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
+        webView.scrollView.isScrollEnabled = false
 
-        // Allow back/forward navigation.
-        webView.allowsBackForwardNavigationGestures = true
+        // Attach the native bridge.
+        context.coordinator.bridge.attach(to: webView)
 
-        webView.load(URLRequest(url: url))
+        // Load the web UI from jevond.
+        webView.load(URLRequest(url: serverURL))
+
         return webView
     }
 
-    func updateUIView(_ webView: WKWebView, context: Context) {
-        // If the URL changed, reload.
-        if webView.url != url {
-            webView.load(URLRequest(url: url))
+    func updateUIView(_ webView: WKWebView, context: Context) {}
+
+    @MainActor
+    class Coordinator {
+        let bridge: JevonBridge
+
+        init(serverURL: URL) {
+            bridge = JevonBridge(serverURL: serverURL)
         }
     }
 }

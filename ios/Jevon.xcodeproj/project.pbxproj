@@ -53,6 +53,7 @@
 		DD2008437EAF5D4B7FDB3903 /* SyncPeer.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF9D3D79BB07B91D322731C5 /* SyncPeer.swift */; };
 		DEE551C75300D39BCDE98E1E /* SafeModeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3D6200A03D1E93A629A432B /* SafeModeView.swift */; };
 		E09869084FFE1D0A7938E37D /* Connection.swift in Sources */ = {isa = PBXBuildFile; fileRef = D44D1B4501A4D2EB998B01FB /* Connection.swift */; };
+		271AAB264BC8542A5AE7B40E /* JevonBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B71D1F67C579F2AC7D9D160 /* JevonBridge.swift */; };
 		E0FB6692544B380E52EB01FB /* lopcodes.c in Sources */ = {isa = PBXBuildFile; fileRef = 921A0B6A5656163B64F95ACC /* lopcodes.c */; settings = {COMPILER_FLAGS = "-w"; }; };
 		E46BB6A284F427CE40FB9C5E /* lstrlib.c in Sources */ = {isa = PBXBuildFile; fileRef = 92763019F5464D90C33AF102 /* lstrlib.c */; settings = {COMPILER_FLAGS = "-w"; }; };
 		E5F5E25833EE762B958109F3 /* ltm.c in Sources */ = {isa = PBXBuildFile; fileRef = CACF38C14DD12334E142ED1C /* ltm.c */; settings = {COMPILER_FLAGS = "-w"; }; };
@@ -133,6 +134,7 @@
 		CF0EF488FC1D2806F1FEFB8B /* SessionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionListView.swift; sourceTree = "<group>"; };
 		D3A689C8FBB03CC626AED792 /* ChevronGestureRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChevronGestureRecognizer.swift; sourceTree = "<group>"; };
 		D44D1B4501A4D2EB998B01FB /* Connection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Connection.swift; sourceTree = "<group>"; };
+		2B71D1F67C579F2AC7D9D160 /* JevonBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JevonBridge.swift; sourceTree = "<group>"; };
 		D5B2EA7B27817CAC862E5819 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		D67D6AFCF329DD1EBBBF3DAD /* sqlpipe_capi.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = sqlpipe_capi.cpp; sourceTree = "<group>"; };
 		D9A55D0E81BA40F9048296D3 /* ViewNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewNode.swift; sourceTree = "<group>"; };
@@ -256,6 +258,7 @@
 			children = (
 				65E43ED786E066072C1260E2 /* ChatMessage.swift */,
 				D44D1B4501A4D2EB998B01FB /* Connection.swift */,
+				2B71D1F67C579F2AC7D9D160 /* JevonBridge.swift */,
 				02031B5F0DB6FF33848B61E0 /* LuaRuntime.swift */,
 				55E0CAB8DB4A9B9A3B5E5657 /* ObservableNode.swift */,
 				6D82BA1F6ACCF263F3B3706B /* ServerMessage.swift */,
@@ -396,6 +399,7 @@
 				35857964C5D622D31C74A538 /* ChevronGestureRecognizer.swift in Sources */,
 				469D3D3ECF57391FA0C5363D /* ConnectView.swift in Sources */,
 				E09869084FFE1D0A7938E37D /* Connection.swift in Sources */,
+				271AAB264BC8542A5AE7B40E /* JevonBridge.swift in Sources */,
 				2C70D96EAAB1FD8D92B238F5 /* ContentView.swift in Sources */,
 				E8F33944D4BA29CFE13B7E02 /* JevonApp.swift in Sources */,
 				1B28C489BE42CEB5BA3A3FE5 /* LuaRuntime.swift in Sources */,
