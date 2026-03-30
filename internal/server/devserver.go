@@ -40,6 +40,8 @@ func (ds *DevServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, filepath.Join(ds.dir, "index.html"))
 	})
+	// Serve other static files (transport.js, etc.).
+	mux.Handle("GET /", ds.handler)
 }
 
 // Watch starts watching the directory for changes and triggers reloads.
