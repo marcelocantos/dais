@@ -185,6 +185,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
     <div id="terminal-container"></div>
   </div>
 </div>
+<script src="transport.js"></script>
 <script>
 const msgs = document.getElementById('messages');
 const input = document.getElementById('input');
@@ -192,19 +193,26 @@ const sendBtn = document.getElementById('send');
 const dot = document.getElementById('dot');
 const sTxt = document.getElementById('status-text');
 const agentsEl = document.getElementById('agents');
-let ws;
 
 let turnDetails = null;
 let turnItems = null;
 let turnCount = 0;
 
-function connect() {
-  const h = location.hostname === 'localhost' ? '127.0.0.1:'+location.port : location.host;
-  ws = new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+h+'/ws/chat');
-  ws.onopen = () => { const v=input.value; dot.className='dot on'; sTxt.textContent='connected'; sendBtn.disabled=false; msgs.innerHTML=''; turnDetails=null; turnItems=null; turnCount=0; input.value=v; };
-  ws.onclose = () => { dot.className='dot off'; sTxt.textContent='reconnecting'; sendBtn.disabled=true; setTimeout(connect,2000); };
-  ws.onmessage = e => { try{handle(JSON.parse(e.data))}catch(x){console.error(x)} };
-}
+// Wire transport callbacks.
+transport.onOpen = () => {
+  const v = input.value;
+  dot.className = 'dot on'; sTxt.textContent = 'connected'; sendBtn.disabled = false;
+  msgs.innerHTML = ''; turnDetails = null; turnItems = null; turnCount = 0;
+  input.value = v;
+};
+transport.onClose = () => {
+  dot.className = 'dot off'; sTxt.textContent = 'reconnecting'; sendBtn.disabled = true;
+  setTimeout(() => transport.connect(), 2000);
+};
+transport.onMessage = m => handle(m);
+transport.onError = msg => console.error('transport error:', msg);
+
+function connect() { transport.connect(); }
 
 function handle(m) {
   const typ = m.type;
@@ -391,8 +399,8 @@ setInterval(() => {
 
 function send() {
   const t = input.value.trim();
-  if (!t||!ws||ws.readyState!==1) return;
-  ws.send(t);
+  if (!t) return;
+  transport.send(t);
   input.value = '';
 }
 
@@ -511,228 +519,121 @@ function closeTerminal() {
 const savedInput = sessionStorage.getItem('jevon-input');
 if (savedInput) { input.value = savedInput; sessionStorage.removeItem('jevon-input'); }
 
-// Voice bridge.
+// Voice UI — uses transport abstraction for both browser and native modes.
 const voiceBtn = document.getElementById('voice-btn');
 const voiceStatus = document.getElementById('voice-status');
 const voiceStatusText = document.getElementById('voice-status-text');
-let voiceWs = null;
 let voiceActive = false;
-let audioCtx = null;
-let mediaStream = null;
-let scriptNode = null;
+
+// Adaptive VAD state — operates on {handle, rms} frames from transport.
+const vad = {
+  noiseFloor: 0.01,
+  speaking: false,
+  holdUntil: 0,
+  holdMs: 800,
+  onsetRatio: 3.0,
+  offsetRatio: 1.8,
+  noiseAlpha: 0.02,
+  preBuffer: [],
+  preBufferMax: 7,
+  flushedPre: false,
+};
 
 voiceBtn.addEventListener('click', () => {
   if (voiceActive) stopVoice(); else startVoice();
 });
 
-async function startVoice() {
+function startVoice() {
   voiceBtn.classList.add('connecting');
-
-  try {
-    // Get mic permission.
-    mediaStream = await navigator.mediaDevices.getUserMedia({
-      audio: { sampleRate: 48000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
-    });
-
-    // Connect to voice WebSocket.
-    const h = location.hostname === 'localhost' ? '127.0.0.1:'+location.port : location.host;
-    voiceWs = new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+h+'/ws/voice');
-    voiceWs.binaryType = 'arraybuffer';
-
-    voiceWs.onopen = () => {
-      voiceBtn.classList.remove('connecting');
-      voiceBtn.classList.add('active');
-      voiceActive = true;
-      voiceStatus.classList.add('on');
-      voiceStatusText.textContent = 'connecting to grok...';
-      startAudioCapture();
-    };
-
-    voiceWs.onmessage = e => {
-      if (e.data instanceof ArrayBuffer) {
-        playAudio(new Int16Array(e.data));
-      } else {
-        try {
-          const msg = JSON.parse(e.data);
-          handleVoiceMsg(msg);
-        } catch(x) { console.error('voice msg parse', x); }
-      }
-    };
-
-    voiceWs.onclose = () => {
-      stopVoice();
-    };
-
-    voiceWs.onerror = () => {
-      stopVoice();
-    };
-  } catch(err) {
-    console.error('voice start failed', err);
-    voiceBtn.classList.remove('connecting');
-    alert('Mic access denied or voice not available: ' + err.message);
-  }
+  voiceActive = true;
+  transport.startVoice();
 }
 
 function stopVoice() {
   voiceActive = false;
   voiceBtn.classList.remove('active', 'connecting');
   voiceStatus.classList.remove('on');
-
-  if (scriptNode) { scriptNode.disconnect(); scriptNode = null; }
-  if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
-  if (voiceWs) { voiceWs.close(); voiceWs = null; }
+  voiceBtn.style.boxShadow = '';
+  vad.speaking = false;
+  vad.preBuffer = [];
+  transport.stopVoice();
 }
 
-async function startAudioCapture() {
-  audioCtx = audioCtx || new AudioContext({ sampleRate: 48000 });
-  if (audioCtx.state === 'suspended') await audioCtx.resume();
-  console.log('voice: AudioContext state='+audioCtx.state+' sampleRate='+audioCtx.sampleRate);
-  const source = audioCtx.createMediaStreamSource(mediaStream);
+// Mic frames from transport — run VAD, decide whether to send.
+transport.onMicFrame = ({handle, rms}) => {
+  const now = Date.now();
 
-  // ScriptProcessorNode for raw PCM access. Deprecated but universally supported.
-  // 2048 frames at 48kHz ≈ 43ms per chunk.
-  scriptNode = audioCtx.createScriptProcessor(2048, 1, 1);
+  if (!vad.speaking) {
+    vad.noiseFloor += vad.noiseAlpha * (rms - vad.noiseFloor);
+    vad.preBuffer.push(handle);
+    if (vad.preBuffer.length > vad.preBufferMax) vad.preBuffer.shift();
 
-  // Local adaptive VAD state.
-  const vad = {
-    noiseFloor: 0.01,       // Adaptive noise estimate (RMS).
-    speaking: false,         // Currently in speech?
-    holdUntil: 0,            // Timestamp: keep streaming until this time.
-    holdMs: 800,             // Hold speech state for this long after drop.
-    onsetRatio: 3.0,         // RMS must exceed noiseFloor * this to trigger speech.
-    offsetRatio: 1.8,        // RMS must drop below noiseFloor * this to start hold timer.
-    noiseAlpha: 0.02,        // Noise floor EMA rate (slow adaptation).
-    preBuffer: [],            // Ring buffer of recent PCM16 chunks.
-    preBufferMax: 7,          // ~300ms at 43ms/chunk.
-    flushedPre: false,       // Have we sent the pre-buffer for this utterance?
-  };
-
-  scriptNode.onaudioprocess = e => {
-    if (!voiceWs || voiceWs.readyState !== 1) return;
-    const input = e.inputBuffer.getChannelData(0);
-
-    // Compute RMS.
-    let sum = 0;
-    for (let i = 0; i < input.length; i++) sum += input[i] * input[i];
-    const rms = Math.sqrt(sum / input.length);
-
-    // Downsample to 24kHz PCM16.
-    const ratio = audioCtx.sampleRate / 24000;
-    const outLen = Math.floor(input.length / ratio);
-    const pcm16 = new Int16Array(outLen);
-    for (let i = 0; i < outLen; i++) {
-      const idx = Math.floor(i * ratio);
-      const s = Math.max(-1, Math.min(1, input[idx]));
-      pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    if (rms > vad.noiseFloor * vad.onsetRatio && rms > 0.005) {
+      vad.speaking = true;
+      vad.holdUntil = now + vad.holdMs;
+      vad.flushedPre = false;
+      voiceStatusText.textContent = 'hearing you';
+      voiceBtn.style.boxShadow = '0 0 12px rgba(248,113,113,0.7)';
     }
-
-    const now = Date.now();
-
-    if (!vad.speaking) {
-      // Update noise floor from non-speech frames.
-      vad.noiseFloor += vad.noiseAlpha * (rms - vad.noiseFloor);
-
-      // Keep pre-buffer ring.
-      vad.preBuffer.push(pcm16);
-      if (vad.preBuffer.length > vad.preBufferMax) vad.preBuffer.shift();
-
-      // Check onset.
-      if (rms > vad.noiseFloor * vad.onsetRatio && rms > 0.005) {
-        vad.speaking = true;
-        vad.holdUntil = now + vad.holdMs;
-        vad.flushedPre = false;
-        voiceStatusText.textContent = 'hearing you';
-        voiceBtn.style.boxShadow = '0 0 12px rgba(248,113,113,0.7)';
-      }
-    }
-
-    if (vad.speaking) {
-      // Flush pre-buffer on first speech frame.
-      if (!vad.flushedPre) {
-        for (const chunk of vad.preBuffer) voiceWs.send(chunk.buffer);
-        vad.preBuffer = [];
-        vad.flushedPre = true;
-      }
-
-      // Send this frame.
-      voiceWs.send(pcm16.buffer);
-
-      // Check offset.
-      if (rms > vad.noiseFloor * vad.offsetRatio) {
-        vad.holdUntil = now + vad.holdMs;
-      } else if (now > vad.holdUntil) {
-        vad.speaking = false;
-        voiceStatusText.textContent = 'listening';
-        voiceBtn.style.boxShadow = '';
-      }
-    }
-  };
-
-  source.connect(scriptNode);
-  scriptNode.connect(audioCtx.destination); // Required for processing to work.
-}
-
-// Audio playback queue for Grok's TTS output.
-let playbackQueue = [];
-let isPlaying = false;
-
-function playAudio(pcm16) {
-  audioCtx = audioCtx || new AudioContext({ sampleRate: 24000 });
-  // Convert PCM16 to float32.
-  const float32 = new Float32Array(pcm16.length);
-  for (let i = 0; i < pcm16.length; i++) {
-    float32[i] = pcm16[i] / (pcm16[i] < 0 ? 0x8000 : 0x7FFF);
   }
-  playbackQueue.push(float32);
-  if (!isPlaying) drainPlayback();
-}
 
-function drainPlayback() {
-  if (playbackQueue.length === 0) { isPlaying = false; return; }
-  isPlaying = true;
-  const samples = playbackQueue.shift();
-  const buf = audioCtx.createBuffer(1, samples.length, 24000);
-  buf.copyToChannel(samples, 0);
-  const src = audioCtx.createBufferSource();
-  src.buffer = buf;
-  src.connect(audioCtx.destination);
-  src.onended = drainPlayback;
-  src.start();
-}
+  if (vad.speaking) {
+    if (!vad.flushedPre) {
+      for (const h of vad.preBuffer) transport.sendAudio(h);
+      vad.preBuffer = [];
+      vad.flushedPre = true;
+    }
+    transport.sendAudio(handle);
 
-function handleVoiceMsg(msg) {
-  if (msg.type === 'user_transcript') {
-    addMsg('user', msg.text + ' \u{1F3A4}');
-    voiceStatusText.textContent = 'listening';
-  } else if (msg.type === 'assistant_transcript') {
-    voiceStatusText.textContent = 'speaking';
-    // Accumulate transcript deltas into a streaming message.
-    if (!handleVoiceMsg._assistantEl) {
-      handleVoiceMsg._assistantEl = addMsg('jevon', '');
+    if (rms > vad.noiseFloor * vad.offsetRatio) {
+      vad.holdUntil = now + vad.holdMs;
+    } else if (now > vad.holdUntil) {
+      vad.speaking = false;
+      voiceStatusText.textContent = 'listening';
+      voiceBtn.style.boxShadow = '';
     }
-    handleVoiceMsg._assistantBuf = (handleVoiceMsg._assistantBuf || '') + msg.text;
-    // Update the message content (plain text, not markdown, since it streams).
-    const el = handleVoiceMsg._assistantEl;
-    const timeEl = el.querySelector('.msg-time');
-    el.textContent = handleVoiceMsg._assistantBuf;
-    if (timeEl) el.appendChild(timeEl);
-    scrollDown();
-  } else if (msg.type === 'assistant_transcript_done') {
-    // Finalize: re-render as markdown.
-    if (handleVoiceMsg._assistantEl && handleVoiceMsg._assistantBuf) {
-      const el = handleVoiceMsg._assistantEl;
-      const timeEl = el.querySelector('.msg-time');
-      el.innerHTML = marked.parse(handleVoiceMsg._assistantBuf);
-      if (timeEl) el.appendChild(timeEl);
-    }
-    handleVoiceMsg._assistantEl = null;
-    handleVoiceMsg._assistantBuf = '';
-  } else if (msg.type === 'status') {
-    if (msg.status === 'ready') {
+  }
+};
+
+// Incoming audio from Grok — play it.
+transport.onAudio = handle => transport.playAudio(handle);
+
+// Voice events: status, transcripts, errors.
+transport.onVoiceEvent = msg => {
+  if (msg.type === 'status') {
+    if (msg.status === 'connected') {
+      voiceBtn.classList.remove('connecting');
+      voiceBtn.classList.add('active');
+      voiceStatus.classList.add('on');
+      voiceStatusText.textContent = 'connecting to grok...';
+    } else if (msg.status === 'ready') {
       voiceStatusText.textContent = 'listening';
     } else {
       voiceStatusText.textContent = msg.status;
     }
+  } else if (msg.type === 'user_transcript') {
+    addMsg('user', msg.text + ' \u{1F3A4}');
+    voiceStatusText.textContent = 'listening';
+  } else if (msg.type === 'assistant_transcript') {
+    voiceStatusText.textContent = 'speaking';
+    if (!startVoice._assistantEl) {
+      startVoice._assistantEl = addMsg('jevon', '');
+    }
+    startVoice._assistantBuf = (startVoice._assistantBuf || '') + msg.text;
+    const el = startVoice._assistantEl;
+    const timeEl = el.querySelector('.msg-time');
+    el.textContent = startVoice._assistantBuf;
+    if (timeEl) el.appendChild(timeEl);
+    scrollDown();
+  } else if (msg.type === 'assistant_transcript_done') {
+    if (startVoice._assistantEl && startVoice._assistantBuf) {
+      const el = startVoice._assistantEl;
+      const timeEl = el.querySelector('.msg-time');
+      el.innerHTML = marked.parse(startVoice._assistantBuf);
+      if (timeEl) el.appendChild(timeEl);
+    }
+    startVoice._assistantEl = null;
+    startVoice._assistantBuf = '';
   } else if (msg.type === 'error') {
     console.error('voice error:', msg.error);
     voiceStatusText.textContent = 'error';
@@ -745,8 +646,9 @@ function handleVoiceMsg(msg) {
     d.textContent = msg.error;
     msgs.appendChild(d);
     scrollDown();
+    stopVoice();
   }
-}
+};
 
 // Hot reload.
 (function hotReload() {
