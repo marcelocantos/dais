@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -16,7 +17,6 @@ import (
 	"syscall"
 	"time"
 
-
 	"golang.org/x/term"
 
 	"github.com/marcelocantos/jevon/internal/claude"
@@ -25,13 +25,13 @@ import (
 	"github.com/marcelocantos/jevon/internal/discovery"
 	"github.com/marcelocantos/jevon/internal/jevon"
 	"github.com/marcelocantos/jevon/internal/manager"
-	"github.com/marcelocantos/jevon/internal/memory"
 	"github.com/marcelocantos/jevon/internal/mcpserver"
-	"github.com/marcelocantos/tern/qr"
+	"github.com/marcelocantos/jevon/internal/memory"
 	"github.com/marcelocantos/jevon/internal/server"
 	"github.com/marcelocantos/jevon/internal/session"
 	"github.com/marcelocantos/jevon/internal/transcript"
 	"github.com/marcelocantos/jevon/internal/ui"
+	"github.com/marcelocantos/tern/qr"
 )
 
 // jevonCLAUDEMD is the CLAUDE.md template written to Jevon's workdir.
@@ -253,6 +253,11 @@ func main() {
 	vs.SetConnected(cli.Version, os.Getenv("HOME"))
 
 	srv := server.New(jev, mgr, database, cli.Version, luaRT, vs)
+
+	if err := srv.LoadOrGenerateKeyPair(); err != nil {
+		slog.Error("failed to load key pair", "err", err)
+		os.Exit(1)
+	}
 
 	// Load OpenAI API key from Keychain (fall back to env var).
 	if key, err := loadKeychainKey("openai-api-key"); err == nil && key != "" {
@@ -675,7 +680,15 @@ func main() {
 		relayWSURL := *relayURL + "/ws/" + instanceID
 		relayWSURL = strings.Replace(relayWSURL, "localhost", qr.LanIP(), 1)
 		relayWSURL = strings.Replace(relayWSURL, "127.0.0.1", qr.LanIP(), 1)
-		qr.Print(os.Stderr, relayWSURL)
+
+		// Print QR code with new JSON format
+		qrData := map[string]interface{}{
+			"relay": *relayURL,
+			"id":    instanceID,
+			"pub":   srv.PubKeyBase64(),
+		}
+		data, _ := json.Marshal(qrData)
+		qr.Print(os.Stderr, string(data))
 
 		// Write relay URL to a well-known file for programmatic access.
 		relayFile := filepath.Join(os.TempDir(), ".tern-relay")
@@ -685,8 +698,14 @@ func main() {
 			slog.Info("relay URL written", "path", relayFile)
 		}
 	} else {
-		directURL := fmt.Sprintf("jevon://%s:%d", qr.LanIP(), *port)
-		qr.Print(os.Stderr, directURL)
+		// Print QR code with new JSON format for direct mode
+		qrData := map[string]interface{}{
+			"relay": "",
+			"id":    "",
+			"pub":   srv.PubKeyBase64(),
+		}
+		data, _ := json.Marshal(qrData)
+		qr.Print(os.Stderr, string(data))
 	}
 
 	// Block until shutdown signal.

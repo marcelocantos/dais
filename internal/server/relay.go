@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"time"
@@ -30,16 +31,19 @@ func (w ternWriter) Close() error { return w.conn.Close() }
 func (s *Server) ConnectRelay(ctx context.Context, relayURL, token, instanceID string) (string, error) {
 	slog.Info("connecting to relay", "url", relayURL)
 
-	var opts []tern.Option
-	opts = append(opts, tern.WithTLS(&tls.Config{InsecureSkipVerify: true}))
-	if token != "" {
-		opts = append(opts, tern.WithToken(token))
+	lanSrv, err := tern.NewLANServer("", nil) // random port, self-signed TLS
+	if err != nil {
+		return "", fmt.Errorf("LAN server: %w", err)
 	}
-	if instanceID != "" {
-		opts = append(opts, tern.WithInstanceID(instanceID))
-	}
+	s.lanSrv = lanSrv
 
-	conn, err := tern.Register(ctx, relayURL, opts...)
+	cfg := tern.Config{
+		TLS:        &tls.Config{InsecureSkipVerify: true},
+		Token:      token,
+		InstanceID: instanceID,
+		LANServer:  lanSrv,
+	}
+	conn, err := tern.Register(ctx, relayURL, cfg)
 	if err != nil {
 		return "", err
 	}

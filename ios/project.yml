@@ -11,17 +11,16 @@ settings:
     DEVELOPMENT_TEAM: WG8QTTL954
 
 packages:
-  TernCrypto:
+  Tern:
     url: https://github.com/marcelocantos/tern
-    from: 0.1.0
+    from: 0.11.0
 
 targets:
   Jevon:
     type: application
     platform: iOS
     dependencies:
-      - package: TernCrypto
-      - package: TernRelay
+      - package: Tern
     sources:
       - path: Jevon
         excludes: ["Models/E2ECrypto.swift", "Protocol/PairingCeremonyMachine.swift"]

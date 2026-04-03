@@ -6,17 +6,20 @@ package server
 
 import (
 	"context"
+	"crypto/ecdh"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
-	"strings"
+	"net/http"
 	"os"
 	"path/filepath"
-	"net/http"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/marcelocantos/tern"
 
 	"github.com/coder/websocket"
 	"github.com/marcelocantos/jevon/internal/claude"
@@ -28,7 +31,7 @@ import (
 
 // TranscriptEntry is a single turn in the conversation log.
 type TranscriptEntry struct {
-	Role      string    `json:"role"`      // "user" or "jevon"
+	Role      string    `json:"role"` // "user" or "jevon"
 	Text      string    `json:"text"`
 	Timestamp time.Time `json:"timestamp"`
 }
@@ -69,32 +72,35 @@ type Server struct {
 	transcript []TranscriptEntry
 	turnBuf    string // accumulates Jevon text for current turn
 
-	luaRT     *ui.LuaRuntime
-	viewState *ui.ViewState
-
+	luaRT          *ui.LuaRuntime
+	viewState      *ui.ViewState
+	lanSrv         *tern.LANServer // LAN server for direct connections
+	serverKP       *ecdh.PrivateKey
+	pubKeyBase64   string
+	openAIKey      string
+	voiceBridge    *VoiceBridge
 	lastScreenshot string
 	screenshotCh   chan string
-
-	openAIKey     string // set via SetOpenAIKey
-	proc          *claude.Process
-	registry      *claude.Registry
-	chatListeners []chan string
-
-	voiceBridge *VoiceBridge
+	proc           *claude.Process
+	registry       *claude.Registry
+	chatListeners  []chan string
 }
+
+func (s *Server) PubKeyBase64() string { return s.pubKeyBase64 }
 
 // New creates a Server with the given Jevon instance, manager, database, version string,
 // Lua runtime, and view state. The Lua runtime and view state may be nil if the
 // server-driven UI is not yet active.
 func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string, luaRT *ui.LuaRuntime, vs *ui.ViewState) *Server {
 	s := &Server{
-		jevon:     jev,
-		mgr:       mgr,
-		db:        database,
-		version:   version,
-		remotes:   make(map[int]remoteConn),
-		luaRT:     luaRT,
-		viewState: vs,
+		jevon:         jev,
+		mgr:           mgr,
+		db:            database,
+		version:       version,
+		remotes:       make(map[int]remoteConn),
+		luaRT:         luaRT,
+		viewState:     vs,
+		chatListeners: make([]chan string, 0),
 	}
 
 	// Load persisted transcript.
@@ -137,7 +143,6 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 			"content": text,
 		})
 
-
 		if s.viewState != nil {
 			s.viewState.UpdateStreamingText(text)
 			s.PushView()
@@ -178,7 +183,6 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 			"state": state,
 		})
 
-
 		if s.viewState != nil {
 			s.viewState.SetStatus(state)
 			s.PushView()
@@ -187,7 +191,6 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 
 	return s
 }
-
 
 // BroadcastBinary sends a binary WebSocket message to all connected clients.
 func (s *Server) BroadcastBinary(data []byte) {
@@ -210,7 +213,6 @@ func (s *Server) BroadcastBinary(data []byte) {
 		cancel()
 	}
 }
-
 
 // RegisterRoutes adds HTTP and WebSocket routes to the mux.
 // Additional routes (e.g. MCP server) should be registered separately.
@@ -472,7 +474,6 @@ func (s *Server) HandleUserMessage(text string) {
 	if err := s.db.AppendTranscript("user", text); err != nil {
 		slog.Error("failed to persist user message", "err", err)
 	}
-
 
 	s.Broadcast(map[string]any{
 		"type":      "user_message",

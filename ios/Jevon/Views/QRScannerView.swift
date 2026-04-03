@@ -3,6 +3,7 @@
 
 import AVFoundation
 import SwiftUI
+import UIKit
 import Vision
 
 /// A camera-based scanner that detects connection URLs via QR code or
@@ -132,6 +133,11 @@ final class QRScannerViewController: UIViewController {
             onScan?(host, port)
         case .url(let url):
             onScanURL?(url)
+        case .relayConfig(let config):
+            // TODO: Pass relay config to Connection for BridgeMode.relay + key exchange
+            if let relay = config["relay"] as? String, let id = config["id"] as? String {
+                onScanURL?(URL(string: "ws://\(relay)/\(id)") ?? URL(string: "about:blank")!)
+            }
         }
     }
 }
@@ -141,6 +147,7 @@ final class QRScannerViewController: UIViewController {
 private enum ScanResult {
     case hostPort(String, Int)
     case url(URL)
+    case relayConfig([String: Any])
 }
 
 // MARK: - QR Metadata Delegate
@@ -215,6 +222,13 @@ private final class OCRVideoDelegate: NSObject, AVCaptureVideoDataOutputSampleBu
 // MARK: - URL Parsing
 
 private func parseURL(_ string: String) -> ScanResult? {
+    // Try JSON QR (new format with relay, id, pub).
+    if let data = string.data(using: .utf8),
+       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+       json["pub"] != nil {
+        return .relayConfig(json)
+    }
+
     // Try jevon:// scheme (direct connection).
     if let url = URLComponents(string: string),
        url.scheme == "jevon",

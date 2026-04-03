@@ -9,7 +9,26 @@ same network.
 `LANServer`, `Config` struct (replaces variadic options), and automatic
 LAN upgrade.
 
-## Current State
+## Current Status
+
+**Go side (completed):** 
+- Tern bumped to v0.10.0 in go.mod.
+- `internal/server/relay.go` migrated to `tern.Config` + `NewLANServer` (stores `lanSrv` on Server). Uses `ternWriter` and updated send/recv. (Steps 1-2 complete.)
+- `internal/server/pairing.go` added with `LoadOrGenerateKeyPair()` and stub `handlePairing()` that calls `SetChannel(nil)`. Keypair persisted in `~/.jevon/keypair.json`.
+- QR updated to JSON format (`{"relay": "...", "id": "...", "pub": "..." }`) in `cmd/jevond/main.go`. Calls `srv.LoadOrGenerateKeyPair()` and `ConnectRelay()`.
+- Server struct has `lanSrv`, `serverKP`, `pubKeyBase64`.
+
+**iOS side (partial):**
+- `JevonBridge.swift` has `BridgeMode.relay` using `TernConn.connect()`, receive loop with basic E2E support (but channel not set).
+- `Transport.swift` abstracts WS and QUICTransport.
+- Tern SPM at 0.1.0 (needs update; Go uses 0.10.0).
+- QRScannerView.swift and Connection.swift still use old WebSocket/jevon:// parsing and WS transport.
+- Voice not routed through tern (TODO in JevonBridge).
+- No full key exchange or SetChannel usage on iOS.
+
+**Remaining:** Key exchange integration, full iOS tern migration, Swift tern enhancements for LAN/SetChannel, WS cleanup, web UI bundling.
+
+## Current State (historical)
 
 ### Go side (jevond)
 - `internal/server/relay.go`: `ConnectRelay()` calls `tern.Register()`
@@ -57,131 +76,50 @@ LAN upgrade.
 
 ## Migration Steps
 
-### Step 1: Bump tern to v0.10.0
+### Step 1: Bump tern to v0.10.0 [COMPLETED on Go side]
 
-**Go:**
-```bash
-cd /Users/marcelo/work/github.com/marcelocantos/jevon
-go get github.com/marcelocantos/tern@v0.10.0
-go mod tidy
-```
+**Go:** [x] Bumped to v0.10.0 in go.mod, tidy done.
 
-**SPM** (ios/Jevon.xcodeproj/project.pbxproj):
-Change `minimumVersion = 0.9.0` → `minimumVersion = 0.10.0`.
+**SPM:** [ ] Update ios/project.yml from 0.1.0 to match (note: Swift package versions differ).
 
-**Build both** to verify API compatibility. The Go side will break
-because `tern.Register()` no longer takes variadic options — it takes
-`tern.Config{}`. Fix `relay.go` first (Step 2).
+**Build:** Verified on Go; iOS tern version lags.
 
-### Step 2: Migrate relay.go to Config struct + add LANServer
+### Step 2: Migrate relay.go to Config struct + add LANServer [COMPLETED]
 
-**File:** `internal/server/relay.go`
+### Step 2: Migrate relay.go to Config struct + add LANServer [COMPLETED]
 
-Replace:
-```go
-var opts []tern.Option
-opts = append(opts, tern.WithTLS(&tls.Config{InsecureSkipVerify: true}))
-if token != "" {
-    opts = append(opts, tern.WithToken(token))
-}
-if instanceID != "" {
-    opts = append(opts, tern.WithInstanceID(instanceID))
-}
-conn, err := tern.Register(ctx, relayURL, opts...)
-```
+**File:** `internal/server/relay.go:34`
 
-With:
-```go
-lanSrv, err := tern.NewLANServer("", nil) // random port, self-signed TLS
-if err != nil {
-    return "", fmt.Errorf("LAN server: %w", err)
-}
+- Now uses `NewLANServer`, `tern.Config` with LANServer, stores `s.lanSrv`.
+- `ternWriter` adapts `Send`/`Recv` (no ctx on Recv in current impl).
+- sendJSON updated to use `conn.Send` with timeout ctx.
+- `handlePairing` not yet wired into receive loop (see Step 3).
 
-cfg := tern.Config{
-    TLS:        &tls.Config{InsecureSkipVerify: true},
-    Token:      token,
-    InstanceID: instanceID,
-    LANServer:  lanSrv,
-}
-conn, err := tern.Register(ctx, relayURL, cfg)
-```
+See current implementation in `internal/server/relay.go:29`.
 
-Store `lanSrv` on the Server struct so it can be closed on shutdown.
+### Step 3: Add key exchange and encryption to jevond [PARTIAL]
 
-**Also update `sendJSON`** — `conn.Send()` signature may have changed
-in v0.10.0 (check: does it still take `context.Context`?).
+**File:** `internal/server/pairing.go` [x] Keypair load/generate implemented.
 
-### Step 3: Add key exchange and encryption to jevond
+- `LoadOrGenerateKeyPair()` done, called from main.go.
+- `handlePairing` stub: loads keypair, `conn.SetChannel(nil)` to enable LAN, but no full ECDH/HKDF, no confirmation code, no clientPubKey handling.
+- Not yet called from `relay.go` receive loop (TODO: listen for pairing message from client).
+- QR includes "pub" key [x].
+- Full crypto (using tern/crypto?) and PairingRecord to DB pending. See targets.md for 🎯T14 pairing ceremony.
 
-**New file:** `internal/server/pairing.go` (or extend `relay.go`)
+### Step 4: Update QR code format [PARTIAL]
 
-After registration:
-1. Generate an `ecdh.PrivateKey` (X25519) at startup. Store the key
-   pair persistently (in `~/.jevon/keypair.json` or SQLite).
-2. Encode the **public key** in the QR code alongside relay URL and
-   instance ID.
-3. When the iOS client connects, it sends its public key as the first
-   message on the primary stream.
-4. jevond receives it, derives the session key via ECDH + HKDF:
-   ```go
-   rec := crypto.NewPairingRecord(clientInstanceID, relayURL, serverKP, clientPubKey)
-   ch, _ := rec.DeriveChannel([]byte("server-to-client"), []byte("client-to-server"))
-   conn.SetChannel(ch)
-   ```
-5. `SetChannel()` triggers automatic LAN advertisement to the client.
-6. Derive and display a 6-digit confirmation code:
-   ```go
-   code, _ := crypto.DeriveConfirmationCode(serverKP.Public, clientPubKey)
-   ```
-   Display in jevond terminal. iOS displays it too. User visually
-   confirms match (MitM protection).
-7. Store `PairingRecord` in SQLite for reconnection without re-pairing.
+**Current (legacy):** `jevon://...` or ws:// still supported in scanner but QR now JSON.
 
-### Step 4: Update QR code format
+**New:** JSON with "relay", "id", "pub" [x] implemented in `cmd/jevond/main.go:685`.
 
-**Current:** `jevon://192.168.1.5:13705` or relay WebSocket URL.
+Update iOS `QRScannerView.swift` and `ConnectView.swift` / `Connection.swift` to parse JSON QR and use relay mode with pubkey for key exchange [pending].
 
-**New:** JSON encoded in the QR:
-```json
-{
-  "relay": "https://tern.fly.dev",
-  "id": "abc123",
-  "pub": "<base64 X25519 public key>"
-}
-```
+### Step 5: Replace Connection.swift with tern [PARTIAL]
 
-Update `cmd/jevond/main.go` where `qr.Print()` is called to encode
-this new format.
+**Status:** JevonBridge.swift and Transport.swift have basic relay/TernConn support (connect, recv loop, E2E stub). Connection.swift still WS-only.
 
-Update iOS `QRScannerView` to parse the new JSON format.
-
-### Step 5: Replace Connection.swift with tern
-
-**This is the biggest iOS change.** `Connection.swift` currently
-manages:
-- WebSocket connection + reconnect
-- State machine (disconnected/connecting/connected/error)
-- Binary sync protocol (sqlpipe)
-- Control channel (exec_lua, screenshot, etc.)
-- Subscription-based auto-render
-
-Replace the WebSocket transport with `TernConn`:
-
-1. **Connect:** `TernConn.connect(host:port:instanceID:)` using relay
-   host/port and instance ID from QR.
-2. **Key exchange:** Generate key pair, send public key, receive
-   server's public key (already in QR), derive channel, set it.
-   `TernConn` needs `SetChannel` added to the Swift side (see Step 7).
-3. **Message framing:** Currently WebSocket distinguishes text vs
-   binary frames. Over tern primary stream, use a 1-byte type prefix:
-   - `0x00` + JSON = text message
-   - `0x01` + bytes = binary (sync protocol)
-   Or use separate tern channels: primary stream for JSON,
-   DatagramChannel for sync, StreamChannel for voice.
-4. **Reconnect:** On disconnect, reload `PairingRecord` from Keychain,
-   reconnect to relay, derive channel from record (no re-pairing).
-5. **State machine:** Keep the same states but driven by TernConn
-   events instead of URLSessionWebSocketTask.
+Partial implementation in `JevonBridge.swift:199` for relay mode. Full replacement of state machine, sync protocol, control msgs pending. Key exchange not implemented on iOS.
 
 ### Step 6: Route voice through tern
 
@@ -262,40 +200,38 @@ serve HTTP), the web UI must be bundled:
 3. The web UI detects native mode (`window.webkit.messageHandlers`)
    and uses the JS bridge — no network requests to jevond.
 
-## Execution Order
+## Execution Order (updated)
 
-Steps 1-4 can be done in one session (Go-side tern migration).
-Steps 5-6 are the iOS migration (bigger, can be parallel with 7).
-Step 7 is tern repo work (prerequisite for full iOS LAN upgrade).
-Steps 8-9 are cleanup after everything works.
+Steps 1-2, partial 3-4 completed on Go side. iOS partial in Bridge/Transport.
 
-**Recommended sequence:**
-1. Steps 1-2 (bump + Config migration) — small, unblocks everything
-2. Step 4 (QR format) — needed for iOS to connect via tern
-3. Step 3 (key exchange) — needed for encryption + LAN trigger
-4. Steps 5-6 (iOS tern + voice) — main iOS work
-5. Step 7 (Swift TernConn LAN) — tern repo, may need to happen
-   alongside step 5
-6. Steps 8-9 (cleanup + bundle) — final polish
+**Recommended next:**
+1. Integrate handlePairing and full key exchange in relay.go + pairing.go (complete Step 3).
+2. Update iOS QR parsing and Connection to use new JSON + relay mode with pubkey.
+3. Complete voice over tern (Step 6) and E2E in JevonBridge.
+4. Bump iOS tern SPM and implement SetChannel/LAN in tern Swift (Step 7).
+5. Steps 8-9 cleanup once stable.
+6. Verify LAN upgrade and remove WS fallback.
 
-## Files Affected
+See 🎯T14 in docs/targets.md for related pairing work.
+
+## Files Affected (updated)
 
 ### Go (jevond)
-- `go.mod` — bump tern
-- `internal/server/relay.go` — Config struct, LANServer, key exchange
-- `internal/server/server.go` — remove /ws/remote (Step 8)
-- `internal/server/voice.go` — voice over tern channels
-- `internal/server/pairing.go` — new: key exchange, PairingRecord
-- `cmd/jevond/main.go` — QR format, LANServer lifecycle, keypair flag
+- [x] `go.mod` — tern v0.10.0
+- [x] `internal/server/relay.go` — Config, LANServer, ternWriter
+- [x] `internal/server/pairing.go` — keypair (partial)
+- [x] `internal/server/server.go` — fields, WS still present
+- [ ] `cmd/jevond/main.go` — QR done, integrate pairing
+- [ ] `internal/server/voice.go` — update for tern channels
+- [ ] remove /ws/remote
 
 ### iOS
-- `Jevon.xcodeproj/project.pbxproj` — bump tern SPM, add bundled web resources
-- `Models/Connection.swift` — replace WebSocket with TernConn
-- `Models/JevonBridge.swift` — update relay mode for voice channels
-- `Views/ConnectView.swift` — parse new QR JSON format
-- `Views/QRScannerView.swift` — decode new QR format
-- `Views/ContentView.swift` — load bundled web UI, not HTTP URL
-- `Views/WebUIView.swift` — loadFileURL instead of network URL
+- [partial] `Models/JevonBridge.swift`, `Models/Transport.swift` — relay skeleton
+- [ ] `Views/QRScannerView.swift` — JSON parser
+- [ ] `Models/Connection.swift` — full tern integration
+- [ ] bump tern in `project.yml`
+- [ ] bundle web UI, update ContentView/WebUIView
+- [ ] JevonBridge voice over tern
 
 ### Tern repo (separate)
-- `Sources/Tern/TernRelay.swift` — SetChannel, LAN upgrade, control msgs
+- Update Swift package for SetChannel, LAN upgrade, E2EChannel support.

@@ -641,7 +641,7 @@
 			repositoryURL = "https://github.com/marcelocantos/tern";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 0.9.0;
+				minimumVersion = 0.10.0;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
