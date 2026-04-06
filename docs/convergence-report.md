@@ -23,7 +23,7 @@ Standing invariants: all green.
 
 ### 🎯T13 Full-duplex voice input  [weight 1.6]
 Gap: close
-iOS VoiceManager fully implemented (local VAD, OpenAI Realtime API WebSocket, 24kHz PCM16 streaming, silence timeout, ephemeral token request flow). Server-side token proxy endpoint (`POST /api/realtime/token`) implemented in jevond. Interruption handling in place (`Process.Interrupt()` sends Esc to cancel current turn). Remaining: test end-to-end on real device (Pippa).
+iOS VoiceManager fully implemented (local VAD, OpenAI Realtime API WebSocket, 24kHz PCM16 streaming, silence timeout, ephemeral token request flow). Server-side token proxy endpoint (`POST /api/realtime/token`) implemented in jevonsd. Interruption handling in place (`Process.Interrupt()` sends Esc to cancel current turn). Remaining: test end-to-end on real device (Pippa).
 
 ### 🎯T11 Lua-controllable SwiftUI modifier surface  [weight 1.6]  (visual)
 Gap: converging (1/2 sub-targets achieved)
@@ -52,7 +52,7 @@ Changed files overlap: `internal/ui/schema.go`, `ios/Jevon/Views/ServerView.swif
 Status: converging
 Changed files overlap: `internal/sync/sync.go` — may be affected.
 
-### 🎯T7 Mobile app for Jevon  [weight 1.0]  (visual)  (status only)
+### 🎯T7 Mobile app for Jevons  [weight 1.0]  (visual)  (status only)
 Status: converging
 Changed files overlap: `ios/Jevon/Views/ChatView.swift` — may be affected.
 
@@ -66,12 +66,12 @@ Gap: not started (0/2 sub-targets achieved)
   [ ] 🎯T16.1 Active work dashboard — not started (plan in `docs/plans/active-work-dashboard.md`)
   [ ] 🎯T16.2 Session grandfathering — not started (blocked by 🎯T16.1)
 
-### 🎯T17 Jevon UI renders via ge engine  [weight 0.6]
+### 🎯T17 Jevons UI renders via ge engine  [weight 0.6]
 Gap: not started (0/3 sub-targets achieved)
 
-  [ ] 🎯T17.1 jevon-ui C++ ge application scaffold — not started
-  [ ] 🎯T17.2 jevon-ui feature parity with web UI — not started (blocked by 🎯T17.1)
-  [ ] 🎯T17.3 jevon-ui runs headless with scene protocol — not started (blocked by 🎯T17.2)
+  [ ] 🎯T17.1 jevons-ui C++ ge application scaffold — not started
+  [ ] 🎯T17.2 jevons-ui feature parity with web UI — not started (blocked by 🎯T17.1)
+  [ ] 🎯T17.3 jevons-ui runs headless with scene protocol — not started (blocked by 🎯T17.2)
 
 ### 🎯T5 Authentication implemented  [weight 0.6]  (status only)
 Status: identified
@@ -88,7 +88,7 @@ Reason: Tied for highest effective weight (1.6) with 🎯T11, 🎯T12, and 🎯T
 
 ## Suggested action
 
-Connect Pippa and test the full voice pipeline end-to-end: build and install the iOS app via `xcodebuild`, verify the mic activates local VAD, confirm audio streams to OpenAI via the ephemeral token from jevond's `/api/realtime/token` endpoint, and check that completed utterances arrive as chat messages. Test interruption by speaking while the agent is responding.
+Connect Pippa and test the full voice pipeline end-to-end: build and install the iOS app via `xcodebuild`, verify the mic activates local VAD, confirm audio streams to OpenAI via the ephemeral token from jevonsd's `/api/realtime/token` endpoint, and check that completed utterances arrive as chat messages. Test interruption by speaking while the agent is responding.
 
 <!-- convergence-deps
 evaluated: 2026-03-29T06:52:52Z
@@ -183,7 +183,7 @@ sha: afe8751
 
 🎯T17.1:
   gap: not started
-  assessment: "No scaffold. ge submodule exists but no jevon-ui binary."
+  assessment: "No scaffold. ge submodule exists but no jevons-ui binary."
   read: []
 
 🎯T5:

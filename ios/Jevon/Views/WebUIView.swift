@@ -41,10 +41,10 @@ struct WebUIView: UIViewRepresentable {
 
     @MainActor
     class Coordinator {
-        let bridge: JevonBridge
+        let bridge: JevonsBridge
 
         init(serverURL: URL) {
-            bridge = JevonBridge(serverURL: serverURL)
+            bridge = JevonsBridge(serverURL: serverURL)
         }
     }
 }

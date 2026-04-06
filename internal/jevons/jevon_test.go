@@ -1,4 +1,4 @@
-package jevon
+package jevons
 
 import (
 	"testing"

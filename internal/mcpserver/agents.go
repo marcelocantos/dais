@@ -14,7 +14,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 
-	"github.com/marcelocantos/jevon/internal/claude"
+	"github.com/marcelocantos/jevons/internal/claude"
 )
 
 // NotifyFunc injects a text message into the Jevon overseer's PTY input.
@@ -26,14 +26,14 @@ func (s *Server) SetRegistry(registry *claude.Registry) {
 	s.registry = registry
 
 	s.mcpSrv.AddTool(
-		mcp.NewTool("jevon_agent_list",
+		mcp.NewTool("jevons_agent_list",
 			mcp.WithDescription("List all registered agents and their status (running/stopped)."),
 		),
 		s.handleAgentList,
 	)
 
 	s.mcpSrv.AddTool(
-		mcp.NewTool("jevon_agent_start",
+		mcp.NewTool("jevons_agent_start",
 			mcp.WithDescription("Start a persistent agent in a repo/directory. Creates and registers it if new. The agent runs as a persistent Claude Code process that retains conversation across messages."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Unique agent name (e.g. 'tern', 'jevon-frontend')")),
 			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory for the agent (e.g. '~/work/github.com/marcelocantos/tern')")),
@@ -43,7 +43,7 @@ func (s *Server) SetRegistry(registry *claude.Registry) {
 	)
 
 	s.mcpSrv.AddTool(
-		mcp.NewTool("jevon_agent_send",
+		mcp.NewTool("jevons_agent_send",
 			mcp.WithDescription("Send a message to a running agent. Returns immediately — the agent processes asynchronously. When the agent responds, you will receive a notification with the response text."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name")),
 			mcp.WithString("text", mcp.Required(), mcp.Description("Message to send")),
@@ -52,7 +52,7 @@ func (s *Server) SetRegistry(registry *claude.Registry) {
 	)
 
 	s.mcpSrv.AddTool(
-		mcp.NewTool("jevon_agent_stop",
+		mcp.NewTool("jevons_agent_stop",
 			mcp.WithDescription("Stop a running agent. It can be restarted later and will resume its session."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name")),
 		),

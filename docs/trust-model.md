@@ -1,6 +1,6 @@
 # Trust Model
 
-This document defines Jevon's permission model: what actions Jevon and
+This document defines Jevon's permission model: what actions Jevons and
 workers can take without approval, what requires user confirmation, and
 how confirmation flows between Claude Code processes and the user.
 
@@ -10,7 +10,7 @@ how confirmation flows between Claude Code processes and the user.
 |-------|-------------|---------------|
 | **User** | Human operator interacting via phone app, `remote` TUI, or WebSocket client | Authenticated (future: mTLS client cert) |
 | **Jevon** | Coordinator Claude Code instance managing workers | Runs with `--permission-mode bypassPermissions` |
-| **Worker** | Task-specific Claude Code instance spawned by Jevon | Runs with `--dangerously-skip-permissions` |
+| **Worker** | Task-specific Claude Code instance spawned by Jevons | Runs with `--dangerously-skip-permissions` |
 
 ## Permission tiers
 
@@ -71,7 +71,7 @@ When a Tier 2 action is requested, the confirmation must reach the
 user and return before the action proceeds.
 
 ```
-Worker/Jevon                 jevond                    User device
+Worker/Jevons                 jevonsd                    User device
      │                         │                           │
      │ permission_request      │                           │
      │ (tool, args, context)   │                           │
@@ -95,7 +95,7 @@ Worker/Jevon                 jevond                    User device
 
 | Type | Fields | Description |
 |------|--------|-------------|
-| `confirm_request` | `id`, `actor` ("jevon"\|"worker:ID"), `tool`, `args`, `summary` | Permission request requiring user decision |
+| `confirm_request` | `id`, `actor` ("jevons"\|"worker:ID"), `tool`, `args`, `summary` | Permission request requiring user decision |
 
 **Client → Server:**
 
@@ -108,12 +108,12 @@ Worker/Jevon                 jevond                    User device
 - If no response arrives within 60 seconds, the action is **denied**
   (fail-closed).
 - The user is notified that the request timed out.
-- The worker/Jevon receives a denial with reason "timeout".
+- The worker/Jevons receives a denial with reason "timeout".
 
 ### Batching
 
 When a worker triggers multiple Tier 2 actions in rapid succession
-(e.g., committing and pushing), jevond may batch them into a single
+(e.g., committing and pushing), jevonsd may batch them into a single
 confirmation request showing all pending actions. The user approves
 or denies the batch as a unit.
 
@@ -122,7 +122,7 @@ or denies the batch as a unit.
 1. **🎯T4 (this document)**: Define the model. ✓
 2. **Claude Code integration**: Replace `--permission-mode
    bypassPermissions` with a custom permission handler that routes
-   confirmation requests through jevond's WebSocket protocol.
+   confirmation requests through jevonsd's WebSocket protocol.
 3. **🎯T5 Authentication**: Add mTLS so only provisioned devices can
    send confirmation responses.
 4. **🎯T6 Permission enforcement**: Wire up the confirmation flow
@@ -130,7 +130,7 @@ or denies the batch as a unit.
 
 ## Open questions
 
-- Should workers be able to escalate to Jevon for pre-approval of
+- Should workers be able to escalate to Jevons for pre-approval of
   common patterns (e.g., "approve all commits in this session")?
 - Should there be a per-session trust level that the user can adjust
   (e.g., "I trust this worker to commit freely")?

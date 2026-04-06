@@ -19,25 +19,25 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/marcelocantos/jevon/internal/claude"
-	"github.com/marcelocantos/jevon/internal/cli"
-	"github.com/marcelocantos/jevon/internal/db"
-	"github.com/marcelocantos/jevon/internal/discovery"
-	"github.com/marcelocantos/jevon/internal/jevon"
-	"github.com/marcelocantos/jevon/internal/manager"
-	"github.com/marcelocantos/jevon/internal/mcpserver"
-	"github.com/marcelocantos/jevon/internal/memory"
-	"github.com/marcelocantos/jevon/internal/server"
-	"github.com/marcelocantos/jevon/internal/session"
-	"github.com/marcelocantos/jevon/internal/transcript"
-	"github.com/marcelocantos/jevon/internal/ui"
+	"github.com/marcelocantos/jevons/internal/claude"
+	"github.com/marcelocantos/jevons/internal/cli"
+	"github.com/marcelocantos/jevons/internal/db"
+	"github.com/marcelocantos/jevons/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/jevons"
+	"github.com/marcelocantos/jevons/internal/manager"
+	"github.com/marcelocantos/jevons/internal/mcpserver"
+	"github.com/marcelocantos/jevons/internal/memory"
+	"github.com/marcelocantos/jevons/internal/server"
+	"github.com/marcelocantos/jevons/internal/session"
+	"github.com/marcelocantos/jevons/internal/transcript"
+	"github.com/marcelocantos/jevons/internal/ui"
 	"github.com/marcelocantos/tern/qr"
 )
 
-// jevonCLAUDEMD is the CLAUDE.md template written to Jevon's workdir.
-const jevonCLAUDEMD = `# Jevon
+// jevonsCLAUDEMD is the CLAUDE.md template written to Jevons's workdir.
+const jevonsCLAUDEMD = `# Jevons
 
-You are Jevon — Marcelo's personal AI assistant and the sole interface
+You are Jevons — Marcelo's personal AI assistant and the sole interface
 between him and his agentic ecosystem. You run as a persistent Claude
 Code process on his desktop. He talks to you via a web chat UI (mostly
 typing, sometimes via Wispr Flow speech-to-text).
@@ -86,51 +86,51 @@ execute with minimal upward insight flow. Return structured artifacts
 When Marcelo says something, match his intent to the right agent:
 
 - "I have an idea about tern" → route to the tern product owner
-- "What's the current work on jevon?" → route to the jevon product owner
+- "What's the current work on jevons?" → route to the jevons product owner
 - "Fix the build in sqlpipe" → route to sqlpipe product owner, which
   spawns a boss for the fix
 - Simple questions → answer directly without spawning agents
 
 If no product owner exists for a repo, create one via
-jevon_agent_start before routing.
+jevons_agent_start before routing.
 
 ## MCP Tools
 
 ### Agent Management
-- **jevon_agent_list** — List all registered agents and their status.
-- **jevon_agent_start** — Start a persistent agent in a repo. Creates
+- **jevons_agent_list** — List all registered agents and their status.
+- **jevons_agent_start** — Start a persistent agent in a repo. Creates
   and registers it if new. Use this for product owners.
   Required: name, workdir. Optional: model.
-- **jevon_agent_send** — Fire-and-forget: sends a message to a running
+- **jevons_agent_send** — Fire-and-forget: sends a message to a running
   agent and returns immediately. The agent's response arrives
   asynchronously as a notification pushed into your conversation —
   don't poll or wait, just continue working and handle it when it
   arrives. The agent retains full conversation history.
   Required: name, text.
-- **jevon_agent_stop** — Stop a running agent. It resumes later.
+- **jevons_agent_stop** — Stop a running agent. It resumes later.
   Required: name.
 
 ### Legacy Worker Tools (still available)
-- **jevon_list_sessions** — List old-style worker sessions.
-- **jevon_create_session** — Create an old-style worker.
-- **jevon_send_command** — Send a task to an old-style worker.
-- **jevon_kill_session** — Kill an old-style worker.
+- **jevons_list_sessions** — List old-style worker sessions.
+- **jevons_create_session** — Create an old-style worker.
+- **jevons_send_command** — Send a task to an old-style worker.
+- **jevons_kill_session** — Kill an old-style worker.
 
-Prefer the jevon_agent_* tools for new work.
+Prefer the jevons_agent_* tools for new work.
 
 ## Directory Layout
 
 All repos live under ~/work/github.com/<org>/<repo>:
-- ~/work/github.com/marcelocantos/jevon — this project
+- ~/work/github.com/marcelocantos/jevons — this project
 - ~/work/github.com/marcelocantos/tern — relay/crypto library
 - ~/work/github.com/marcelocantos/sqlpipe — state sync
 - ~/work/github.com/squz/yourworld2 — game project
 
 ## Self-Development
 
-You are the jevon project's own product. Your source code is at
-~/work/github.com/marcelocantos/jevon. When Marcelo asks you to
-improve yourself, spawn the jevon product owner to do the work.
+You are the jevons project's own product. Your source code is at
+~/work/github.com/marcelocantos/jevons. When Marcelo asks you to
+improve yourself, spawn the jevons product owner to do the work.
 `
 
 func main() {
@@ -140,7 +140,7 @@ func main() {
 	relayInstanceID := flag.String("instance-id", "", "persistent relay instance ID (enables reconnect without re-pairing)")
 	workDir := flag.String("workdir", ".", "default working directory for worker sessions")
 	model := flag.String("model", "", "default model for worker sessions")
-	jevonModel := flag.String("jevon-model", "", "model for Jevon (default: same as --model)")
+	jevonsModel := flag.String("jevons-model", "", "model for Jevonss (default: same as --model)")
 	debug := flag.Bool("debug", false, "enable debug logging")
 	setOpenAIKey := flag.Bool("set-openai-key", false, "prompt for OpenAI API key, store in macOS Keychain, and exit")
 	setXAIKey := flag.Bool("set-xai-key", false, "prompt for xAI API key, store in macOS Keychain, and exit")
@@ -156,7 +156,7 @@ func main() {
 	}
 
 	if *showVersion {
-		fmt.Println("jevond", cli.Version)
+		fmt.Println("jevonsd", cli.Version)
 		os.Exit(0)
 	}
 	if *helpAgent {
@@ -174,25 +174,25 @@ func main() {
 		Level: logLevel,
 	})))
 
-	// Resolve Jevon model.
-	jevModel := *jevonModel
-	if jevModel == "" {
-		jevModel = *model
+	// Resolve Jevons model.
+	jevsModel := *jevonsModel
+	if jevsModel == "" {
+		jevsModel = *model
 	}
 
-	// Set up Jevon workdir with CLAUDE.md.
+	// Set up Jevons workdir with CLAUDE.md.
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		slog.Error("cannot determine home directory", "err", err)
 		os.Exit(1)
 	}
-	jevDir := filepath.Join(homeDir, ".jevon", "jevon")
+	jevDir := filepath.Join(homeDir, ".jevons", "jevons")
 	if err := os.MkdirAll(jevDir, 0o755); err != nil {
 		slog.Error("cannot create jevon workdir", "err", err)
 		os.Exit(1)
 	}
-	// Build Jevon CLAUDE.md, injecting managed-repos if available.
-	jevContent := jevonCLAUDEMD
+	// Build Jevons CLAUDE.md, injecting managed-repos if available.
+	jevContent := jevonsCLAUDEMD
 	reposFile := filepath.Join(homeDir, ".claude", "managed-repos.md")
 	if data, err := os.ReadFile(reposFile); err == nil {
 		jevContent += "\n## User's Repositories\n\n" + string(data)
@@ -203,9 +203,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Write .mcp.json for Jevon to discover the MCP server.
+	// Write .mcp.json for Jevons to discover the MCP server.
 	mcpJSON := fmt.Sprintf(
-		`{"mcpServers":{"jevon":{"type":"http","url":"http://localhost:%d/mcp"}}}`, *port)
+		`{"mcpServers":{"jevons":{"type":"http","url":"http://localhost:%d/mcp"}}}`, *port)
 	mcpJSONPath := filepath.Join(jevDir, ".mcp.json")
 	if err := os.WriteFile(mcpJSONPath, []byte(mcpJSON), 0o644); err != nil {
 		slog.Error("cannot write .mcp.json", "err", err)
@@ -213,7 +213,7 @@ func main() {
 	}
 
 	// Open database.
-	dbPath := filepath.Join(homeDir, ".jevon", "jevon.db")
+	dbPath := filepath.Join(homeDir, ".jevons", "jevons.db")
 	database, err := db.Open(dbPath)
 	if err != nil {
 		slog.Error("cannot open database", "path", dbPath, "err", err)
@@ -225,14 +225,14 @@ func main() {
 	scanner := discovery.NewScanner(filepath.Join(homeDir, ".claude", "projects"))
 	mgr := manager.New(*model, *workDir, database, scanner)
 
-	jev := jevon.New(jevon.Config{
+	jev := jevons.New(jevons.Config{
 		WorkDir:  jevDir,
-		Model:    jevModel,
-		ClaudeID: database.Get("jevon_claude_id"),
+		Model:    jevsModel,
+		ClaudeID: database.Get("jevons_claude_id"),
 	})
 	jev.SetClaudeIDCallback(func(id string) {
-		if err := database.Set("jevon_claude_id", id); err != nil {
-			slog.Error("failed to persist jevon claude ID", "err", err)
+		if err := database.Set("jevons_claude_id", id); err != nil {
+			slog.Error("failed to persist jevons claude ID", "err", err)
 		}
 	})
 
@@ -282,7 +282,7 @@ func main() {
 		srv.SetVoiceBridge(vb)
 		slog.Info("Grok voice bridge configured")
 	} else {
-		slog.Info("no xAI API key — voice bridge disabled (set XAI_API_KEY or store via: security add-generic-password -a jevon -s xai-api-key -w YOUR_KEY)")
+		slog.Info("no xAI API key — voice bridge disabled (set XAI_API_KEY or store via: security add-generic-password -a jevons -s xai-api-key -w YOUR_KEY)")
 	}
 
 	// Transcript reader for Lua access to Claude session transcripts.
@@ -303,9 +303,9 @@ func main() {
 	}
 
 	// File I/O sandbox root.
-	sandboxRoot := filepath.Join(homeDir, ".jevon")
+	sandboxRoot := filepath.Join(homeDir, ".jevons")
 
-	// validateSandbox ensures a path is under ~/.jevon/.
+	// validateSandbox ensures a path is under ~/.jevons/.
 	validateSandbox := func(path string) (string, error) {
 		abs, err := filepath.Abs(path)
 		if err != nil {
@@ -327,12 +327,12 @@ func main() {
 
 	// Register Lua capabilities — Go functions callable from Lua action handlers.
 	luaRT.RegisterCapabilities(ui.Capabilities{
-		JevonEnqueue: func(text string) {
+		JevonsEnqueue: func(text string) {
 			srv.HandleUserMessage(text)
 		},
-		JevonReset: func() {
-			if err := database.Set("jevon_claude_id", ""); err != nil {
-				slog.Error("failed to reset jevon claude ID", "err", err)
+		JevonsReset: func() {
+			if err := database.Set("jevons_claude_id", ""); err != nil {
+				slog.Error("failed to reset jevons claude ID", "err", err)
 			}
 		},
 		SessionList: func(all bool) []map[string]any {
@@ -417,7 +417,7 @@ func main() {
 			return transcriptReader.Fork(sessionID, keepTurns)
 		},
 
-		// File I/O (sandboxed to ~/.jevon/).
+		// File I/O (sandboxed to ~/.jevons/).
 		FileRead: func(path string) (string, error) {
 			abs, err := validateSandbox(path)
 			if err != nil {
@@ -501,13 +501,13 @@ func main() {
 		},
 	})
 
-	// Wire MCP server with Jevon event callback.
+	// Wire MCP server with Jevons event callback.
 	mcpSrv := mcpserver.New(mgr, *workDir, func(workerID, workerName, result string, failed bool) {
-		kind := jevon.EventWorkerCompleted
+		kind := jevons.EventWorkerCompleted
 		if failed {
-			kind = jevon.EventWorkerFailed
+			kind = jevons.EventWorkerFailed
 		}
-		jev.Enqueue(jevon.Event{
+		jev.Enqueue(jevons.Event{
 			Kind:       kind,
 			WorkerID:   workerID,
 			WorkerName: workerName,
@@ -537,10 +537,10 @@ func main() {
 			return tr.Truncate(sessionID, keepTurns)
 		},
 		ResetID: func() {
-			database.Set("jevon_claude_id", "")
+			database.Set("jevons_claude_id", "")
 		},
 		GetID: func() string {
-			return database.Get("jevon_claude_id")
+			return database.Get("jevons_claude_id")
 		},
 	})
 
@@ -570,11 +570,11 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	// Start Jevon event loop (legacy — manages its own Claude process).
+	// Start Jevons event loop (legacy — manages its own Claude process).
 	go jev.Run(ctx)
 
 	// Agent registry — manages persistent Claude processes.
-	registryPath := filepath.Join(homeDir, ".jevon", "agents.json")
+	registryPath := filepath.Join(homeDir, ".jevons", "agents.json")
 	registry, err := claude.NewRegistry(registryPath)
 	if err != nil {
 		slog.Error("agent registry failed", "err", err)
@@ -586,7 +586,7 @@ func main() {
 
 	// Transcript memory — searchable index of all Claude sessions.
 	claudeProjectsDir := filepath.Join(homeDir, ".claude", "projects")
-	memDBPath := filepath.Join(homeDir, ".jevon", "memory.db")
+	memDBPath := filepath.Join(homeDir, ".jevons", "memory.db")
 	mem, err := memory.New(memDBPath, claudeProjectsDir)
 	if err != nil {
 		slog.Error("transcript memory failed", "err", err)
@@ -609,7 +609,7 @@ func main() {
 	}
 
 	// Ensure the primary overseer agent exists.
-	jevonDef, err := registry.EnsureAgent("jevon", jevDir, "", true)
+	jevonDef, err := registry.EnsureAgent("jevons", jevDir, "", true)
 	if err != nil {
 		slog.Error("jevon agent setup failed", "err", err)
 		os.Exit(1)
@@ -640,7 +640,7 @@ func main() {
 	registry.StartAll()
 	defer registry.StopAll()
 
-	if jevonProc := registry.Get("jevon"); jevonProc != nil {
+	if jevonProc := registry.Get("jevons"); jevonProc != nil {
 		srv.SetProcess(jevonProc)
 		jevonProc.OnEvent(func(ev claude.Event) {
 			srv.BroadcastChat(string(ev.Raw))
@@ -662,8 +662,8 @@ func main() {
 		httpSrv.Close()
 	}()
 
-	slog.Info("jevond starting", "addr", listenAddr, "version", cli.Version,
-		"jevon_model", jevModel, "worker_model", *model)
+	slog.Info("jevonsd starting", "addr", listenAddr, "version", cli.Version,
+		"jevons_model", jevsModel, "worker_model", *model)
 
 	// Connect to relay if specified, otherwise print direct QR code.
 	if *relayURL != "" {
@@ -789,19 +789,19 @@ func readSecret() (string, error) {
 	}
 }
 
-// storeKeychainKey stores a value in the macOS Keychain under the "jevon" account.
+// storeKeychainKey stores a value in the macOS Keychain under the "jevons" account.
 func storeKeychainKey(service, value string) error {
 	// Delete any existing entry first (add fails if it exists).
 	exec.Command("security", "delete-generic-password",
-		"-a", "jevon", "-s", service).Run()
+		"-a", "jevons", "-s", service).Run()
 	return exec.Command("security", "add-generic-password",
-		"-a", "jevon", "-s", service, "-w", value).Run()
+		"-a", "jevons", "-s", service, "-w", value).Run()
 }
 
 // loadKeychainKey retrieves a value from the macOS Keychain.
 func loadKeychainKey(service string) (string, error) {
 	out, err := exec.Command("security", "find-generic-password",
-		"-a", "jevon", "-s", service, "-w").Output()
+		"-a", "jevons", "-s", service, "-w").Output()
 	if err != nil {
 		return "", err
 	}

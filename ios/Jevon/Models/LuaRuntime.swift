@@ -4,7 +4,7 @@
 import Foundation
 import os
 
-private let logger = Logger(subsystem: "com.marcelocantos.jevon", category: "LuaRuntime")
+private let logger = Logger(subsystem: "com.marcelocantos.jevons", category: "LuaRuntime")
 
 // MARK: - Lua macro replacements (C macros aren't visible to Swift)
 

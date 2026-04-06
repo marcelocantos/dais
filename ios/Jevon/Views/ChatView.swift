@@ -16,7 +16,7 @@ struct ChatView: View {
                 statusBar
                 inputBar
             }
-            .navigationTitle("Jevon")
+            .navigationTitle("Jevons")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {

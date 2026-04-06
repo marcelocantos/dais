@@ -7,7 +7,7 @@ import Tern
 import WebKit
 import os
 
-private let logger = Logger(subsystem: "com.marcelocantos.jevon", category: "JevonBridge")
+private let logger = Logger(subsystem: "com.marcelocantos.jevons", category: "JevonsBridge")
 
 /// Connection mode determines how the bridge communicates with jevond.
 enum BridgeMode {
@@ -26,7 +26,7 @@ enum BridgeMode {
 /// - **Direct** (LAN): WebSocket to jevond for chat and voice
 /// - **Relay**: TernConn QUIC for chat, voice routed through tern StreamChannel
 @MainActor
-final class JevonBridge: NSObject, WKScriptMessageHandler {
+final class JevonsBridge: NSObject, WKScriptMessageHandler {
 
     private weak var webView: WKWebView?
 
@@ -88,7 +88,7 @@ final class JevonBridge: NSObject, WKScriptMessageHandler {
     /// Attach to a WKWebView. Call this after the web view is created.
     func attach(to webView: WKWebView) {
         self.webView = webView
-        webView.configuration.userContentController.add(self, name: "jevon")
+        webView.configuration.userContentController.add(self, name: "jevons")
     }
 
     // MARK: - WKScriptMessageHandler

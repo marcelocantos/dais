@@ -16,10 +16,10 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/marcelocantos/jevon/internal/claude"
-	"github.com/marcelocantos/jevon/internal/manager"
-	"github.com/marcelocantos/jevon/internal/memory"
-	"github.com/marcelocantos/jevon/internal/session"
+	"github.com/marcelocantos/jevons/internal/claude"
+	"github.com/marcelocantos/jevons/internal/manager"
+	"github.com/marcelocantos/jevons/internal/memory"
+	"github.com/marcelocantos/jevons/internal/session"
 )
 
 // EventCallback is called when a worker finishes a command.
@@ -74,11 +74,11 @@ func New(mgr *manager.Manager, workerWD string, onDone EventCallback, reloadView
 		transcript:  transcript,
 	}
 
-	mcpSrv := server.NewMCPServer("jevon", "1.0.0")
+	mcpSrv := server.NewMCPServer("jevons", "1.0.0")
 	s.mcpSrv = mcpSrv
 
 	mcpSrv.AddTool(
-		mcp.NewTool("jevon_list_sessions",
+		mcp.NewTool("jevons_list_sessions",
 			mcp.WithDescription("List worker sessions and their status. Returns the most relevant sessions by default."),
 			mcp.WithBoolean("all", mcp.Description("Show all sessions, not just the most relevant")),
 		),
@@ -86,7 +86,7 @@ func New(mgr *manager.Manager, workerWD string, onDone EventCallback, reloadView
 	)
 
 	mcpSrv.AddTool(
-		mcp.NewTool("jevon_session_status",
+		mcp.NewTool("jevons_session_status",
 			mcp.WithDescription("Get detailed status and last result of a worker session."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Worker session ID (UUID)")),
 		),
@@ -94,7 +94,7 @@ func New(mgr *manager.Manager, workerWD string, onDone EventCallback, reloadView
 	)
 
 	mcpSrv.AddTool(
-		mcp.NewTool("jevon_create_session",
+		mcp.NewTool("jevons_create_session",
 			mcp.WithDescription("Create a new worker session for a coding task."),
 			mcp.WithString("name", mcp.Description("Human-readable name for the session")),
 			mcp.WithString("workdir", mcp.Description("Working directory (defaults to the coordinator's default)")),
@@ -104,7 +104,7 @@ func New(mgr *manager.Manager, workerWD string, onDone EventCallback, reloadView
 	)
 
 	mcpSrv.AddTool(
-		mcp.NewTool("jevon_send_command",
+		mcp.NewTool("jevons_send_command",
 			mcp.WithDescription("Send a command to a worker session. By default waits for completion and returns the result."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Worker session ID (UUID)")),
 			mcp.WithString("text", mcp.Required(), mcp.Description("The task or prompt to send")),
@@ -114,7 +114,7 @@ func New(mgr *manager.Manager, workerWD string, onDone EventCallback, reloadView
 	)
 
 	mcpSrv.AddTool(
-		mcp.NewTool("jevon_kill_session",
+		mcp.NewTool("jevons_kill_session",
 			mcp.WithDescription("Terminate a worker session."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Worker session ID (UUID)")),
 		),
@@ -123,8 +123,8 @@ func New(mgr *manager.Manager, workerWD string, onDone EventCallback, reloadView
 
 	if s.reloadViews != nil {
 		mcpSrv.AddTool(
-			mcp.NewTool("jevon_reload_views",
-				mcp.WithDescription("Reload Lua view scripts and push updated UI to connected clients. Call this after editing files in ~/.jevon/lua/views/."),
+			mcp.NewTool("jevons_reload_views",
+				mcp.WithDescription("Reload Lua view scripts and push updated UI to connected clients. Call this after editing files in ~/.jevons/lua/views/."),
 			),
 			s.handleReloadViews,
 		)
@@ -132,7 +132,7 @@ func New(mgr *manager.Manager, workerWD string, onDone EventCallback, reloadView
 
 	if s.execLua != nil {
 		mcpSrv.AddTool(
-			mcp.NewTool("jevon_exec_lua",
+			mcp.NewTool("jevons_exec_lua",
 				mcp.WithDescription("Execute Lua code on connected mobile clients. The code runs in the client's Lua runtime which has access to client-side functions like disconnect(). Use this for client interactions that don't need UI."),
 				mcp.WithString("code", mcp.Required(), mcp.Description("Lua code to execute on the client")),
 			),
@@ -142,7 +142,7 @@ func New(mgr *manager.Manager, workerWD string, onDone EventCallback, reloadView
 
 	if s.screenshot != nil {
 		mcpSrv.AddTool(
-			mcp.NewTool("jevon_screenshot",
+			mcp.NewTool("jevons_screenshot",
 				mcp.WithDescription("Take a screenshot of the connected mobile client's current screen. Returns the file path of the saved PNG image."),
 			),
 			s.handleScreenshot,
@@ -151,13 +151,13 @@ func New(mgr *manager.Manager, workerWD string, onDone EventCallback, reloadView
 
 	if s.transcript != nil {
 		mcpSrv.AddTool(
-			mcp.NewTool("jevon_transcript_read",
+			mcp.NewTool("jevons_transcript_read",
 				mcp.WithDescription("Read the Jevon conversation transcript. Returns an array of turns with role and text."),
 			),
 			s.handleTranscriptRead,
 		)
 		mcpSrv.AddTool(
-			mcp.NewTool("jevon_transcript_rewind",
+			mcp.NewTool("jevons_transcript_rewind",
 				mcp.WithDescription("Rewind the Jevon conversation to keep only the first N turns. A turn is a user message + assistant response. Set turns to 0 for a complete reset. The next message will start a fresh conversation."),
 				mcp.WithNumber("turns", mcp.Required(), mcp.Description("Number of turns to keep (0 = reset)")),
 			),

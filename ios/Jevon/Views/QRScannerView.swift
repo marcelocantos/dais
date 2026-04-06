@@ -231,7 +231,7 @@ private func parseURL(_ string: String) -> ScanResult? {
 
     // Try jevon:// scheme (direct connection).
     if let url = URLComponents(string: string),
-       url.scheme == "jevon",
+       url.scheme == "jevons",
        let host = url.host, !host.isEmpty,
        let port = url.port {
         return .hostPort(host, port)

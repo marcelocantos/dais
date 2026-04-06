@@ -16,7 +16,7 @@
 surfaces. The `internal/auth` package is fully implemented.
 
 **Acceptance criteria:**
-- mTLS is enforced on all jevond endpoints (HTTP, WebSocket, MCP).
+- mTLS is enforced on all jevonsd endpoints (HTTP, WebSocket, MCP).
 - QR-based device provisioning flow works end-to-end (scan QR on phone,
   device gets a client certificate).
 - `internal/auth` package has tests covering the provisioning and
@@ -31,12 +31,12 @@ surfaces. The `internal/auth` package is fully implemented.
 - **Status**: identified
 - **Discovered**: 2026-03-08
 
-**Desired state:** Neither Jevon nor workers run with blanket permission
+**Desired state:** Neither Jevons nor workers run with blanket permission
 bypass. Permission tiers from the trust model (🎯T4) are enforced.
 
 **Acceptance criteria:**
 - `--permission-mode bypassPermissions` is removed from Jevon's
-  invocation in `internal/jevon/jevon.go`.
+  invocation in `internal/jevons/jevons.go`.
 - `--dangerously-skip-permissions` is removed from worker spawning.
 - Confirmation requests from Claude Code are routed to the user via
   the WebSocket protocol.
@@ -50,11 +50,11 @@ bypass. Permission tiers from the trust model (🎯T4) are enforced.
 - **Status**: identified — revised after cworkers v0.14 overhaul (removed pool, shadow context, transcript discovery in favour of stateless on-demand spawning)
 - **Discovered**: 2026-03-14
 
-**Desired state:** jevond dispatches work to on-demand Claude Code
+**Desired state:** jevonsd dispatches work to on-demand Claude Code
 workers via `jwork` MCP tool. Workers are disposable subprocesses —
 spawned per task, observed via stdin/stdout, no pooling or implicit
 context injection. Caller provides all context in the task description.
-SQLite tracks workers for observability. cworkers absorbed into jevond.
+SQLite tracks workers for observability. cworkers absorbed into jevonsd.
 
 **Key design principles (from cworkers v0.14 overhaul):**
 - Workers that just do a job don't need session tracking — spawn, run, done.
@@ -69,12 +69,12 @@ SQLite tracks workers for observability. cworkers absorbed into jevond.
 
 **Alternative to evaluate:** Grok's full-duplex realtime API
 (`wss://api.x.ai/v1/realtime`) as the primary agent backend instead of
-Claude Code subprocesses. Benefits: native WebSocket (matches jevond's
+Claude Code subprocesses. Benefits: native WebSocket (matches jevonsd's
 architecture), single connection for text + voice, no subprocess
 management. Trade-offs: vendor lock-in to xAI, loss of Claude Code's
 tool ecosystem, unknown MCP support. Known UX issue: Grok's voice mode
 continues speaking for several seconds after an interruption is
-captured, making it hard to maintain conversational thread — jevond's
+captured, making it hard to maintain conversational thread — jevonsd's
 interruption handling (🎯T13) must cut output immediately on new
 utterance, not just queue it. Evaluate before committing to the
 subprocess model.
@@ -156,8 +156,8 @@ layer between workers and the OS.
 
 **Desired state:** The iOS app is a programmable thin client. Lua view
 scripts run on the device, rendering native SwiftUI from local state.
-jevond pushes script updates and state changes; the phone renders
-locally. Jevon (the AI agent) can modify scripts at runtime to reshape
+jevonsd pushes script updates and state changes; the phone renders
+locally. Jevons (the AI agent) can modify scripts at runtime to reshape
 the UI without app rebuilds or redeployment.
 
 **Architecture:**
@@ -165,7 +165,7 @@ the UI without app rebuilds or redeployment.
   View scripts run on device against local state, producing view trees
   that the generic SwiftUI renderer displays. No server round-trip per
   render.
-- **Script distribution.** jevond holds canonical scripts. On connect
+- **Script distribution.** jevonsd holds canonical scripts. On connect
   (or on change), pushes scripts to connected clients. Clients cache
   scripts locally for offline use.
 - **State protocol.** Server sends structured state updates over
@@ -177,9 +177,9 @@ the UI without app rebuilds or redeployment.
   "Chat bubble" is a composition defined in Lua, not a hardcoded client
   component.
 - **Inline assets.** Images via SF Symbols (by name), data URIs (inline
-  SVG/PNG), or bundled assets. Jevon can create novel icons without app
+  SVG/PNG), or bundled assets. Jevons can create novel icons without app
   bundling.
-- **Dev flow.** Jevon edits scripts on the server → pushes draft to
+- **Dev flow.** Jevons edits scripts on the server → pushes draft to
   device → user previews → approves → promotes to live. Testing before
   releasing.
 - **Reserved: `embed` component** for future ge wire protocol integration
@@ -187,7 +187,7 @@ the UI without app rebuilds or redeployment.
 
 **What exists (current commit):**
 - Go: Lua runtime (gopher-lua), view state manager, view schema, MCP
-  reload tool (`jevon_reload_views`)
+  reload tool (`jevons_reload_views`)
 - iOS: generic recursive SwiftUI renderer (`ServerView`), view/dismiss
   message handling
 - Lua: screen scripts for chat, connect, sessions, session detail
@@ -201,19 +201,19 @@ the UI without app rebuilds or redeployment.
   not rendered view trees
 - Client runs Lua locally on state changes
 - Add draft/preview/promote flow for script testing
-- Smoke test: path abbreviation written by Jevon via conversation
+- Smoke test: path abbreviation written by Jevons via conversation
 
 **Acceptance criteria:**
 - Lua runtime embedded in iOS app, running view scripts locally.
-- jevond pushes script updates over WebSocket; client caches and
+- jevonsd pushes script updates over WebSocket; client caches and
   executes them.
 - Server sends state updates (messages, sessions, status), not view
   trees. Client renders locally from state.
-- `jevon_reload_views` MCP tool pushes updated scripts to connected
+- `jevons_reload_views` MCP tool pushes updated scripts to connected
   clients.
 - Generic SwiftUI renderer maps Lua-produced view trees to native views.
 - No business logic in Swift — all view logic in Lua scripts.
-- Smoke test: Jevon writes path abbreviation via conversation, pushes
+- Smoke test: Jevons writes path abbreviation via conversation, pushes
   script update, phone re-renders without app rebuild.
 
 ### 🎯T10 sqlpipe-based state sync
@@ -224,19 +224,19 @@ the UI without app rebuilds or redeployment.
 - **Status**: converging — `internal/sync/` compiles cleanly with SyncManager, wire framing, and state writes. iOS sqlpipe vendor exists. Protocol not yet converted to pure sqlpipe transport.
 - **Discovered**: 2026-03-15
 
-**Desired state:** All state synchronisation between jevond and the iOS
+**Desired state:** All state synchronisation between jevonsd and the iOS
 app flows through sqlpipe bidirectional peer sync over the existing
 WebSocket. No application-level message protocol — the WebSocket is a
 pure sqlpipe transport.
 
 **Architecture:**
-- **jevond is a sqlpipe Peer.** Server-owned tables: `transcript`
+- **jevonsd is a sqlpipe Peer.** Server-owned tables: `transcript`
   (chat messages), `sessions` (worker list), `scripts` (Lua view
   source), `state` (server status, version). Writes trigger
   `flush()` → changeset streamed to client.
 - **iOS app is a sqlpipe Peer.** Client-owned tables: `requests`
   (user messages, action triggers), `preferences` (client settings).
-  Writes replicate to server → jevond processes them.
+  Writes replicate to server → jevonsd processes them.
 - **Diff sync on reconnect.** Client catches up via sqlpipe's
   hash-based diff protocol. No manual history replay needed.
 - **Query subscriptions.** Client subscribes to queries; Lua scripts
@@ -254,12 +254,12 @@ pure sqlpipe transport.
   SwiftUI renders.
 
 **Integration:**
-- sqlpipe Go wrapper (`go/sqlpipe/`) for jevond
+- sqlpipe Go wrapper (`go/sqlpipe/`) for jevonsd
 - sqlpipe C++ API via bridging header for iOS (same as Lua vendoring)
 - Replace all WebSocket message types (init, history, text, status,
   user_message, sessions, scripts, notification, view, dismiss, action)
   with table reads/writes
-- jevond's existing SQLite DB becomes the sqlpipe master database
+- jevonsd's existing SQLite DB becomes the sqlpipe master database
 
 **Dependencies:** `marcelocantos/sqlpipe` (sibling repo)
 
@@ -338,10 +338,10 @@ Swift code changes.
 - **Discovered**: 2026-03-08
 
 **Desired state:** A phone app provides a UI for interacting with
-jevond — sending commands, viewing responses, and managing workers.
+jevonsd — sending commands, viewing responses, and managing workers.
 
 **Acceptance criteria:**
-- Mobile app connects to jevond over a secure channel.
+- Mobile app connects to jevonsd over a secure channel.
 - User can send text commands and see streaming responses.
 - User can view and manage worker sessions.
 - App works on iOS (primary target: Pippa, iPad Air 5th gen).
@@ -361,7 +361,7 @@ without depending on the Lua layer.
 
 **Architecture:**
 - **Script versioning:** `script_versions` table in SQLite keeps the
-  last N versions per script. Each `jevon_reload_views` push creates
+  last N versions per script. Each `jevons_reload_views` push creates
   an atomic version snapshot across all scripts.
 - **Control channel:** The WebSocket has a reserved message namespace
   below the Lua layer. Control messages (rollback, version query,
@@ -397,63 +397,63 @@ with no manual IP entry or configuration.
 
 **Onboarding flow:**
 1. User installs the iOS app. App opens a QR scanner and displays:
-   "Run `brew install marcelocantos/tap/jevon && jevon --init` on
+   "Run `brew install marcelocantos/tap/jevons && jevons --init` on
    your laptop."
-2. `jevon --init` (a separate CLI binary, not jevond) prompts the
+2. `jevons --init` (a separate CLI binary, not jevonsd) prompts the
    user to paste their OpenAI API key. Stores it in macOS Keychain.
-3. CLI pings jevond (running as a brew service) that the key is
+3. CLI pings jevonsd (running as a brew service) that the key is
    available.
-4. jevond generates a one-time auth token, encodes it with host:port
+4. jevonsd generates a one-time auth token, encodes it with host:port
    into a QR code, and sends it back to the CLI for display.
 5. User points their device at the QR code on the terminal.
-6. App scans QR, extracts host:port + auth token, connects to jevond
-   with the token. jevond validates and promotes the connection.
+6. App scans QR, extracts host:port + auth token, connects to jevonsd
+   with the token. jevonsd validates and promotes the connection.
 
 **Key details:**
-- jevond runs as a launchd service via `brew services start jevon`.
+- jevonsd runs as a launchd service via `brew services start jevons`.
   Starts with or without the OpenAI key.
-- QR code contains `wss://relay.jevon.app/ws/<instance-id>?token=<auth>`.
+- QR code contains `wss://relay.jevons.app/ws/<instance-id>?token=<auth>`.
   The token authenticates the device pairing, not the OpenAI key.
 - Manual IP:port entry removed from the connect screen. QR-only.
-- `jevon` CLI binary is separate from `jevond` daemon.
+- `jevons` CLI binary is separate from `jevonsd` daemon.
 
 **Relay architecture:**
 - A small Go relay runs on Fly.io (`tern.fly.dev`).
-- Each jevond connects outbound to `wss://tern.fly.dev/register`
+- Each jevonsd connects outbound to `wss://tern.fly.dev/register`
   on startup and gets an instance ID.
 - iOS app connects to `wss://tern.fly.dev/ws/<instance-id>`.
-- Relay bridges WebSocket traffic between jevond and the app.
+- Relay bridges WebSocket traffic between jevonsd and the app.
 - No per-user DNS, no tunnels, fully dynamic. One relay serves all
   users.
 
-**Device pairing ceremony (one-time via `jevon --init`):**
+**Device pairing ceremony (one-time via `jevons --init`):**
 1. CLI prompts for OpenAI key, stores in macOS Keychain.
-2. CLI asks jevond to generate a single-use pairing token.
-3. jevond registers with relay, gets instance ID.
+2. CLI asks jevonsd to generate a single-use pairing token.
+3. jevonsd registers with relay, gets instance ID.
 4. CLI displays QR: `wss://relay.../ws/<id>?pair=<token>`.
 5. User scans QR. App connects, sends pairing token to prove it
    saw the QR.
-6. jevond sends a 6-digit confirmation code to the app.
+6. jevonsd sends a 6-digit confirmation code to the app.
 7. App displays: "Enter this code on your laptop: 847291".
 8. User types code into CLI — proves same human controls both.
-9. jevond generates a persistent device secret, sends to app.
-10. App stores secret in iOS Keychain. jevond stores hash in DB.
+9. jevonsd generates a persistent device secret, sends to app.
+10. App stores secret in iOS Keychain. jevonsd stores hash in DB.
 11. Pairing token revoked, QR cleared from console.
 
 **Subsequent connections:** App sends persistent secret + device
-fingerprint (`identifierForVendor`). jevond verifies hash. No QR,
+fingerprint (`identifierForVendor`). jevonsd verifies hash. No QR,
 no user interaction.
 
-**Revocation:** `jevon --unpair` revokes the device secret server-side.
+**Revocation:** `jevons --unpair` revokes the device secret server-side.
 
 **Acceptance criteria:**
-- `brew install` installs both `jevon` CLI and `jevond` daemon.
-- `jevon --init` runs the pairing ceremony end-to-end.
-- Device secret persists in iOS Keychain; hash in jevond's DB.
+- `brew install` installs both `jevons` CLI and `jevonsd` daemon.
+- `jevons --init` runs the pairing ceremony end-to-end.
+- Device secret persists in iOS Keychain; hash in jevonsd's DB.
 - Subsequent connections authenticate automatically.
-- `jevon --unpair` revokes a paired device.
+- `jevons --unpair` revokes a paired device.
 - No manual host/port entry in the app.
-- jevond runs as a brew service.
+- jevonsd runs as a brew service.
 - Relay runs on Fly.io.
 
 ### 🎯T13 Full-duplex voice interaction
@@ -468,7 +468,7 @@ no user interaction.
 - **Discovered**: 2026-03-21
 
 **Desired state:** The user has a full-duplex voice conversation with
-jevon. Speech is transcribed, responses are spoken aloud, and barge-in
+jevons. Speech is transcribed, responses are spoken aloud, and barge-in
 interruption works naturally. Works in both browser and iOS app.
 
 **Architecture (Option B: Grok voice + Claude brain):**
@@ -476,9 +476,9 @@ interruption works naturally. Works in both browser and iOS app.
   full-duplex voice I/O with server-side VAD and barge-in. Grok is
   the conversational voice layer — it speaks, listens, and decides
   when to delegate.
-- **`send_to_jevon` tool**: when Grok determines the user wants
+- **`send_to_jevons` tool**: when Grok determines the user wants
   substantive work done, it calls this function to delegate to the
-  Claude jevon process. Returns immediately; Claude's response is
+  Claude jevons process. Returns immediately; Claude's response is
   injected back into the Grok session for TTS.
 - **Local adaptive VAD**: browser/iOS runs noise-adaptive VAD
   (RMS with hysteresis, 300ms pre-buffer, 800ms hold). Only sends
@@ -495,7 +495,7 @@ interruption works naturally. Works in both browser and iOS app.
 STT and TTS in a single full-duplex session.
 
 **Collapses into 🎯T18:** When Grok becomes the overseer agent, the
-voice bridge and agent become one — no `send_to_jevon` indirection.
+voice bridge and agent become one — no `send_to_jevons` indirection.
 
 **Acceptance criteria:**
 - Speak in browser → Grok transcribes → response spoken aloud.
@@ -504,7 +504,7 @@ voice bridge and agent become one — no `send_to_jevon` indirection.
 - Local VAD filters background noise (car cabin test).
 - Latency: utterance end to first audio response < 3 seconds.
 
-### 🎯T17 Jevon UI renders via ge engine
+### 🎯T17 Jevons UI renders via ge engine
 
 - **Value**: 3
 - **Cost**: 21
@@ -516,8 +516,8 @@ voice bridge and agent become one — no `send_to_jevon` indirection.
 - **Discovered**: 2026-03-29
 
 **Desired state:** Jevon's UI is a C++ ge application running as a
-separate process alongside jevond (Go). The ge app renders the UI and
-communicates with jevond over WebSocket/HTTP (same protocol the web UI
+separate process alongside jevonsd (Go). The ge app renders the UI and
+communicates with jevonsd over WebSocket/HTTP (same protocol the web UI
 uses today).
 
 **Why deferred:** The current web UI already works well. Rebuilding it
@@ -537,7 +537,7 @@ streaming rendered frames to iPad becomes practical.
 
 **Desired state:** Standalone Claude Code sessions — the ones Marcelo
 runs directly in terminals — are progressively absorbed into Jevon's
-agent hierarchy (PO → Boss → Worker). Jevon has full visibility into
+agent hierarchy (PO → Boss → Worker). Jevons has full visibility into
 where active work is happening across all repos and can manage those
 sessions as first-class agents.
 
@@ -552,7 +552,7 @@ sessions as first-class agents.
 - **Status**: identified — plan in `docs/plans/active-work-dashboard.md`
 - **Discovered**: 2026-03-27
 
-**Desired state:** `jevon_active_work` MCP tool cross-references three
+**Desired state:** `jevons_active_work` MCP tool cross-references three
 signals (recent transcript sessions, dirty working trees, open PRs) to
 produce a unified per-repo view of where active work is happening.
 
@@ -577,13 +577,13 @@ produce a unified per-repo view of where active work is happening.
 
 **Desired state:** A standalone Claude Code session can be registered
 ("grandfathered") as an agent in Jevon's agent registry, making it
-visible in `jevon_agent_list` and addressable via `jevon_agent_send`.
+visible in `jevons_agent_list` and addressable via `jevons_agent_send`.
 
 **Acceptance criteria:**
 - A session from the memory DB can be linked to an agent definition
   with a name, repo association, and session ID.
-- Grandfathered agents appear in `jevon_agent_list` with their status.
-- Grandfathered agents can receive messages via `jevon_agent_send`.
+- Grandfathered agents appear in `jevons_agent_list` with their status.
+- Grandfathered agents can receive messages via `jevons_agent_send`.
 - A grandfathered session can be promoted to PO status (owns the repo,
   can spawn bosses) or assigned under an existing PO.
 - Sessions idle beyond a configurable threshold are flagged for
@@ -595,12 +595,12 @@ visible in `jevon_agent_list` and addressable via `jevon_agent_send`.
 - **Cost**: 8
 - **Weight**: 1.6 (value 13 / cost 8)
 - **Status**: identified — Grok Realtime voice bridge built and working
-  (voice I/O, function calling, `send_to_jevon` tool). Transport
+  (voice I/O, function calling, `send_to_jevons` tool). Transport
   abstraction and native iOS bridge in place.
 - **Discovered**: 2026-03-30
 
 **Desired state:** Grok can operate in any role in the agent hierarchy,
-including as the root jevon overseer. The agent system is model-agnostic
+including as the root jevons overseer. The agent system is model-agnostic
 — Claude and Grok agents are interchangeable via a common interface.
 When Grok is the overseer, voice is native (no STT/TTS bridge layer);
 it hears the user directly and calls MCP tools as Grok functions.
@@ -610,22 +610,22 @@ it hears the user directly and calls MCP tools as Grok functions.
   `Stop`. Claude implementation wraps the existing PTY process. Grok
   implementation connects via xAI Realtime WebSocket with function
   calling.
-- **MCP-to-function mapping.** jevond's MCP tool definitions
+- **MCP-to-function mapping.** jevonsd's MCP tool definitions
   (agent management, worker dispatch, transcript, etc.) are
   automatically mapped to Grok function definitions with matching
   names, descriptions, and JSON schemas.
 - **Voice collapse.** When Grok is the overseer, the voice bridge
-  collapses into the agent's I/O — no `send_to_jevon` indirection.
+  collapses into the agent's I/O — no `send_to_jevons` indirection.
   User speaks → Grok hears → Grok calls tools → Grok speaks result.
 - **Registry.** Agent registry supports both Claude and Grok agent
   types. Agent definitions specify model type (`claude`, `grok`).
-  The jevon overseer's model is configurable at startup.
+  The jevons overseer's model is configurable at startup.
 
 **What exists (current commit):**
 - Grok Realtime client (`internal/grok/realtime.go`): WebSocket,
   session config, function calling, audio forwarding
 - Voice bridge (`internal/server/voice.go`): bridges browser/iOS
-  audio to Grok, with `send_to_jevon` delegating to Claude
+  audio to Grok, with `send_to_jevons` delegating to Claude
 - Transport abstraction (`web/transport.js`): browser/native dual
   mode with handle-based audio
 - Native iOS bridge (`JevonBridge.swift`): mic capture, audio
@@ -637,8 +637,8 @@ it hears the user directly and calls MCP tools as Grok functions.
 - Grok agent can be started, sent messages, and emits events in the
   same format as Claude agents.
 - Registry supports mixed agent types.
-- `--jevon-model grok` starts Grok as the overseer with native voice.
-- `--jevon-model claude` (default) preserves current behavior.
+- `--jevons-model grok` starts Grok as the overseer with native voice.
+- `--jevons-model claude` (default) preserves current behavior.
 - Voice works end-to-end when Grok is the overseer: speak → Grok
   hears → tool calls → spoken response.
 

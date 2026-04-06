@@ -19,13 +19,13 @@ FRAMEWORKS := -framework Metal -framework QuartzCore -framework Foundation \
 # ── C++ app ──────────────────────────────────────────
 SRC := src/main.cpp src/App.cpp
 OBJ := $(patsubst %.cpp,$(BUILD_DIR)/%.o,$(SRC))
-APP := bin/jevon
+APP := bin/jevons
 
 COMPILE_DB_DEPS += $(SRC) Makefile
 
 # ── Default target ───────────────────────────────────
 .PHONY: all
-all: $(APP) jevond remote
+all: $(APP) jevonsd remote
 
 # ── C++ binary ───────────────────────────────────────
 $(APP): $(OBJ) $(ge/SESSION_WIRE_OBJ) $(ge/LIB) $(ge/FRAMEWORK_LIBS)
@@ -57,12 +57,12 @@ EMBED_GUIDE := internal/cli/help_agent.md
 $(EMBED_GUIDE): agents-guide.md
 	cp $< $@
 
-.PHONY: jevond
-jevond: bin/jevond
+.PHONY: jevonsd
+jevonsd: bin/jevonsd
 
-bin/jevond: $(GO_SRC) $(EMBED_GUIDE)
+bin/jevonsd: $(GO_SRC) $(EMBED_GUIDE)
 	@mkdir -p bin
-	go build $(GO_TAGS) $(LDFLAGS) -o bin/jevond ./cmd/jevond
+	go build $(GO_TAGS) $(LDFLAGS) -o bin/jevonsd ./cmd/jevonsd
 
 .PHONY: remote
 remote: bin/remote
@@ -72,26 +72,26 @@ bin/remote: $(GO_SRC) $(EMBED_GUIDE)
 	go build $(GO_TAGS) $(LDFLAGS) -o bin/remote ./cmd/remote
 
 # ── Run ──────────────────────────────────────────────
-.PHONY: run run-app run-jevond run-remote
+.PHONY: run run-app run-jevonsd run-remote
 run-app: $(APP)
 	$(APP)
 
-run-jevond: bin/jevond
-	bin/jevond
+run-jevonsd: bin/jevonsd
+	bin/jevonsd
 
 run-remote: bin/remote
 	bin/remote
 
-run: $(APP) bin/jevond
+run: $(APP) bin/jevonsd
 	@trap 'kill 0' INT TERM; \
-	bin/jevond & \
+	bin/jevonsd & \
 	$(APP) & \
 	wait
 
 # ── Setup ────────────────────────────────────────────
 .PHONY: init
 init: ge/init
-	@echo "── jevon project setup ──"
+	@echo "── jevons project setup ──"
 	@command -v go >/dev/null 2>&1 || { echo "ERROR: Go not found. Install from https://go.dev/dl/"; exit 1; }
 	@echo "  Go: $$(go version)"
 	@go mod download

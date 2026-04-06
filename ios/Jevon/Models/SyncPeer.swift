@@ -4,7 +4,7 @@
 import Foundation
 import os
 
-private let logger = Logger(subsystem: "com.marcelocantos.jevon", category: "SyncPeer")
+private let logger = Logger(subsystem: "com.marcelocantos.jevons", category: "SyncPeer")
 
 /// Result of handling an incoming message from the server.
 struct HandleResult {

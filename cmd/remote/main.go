@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/marcelocantos/jevon/internal/cli"
+	"github.com/marcelocantos/jevons/internal/cli"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -51,7 +51,7 @@ type historyEntry struct {
 // logEntry is a structured conversation entry, stored raw and
 // re-rendered on demand (for resize support).
 type logEntry struct {
-	kind      string    // "user", "jevon", "status", "error"
+	kind      string    // "user", "jevons", "status", "error"
 	text      string    // raw text (markdown for chat, plain for status/error)
 	timestamp time.Time
 }
@@ -62,7 +62,7 @@ var (
 )
 
 func main() {
-	addr := flag.String("addr", "localhost:13705", "jevond address")
+	addr := flag.String("addr", "localhost:13705", "jevonsd address")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	helpAgent := flag.Bool("help-agent", false, "print agent guide and exit")
 	flag.Parse()
@@ -111,7 +111,7 @@ func historyPath() string {
 	if err != nil {
 		return ""
 	}
-	dir := filepath.Join(home, ".jevon")
+	dir := filepath.Join(home, ".jevons")
 	os.MkdirAll(dir, 0o755)
 	return filepath.Join(dir, "remote_history")
 }
@@ -323,7 +323,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.entries = nil
 		m.entries = append(m.entries, logEntry{
 			kind:      "status",
-			text:      fmt.Sprintf("Connected to jevond %s", m.version),
+			text:      fmt.Sprintf("Connected to jevonsd %s", m.version),
 			timestamp: time.Now(),
 		})
 		m.updateViewport()
@@ -362,7 +362,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.status == "idle" && m.markdown != "" {
 			// Turn complete — store raw markdown as a log entry.
 			m.entries = append(m.entries, logEntry{
-				kind:      "jevon",
+				kind:      "jevons",
 				text:      m.markdown,
 				timestamp: m.turnStart,
 			})
@@ -525,7 +525,7 @@ func (m *model) renderLog() string {
 		switch entry.kind {
 		case "user":
 			t.Row(ts, "💬", m.renderBold(entry.text))
-		case "jevon":
+		case "jevons":
 			t.Row(ts, "", m.glamourRender(entry.text))
 		case "status":
 			t.Row(ts, "", statusStyle.Render(entry.text))

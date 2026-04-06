@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/marcelocantos/jevon/internal/claude"
+	"github.com/marcelocantos/jevons/internal/claude"
 )
 
 // SetProcess attaches the persistent Claude process for the /ws/chat endpoint.

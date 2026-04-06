@@ -1,4 +1,4 @@
-# Jevon Platoon System Design
+# Jevons Platoon System Design
 
 ## Overview
 A platoon of specialized agents that collectively embody the 7 key AI skills from the Nate video, integrated into Jevon's dispatch system.

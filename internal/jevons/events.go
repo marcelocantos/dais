@@ -1,7 +1,7 @@
 // Package jevon implements the coordinator that sits between the user
 // and multiple Claude Code worker sessions, routing tasks and synthesizing
 // results into a conversational interface.
-package jevon
+package jevons
 
 import (
 	"fmt"

@@ -1,7 +1,7 @@
 # Tern Migration Plan
 
 **Goal:** Tern becomes the sole communication path between the iOS app
-and jevond. No more WebSocket fallback. Tern handles relay connections
+and jevonsd. No more WebSocket fallback. Tern handles relay connections
 and automatically upgrades to direct LAN when both peers are on the
 same network.
 
@@ -14,15 +14,15 @@ LAN upgrade.
 **Go side (completed):** 
 - Tern bumped to v0.10.0 in go.mod.
 - `internal/server/relay.go` migrated to `tern.Config` + `NewLANServer` (stores `lanSrv` on Server). Uses `ternWriter` and updated send/recv. (Steps 1-2 complete.)
-- `internal/server/pairing.go` added with `LoadOrGenerateKeyPair()` and stub `handlePairing()` that calls `SetChannel(nil)`. Keypair persisted in `~/.jevon/keypair.json`.
-- QR updated to JSON format (`{"relay": "...", "id": "...", "pub": "..." }`) in `cmd/jevond/main.go`. Calls `srv.LoadOrGenerateKeyPair()` and `ConnectRelay()`.
+- `internal/server/pairing.go` added with `LoadOrGenerateKeyPair()` and stub `handlePairing()` that calls `SetChannel(nil)`. Keypair persisted in `~/.jevons/keypair.json`.
+- QR updated to JSON format (`{"relay": "...", "id": "...", "pub": "..." }`) in `cmd/jevonsd/main.go`. Calls `srv.LoadOrGenerateKeyPair()` and `ConnectRelay()`.
 - Server struct has `lanSrv`, `serverKP`, `pubKeyBase64`.
 
 **iOS side (partial):**
 - `JevonBridge.swift` has `BridgeMode.relay` using `TernConn.connect()`, receive loop with basic E2E support (but channel not set).
 - `Transport.swift` abstracts WS and QUICTransport.
 - Tern SPM at 0.1.0 (needs update; Go uses 0.10.0).
-- QRScannerView.swift and Connection.swift still use old WebSocket/jevon:// parsing and WS transport.
+- QRScannerView.swift and Connection.swift still use old WebSocket/jevons:// parsing and WS transport.
 - Voice not routed through tern (TODO in JevonBridge).
 - No full key exchange or SetChannel usage on iOS.
 
@@ -30,7 +30,7 @@ LAN upgrade.
 
 ## Current State (historical)
 
-### Go side (jevond)
+### Go side (jevonsd)
 - `internal/server/relay.go`: `ConnectRelay()` calls `tern.Register()`
   with the **old variadic options API** (`tern.WithTLS(...)`,
   `tern.WithToken(...)`, etc.). Must migrate to `tern.Config{}`.
@@ -43,7 +43,7 @@ LAN upgrade.
   through the relay.
 
 ### iOS side
-- `Connection.swift`: connects to jevond via WebSocket
+- `Connection.swift`: connects to jevonsd via WebSocket
   (`ws://host:port/ws/remote`). Handles reconnect, state machine,
   sync protocol. **Does not use tern at all.**
 - `JevonBridge.swift`: has a `BridgeMode.relay` path that imports
@@ -54,18 +54,18 @@ LAN upgrade.
   basic relay send/recv.
 
 ### QR code flow
-- jevond prints a QR containing `jevon://<LAN_IP>:13705` (direct
+- jevonsd prints a QR containing `jevons://<LAN_IP>:13705` (direct
   mode) or a relay WebSocket URL.
 - iOS `QRScannerView` decodes it → `Connection.connect(to:port:)` →
   WebSocket.
 
 ## Target State
 
-1. **jevond always starts a tern LANServer** (listening on a random
+1. **jevonsd always starts a tern LANServer** (listening on a random
    QUIC port). Also always registers with the relay (or supports
    relay-less mode where only LAN is available).
-2. **QR code encodes relay URL + instance ID + jevond's public key.**
-   No more `jevon://` scheme or direct HTTP URLs.
+2. **QR code encodes relay URL + instance ID + jevonsd's public key.**
+   No more `jevons://` scheme or direct HTTP URLs.
 3. **iOS connects via tern only.** `TernConn.connect()` to the relay.
    After key exchange and `SetChannel`, tern automatically discovers
    the LAN path and upgrades transparently.
@@ -97,7 +97,7 @@ LAN upgrade.
 
 See current implementation in `internal/server/relay.go:29`.
 
-### Step 3: Add key exchange and encryption to jevond [PARTIAL]
+### Step 3: Add key exchange and encryption to jevonsd [PARTIAL]
 
 **File:** `internal/server/pairing.go` [x] Keypair load/generate implemented.
 
@@ -109,9 +109,9 @@ See current implementation in `internal/server/relay.go:29`.
 
 ### Step 4: Update QR code format [PARTIAL]
 
-**Current (legacy):** `jevon://...` or ws:// still supported in scanner but QR now JSON.
+**Current (legacy):** `jevons://...` or ws:// still supported in scanner but QR now JSON.
 
-**New:** JSON with "relay", "id", "pub" [x] implemented in `cmd/jevond/main.go:685`.
+**New:** JSON with "relay", "id", "pub" [x] implemented in `cmd/jevonsd/main.go:685`.
 
 Update iOS `QRScannerView.swift` and `ConnectView.swift` / `Connection.swift` to parse JSON QR and use relay mode with pubkey for key exchange [pending].
 
@@ -128,7 +128,7 @@ Through the relay, this endpoint is unreachable.
 
 **Option A — StreamChannel("voice"):**
 - Reliable, ordered. Higher latency.
-- jevond accepts a StreamChannel named "voice", bridges to the Grok
+- jevonsd accepts a StreamChannel named "voice", bridges to the Grok
   Realtime session.
 - Binary PCM16 frames + JSON control messages multiplexed on the
   channel (use type prefix byte).
@@ -144,11 +144,11 @@ Through the relay, this endpoint is unreachable.
 - Voice control messages (start/stop/status/transcript) on the
   primary stream with a `"type":"voice_*"` envelope.
 
-**jevond side changes:**
+**jevonsd side changes:**
 - In `voice.go`, replace the `/ws/voice` WebSocket handler with a
   tern channel listener.
 - When a client sends `{"type":"voice_start"}` on the primary stream,
-  jevond opens the Grok Realtime session and starts bridging audio
+  jevonsd opens the Grok Realtime session and starts bridging audio
   from `DatagramChannel("voice-audio")`.
 - Grok's audio output goes back through the same datagram channel.
 - Transcripts and status sent on the primary stream.
@@ -171,7 +171,7 @@ The Swift `TernConn` in tern's SPM package needs:
    challenge/response, swap transport.
 3. **`LAN: Bool` config** — opt into LAN upgrade.
 
-This is work in the **tern repo**, not jevon. File a target or issue
+This is work in the **tern repo**, not jevons. File a target or issue
 on tern if not already tracked (🎯T1.8 may cover this — check
 `tern/docs/targets.md`).
 
@@ -181,24 +181,24 @@ Once all paths work through tern:
 1. Remove `/ws/remote` handler from `server.go`.
 2. Remove `Connection.swift`'s WebSocket code (or keep as dead code
    for reference during migration).
-3. Remove the `jevon://` URL scheme.
+3. Remove the `jevons://` URL scheme.
 4. Remove the `httpBaseURL` / direct HTTP loading path from
    `ContentView.swift`.
 5. The WKWebView loads the web UI HTML **bundled in the app** (not
-   fetched from jevond). All data flows through the JS bridge →
+   fetched from jevonsd). All data flows through the JS bridge →
    TernConn. This means the web UI HTML/JS/CSS must be embedded in
    the iOS app bundle.
 
 ### Step 9: Bundle web UI in iOS app
 
-Since the WKWebView can no longer fetch from jevond (tern doesn't
+Since the WKWebView can no longer fetch from jevonsd (tern doesn't
 serve HTTP), the web UI must be bundled:
 1. Copy `web/index.html` and `web/scripts/` into the Xcode project
    as bundle resources.
 2. Load via `webView.loadFileURL(bundleURL, allowingReadAccessTo:
    bundleDir)`.
 3. The web UI detects native mode (`window.webkit.messageHandlers`)
-   and uses the JS bridge — no network requests to jevond.
+   and uses the JS bridge — no network requests to jevonsd.
 
 ## Execution Order (updated)
 
@@ -216,12 +216,12 @@ See 🎯T14 in docs/targets.md for related pairing work.
 
 ## Files Affected (updated)
 
-### Go (jevond)
+### Go (jevonsd)
 - [x] `go.mod` — tern v0.10.0
 - [x] `internal/server/relay.go` — Config, LANServer, ternWriter
 - [x] `internal/server/pairing.go` — keypair (partial)
 - [x] `internal/server/server.go` — fields, WS still present
-- [ ] `cmd/jevond/main.go` — QR done, integrate pairing
+- [ ] `cmd/jevonsd/main.go` — QR done, integrate pairing
 - [ ] `internal/server/voice.go` — update for tern channels
 - [ ] remove /ws/remote
 

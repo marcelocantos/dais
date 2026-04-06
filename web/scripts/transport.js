@@ -1,4 +1,4 @@
-// Transport abstraction for jevon web UI.
+// Transport abstraction for jevons web UI.
 //
 // Two implementations:
 //   - WebSocketTransport: browser mode, real bytes over WebSocket
@@ -28,7 +28,7 @@
 //   onError(string)             — error message
 
 // --- Detect environment ---
-const isNative = !!(window.webkit?.messageHandlers?.jevon);
+const isNative = !!(window.webkit?.messageHandlers?.jevons);
 
 // ============================================================
 // WebSocket transport (browser mode)
@@ -209,7 +209,7 @@ class NativeTransport {
     this.onError = null;
 
     // Register global callback for Swift → JS messages.
-    window._jevonTransport = this;
+    window._jevonsTransport = this;
   }
 
   connect() {
@@ -244,13 +244,13 @@ class NativeTransport {
 
   // --- Swift → JS entry points (called via evaluateJavaScript) ---
 
-  // Called by Swift when connected to jevond.
+  // Called by Swift when connected to jevonsd.
   _onOpen() { this.onOpen?.(); }
 
   // Called by Swift when disconnected.
   _onClose() { this.onClose?.(); }
 
-  // Called by Swift with a JSON message from jevond.
+  // Called by Swift with a JSON message from jevonsd.
   _onMessage(json) { this.onMessage?.(json); }
 
   // Called by Swift with a mic frame (handle + RMS, no bytes).
@@ -266,7 +266,7 @@ class NativeTransport {
   _onError(msg) { this.onError?.(msg); }
 
   _post(msg) {
-    window.webkit.messageHandlers.jevon.postMessage(msg);
+    window.webkit.messageHandlers.jevons.postMessage(msg);
   }
 }
 

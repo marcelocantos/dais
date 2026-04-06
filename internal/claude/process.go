@@ -90,7 +90,7 @@ func Start(cfg Config) (*Process, error) {
 	_, statErr := os.Stat(jsonlPath)
 	resuming := statErr == nil
 
-	// All agents spawned by jevond are forbidden from creating their own
+	// All agents spawned by jevonsd are forbidden from creating their own
 	// sub-agents. Jevond owns the process lifecycle exclusively. Agents
 	// request new workers via jevond's MCP tools.
 	disallowed := "Agent,TeamCreate,TeamDelete,SendMessage,EnterWorktree"

@@ -1,4 +1,4 @@
-module github.com/marcelocantos/jevon
+module github.com/marcelocantos/jevons
 
 go 1.25.7
 

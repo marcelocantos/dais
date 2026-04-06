@@ -4,8 +4,8 @@ Status: idea (not scheduled)
 
 ## Goal
 
-Jevon manages Claude Code workers. Those workers consume tokens that
-cost real money. Jevon should track, report, and eventually govern
+Jevons manages Claude Code workers. Those workers consume tokens that
+cost real money. Jevons should track, report, and eventually govern
 that spend — per worker, per session, per time window — so the user
 stays informed and protected from runaway costs.
 
@@ -44,20 +44,20 @@ Claude Code writes one JSONL file per conversation under
 
 1. **Offline only** — reads local JSONL files after the fact. No
    real-time streaming, no ability to gate or throttle live workers.
-2. **Single-machine** — assumes `~/.claude/` is local. Jevon workers
+2. **Single-machine** — assumes `~/.claude/` is local. Jevons workers
    may eventually run on remote hosts.
 3. **Pricing is approximate** — sourced from LiteLLM's community JSON,
    not Anthropic's billing API. The pre-calculated `costUSD` field
    (when present) is more authoritative.
 4. **No policy enforcement** — purely observational. Can't pause a
    worker that's burning through budget.
-5. **Node.js dependency** — not suitable for embedding in jevond (Go).
+5. **Node.js dependency** — not suitable for embedding in jevonsd (Go).
 
 ## Design sketch for Jevon
 
 ### Layer 1: Collection
 
-jevond already manages Claude Code subprocesses. Each worker's JSONL
+jevonsd already manages Claude Code subprocesses. Each worker's JSONL
 is available on disk. Approach:
 
 - **Tail the JSONL** in real-time (fsnotify or periodic poll) for each
@@ -65,7 +65,7 @@ is available on disk. Approach:
 - **Prefer `costUSD`** when present; fall back to token-count × pricing
   table (maintain a Go-native pricing table, seeded from LiteLLM or
   Anthropic docs, updateable via config).
-- **Store aggregated usage in SQLite** (jevond already uses SQLite for
+- **Store aggregated usage in SQLite** (jevonsd already uses SQLite for
   learning/memory). Schema sketch:
 
   ```
@@ -86,7 +86,7 @@ is available on disk. Approach:
 
 ### Layer 2: Reporting
 
-Expose via the existing web UI and jevond's API:
+Expose via the existing web UI and jevonsd's API:
 
 - Real-time cost ticker per worker and aggregate.
 - Breakdown by model, session, time window.
@@ -96,7 +96,7 @@ Expose via the existing web UI and jevond's API:
 ### Layer 3: Governance (future)
 
 - **Budgets**: per-worker and global spend caps (hourly / daily /
-  monthly). Configurable via web UI or jevond config.
+  monthly). Configurable via web UI or jevonsd config.
 - **Actions on breach**: warn → throttle (add delay between requests)
   → pause worker → kill worker. Escalation configurable.
 - **Alerts**: push notification or Slack message when spend crosses
@@ -107,14 +107,14 @@ Expose via the existing web UI and jevond's API:
 - Replacing ccusage — it's fine for ad-hoc CLI queries.
 - Querying Anthropic's billing API — no public API exists; rely on
   local JSONL data.
-- Multi-machine aggregation — single-host jevond is the current scope.
+- Multi-machine aggregation — single-host jevonsd is the current scope.
 
 ## Open questions
 
-1. Should jevond expose its own MCP resource for cost data (letting
+1. Should jevonsd expose its own MCP resource for cost data (letting
    workers self-monitor their spend)?
 2. Is the 5-hour billing block relevant for Max subscribers, or should
-   Jevon focus on API-key billing only?
+   Jevons focus on API-key billing only?
 3. How to handle workers that use `--model` overrides (different cost
    profiles within the same session)?
 

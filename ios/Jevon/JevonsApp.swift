@@ -4,7 +4,7 @@
 import SwiftUI
 
 @main
-struct JevonApp: App {
+struct JevonsApp: App {
     @State private var connection = Connection()
     @State private var voiceManager = VoiceManager()
     @State private var showSafeMode = false

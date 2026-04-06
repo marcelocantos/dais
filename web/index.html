@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Jevon</title>
+<title>Jevons</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F916;</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm/lib/xterm.min.js"></script>
@@ -83,28 +83,28 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 
 .msg { max-width: 85%; padding: 10px 16px; border-radius: var(--radius); line-height: 1.6; font-size: 14px; }
 .msg.user { align-self: flex-end; background: var(--user-bg); color: var(--text); border: 1px solid var(--user-border); white-space: pre-wrap; word-wrap: break-word; }
-.msg.jevon { align-self: flex-start; background: transparent; color: var(--text); white-space: normal; padding: 10px 4px; }
+.msg.jevons { align-self: flex-start; background: transparent; color: var(--text); white-space: normal; padding: 10px 4px; }
 
 /* Markdown in agent responses */
-.msg.jevon p { margin: 0.5em 0; }
-.msg.jevon p:first-child { margin-top: 0; }
-.msg.jevon p:last-child { margin-bottom: 0; }
-.msg.jevon code { background: var(--surface-raised); padding: 2px 6px; border-radius: 4px; font-family: var(--mono); font-size: 0.88em; color: var(--accent); }
-.msg.jevon pre { background: var(--surface); border: 1px solid var(--border); padding: 12px 14px; border-radius: 8px; overflow-x: auto; margin: 0.6em 0; }
-.msg.jevon pre code { background: none; padding: 0; color: var(--text); }
-.msg.jevon ul, .msg.jevon ol { padding-left: 1.5em; margin: 0.5em 0; }
-.msg.jevon li { margin: 0.2em 0; }
-.msg.jevon h1, .msg.jevon h2, .msg.jevon h3 { margin: 0.8em 0 0.3em; font-weight: 600; color: var(--heading); }
-.msg.jevon h1 { font-size: 1.1em; }
-.msg.jevon h2 { font-size: 1.05em; }
-.msg.jevon h3 { font-size: 1em; }
-.msg.jevon blockquote { border-left: 2px solid var(--accent); padding-left: 12px; margin: 0.5em 0; color: var(--text-dim); }
-.msg.jevon table { border-collapse: collapse; margin: 0.5em 0; font-size: 0.9em; }
-.msg.jevon th, .msg.jevon td { border: 1px solid var(--border); padding: 6px 10px; }
-.msg.jevon th { background: var(--surface); font-weight: 500; }
-.msg.jevon strong { color: var(--strong); font-weight: 600; }
-.msg.jevon a { color: var(--accent); text-decoration: none; }
-.msg.jevon a:hover { text-decoration: underline; }
+.msg.jevons p { margin: 0.5em 0; }
+.msg.jevons p:first-child { margin-top: 0; }
+.msg.jevons p:last-child { margin-bottom: 0; }
+.msg.jevons code { background: var(--surface-raised); padding: 2px 6px; border-radius: 4px; font-family: var(--mono); font-size: 0.88em; color: var(--accent); }
+.msg.jevons pre { background: var(--surface); border: 1px solid var(--border); padding: 12px 14px; border-radius: 8px; overflow-x: auto; margin: 0.6em 0; }
+.msg.jevons pre code { background: none; padding: 0; color: var(--text); }
+.msg.jevons ul, .msg.jevons ol { padding-left: 1.5em; margin: 0.5em 0; }
+.msg.jevons li { margin: 0.2em 0; }
+.msg.jevons h1, .msg.jevons h2, .msg.jevons h3 { margin: 0.8em 0 0.3em; font-weight: 600; color: var(--heading); }
+.msg.jevons h1 { font-size: 1.1em; }
+.msg.jevons h2 { font-size: 1.05em; }
+.msg.jevons h3 { font-size: 1em; }
+.msg.jevons blockquote { border-left: 2px solid var(--accent); padding-left: 12px; margin: 0.5em 0; color: var(--text-dim); }
+.msg.jevons table { border-collapse: collapse; margin: 0.5em 0; font-size: 0.9em; }
+.msg.jevons th, .msg.jevons td { border: 1px solid var(--border); padding: 6px 10px; }
+.msg.jevons th { background: var(--surface); font-weight: 500; }
+.msg.jevons strong { color: var(--strong); font-weight: 600; }
+.msg.jevons a { color: var(--accent); text-decoration: none; }
+.msg.jevons a:hover { text-decoration: underline; }
 
 /* Input bar */
 #input-bar { display: flex; gap: 10px; padding: 16px 20px; background: var(--surface); border-top: 1px solid var(--border); }
@@ -173,7 +173,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   <div id="chat-pane">
     <div id="messages"></div>
     <div id="input-bar">
-      <input id="input" placeholder="Talk to Jevon..." autocomplete="off">
+      <input id="input" placeholder="Talk to Jevons..." autocomplete="off">
       <button id="send" disabled>Send</button>
       <button id="voice-btn" title="Hold to talk (or click to toggle)">&#127908;</button>
     </div>
@@ -248,7 +248,7 @@ function handle(m) {
     if (hasText) {
       closeTurn();
       content.forEach(c => {
-        if (c.type==='text' && c.text) addMsg('jevon', c.text, msgTs);
+        if (c.type==='text' && c.text) addMsg('jevons', c.text, msgTs);
       });
       input.focus();
     }
@@ -304,7 +304,7 @@ function addTurnItem(cls, text) {
 function addMsg(role, text, when) {
   const d = document.createElement('div');
   d.className = 'msg ' + role;
-  if (role === 'jevon') {
+  if (role === 'jevons') {
     d.innerHTML = marked.parse(text);
   } else {
     d.textContent = text;
@@ -516,8 +516,8 @@ function closeTerminal() {
 }
 
 // Preserve input across hot reloads.
-const savedInput = sessionStorage.getItem('jevon-input');
-if (savedInput) { input.value = savedInput; sessionStorage.removeItem('jevon-input'); }
+const savedInput = sessionStorage.getItem('jevons-input');
+if (savedInput) { input.value = savedInput; sessionStorage.removeItem('jevons-input'); }
 
 // Voice UI — uses transport abstraction for both browser and native modes.
 const voiceBtn = document.getElementById('voice-btn');
@@ -617,7 +617,7 @@ transport.onVoiceEvent = msg => {
   } else if (msg.type === 'assistant_transcript') {
     voiceStatusText.textContent = 'speaking';
     if (!startVoice._assistantEl) {
-      startVoice._assistantEl = addMsg('jevon', '');
+      startVoice._assistantEl = addMsg('jevons', '');
     }
     startVoice._assistantBuf = (startVoice._assistantBuf || '') + msg.text;
     const el = startVoice._assistantEl;
@@ -638,7 +638,7 @@ transport.onVoiceEvent = msg => {
     console.error('voice error:', msg.error);
     voiceStatusText.textContent = 'error';
     const d = document.createElement('div');
-    d.className = 'msg jevon';
+    d.className = 'msg jevons';
     d.style.color = 'var(--red)';
     d.style.border = '1px solid var(--red)';
     d.style.borderRadius = 'var(--radius)';
@@ -654,7 +654,7 @@ transport.onVoiceEvent = msg => {
 (function hotReload() {
   const rh = location.hostname === 'localhost' ? '127.0.0.1:'+location.port : location.host;
   const rws = new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+rh+'/ws/reload');
-  rws.onmessage = () => { sessionStorage.setItem('jevon-input', input.value); location.reload(); };
+  rws.onmessage = () => { sessionStorage.setItem('jevons-input', input.value); location.reload(); };
   rws.onclose = () => setTimeout(hotReload, 2000);
 })();
 </script>

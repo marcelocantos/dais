@@ -2,8 +2,8 @@
 
 ## Overview
 
-The Jevon mobile app is a **native iOS app** (SwiftUI) that connects to
-jevond's WebSocket endpoint (`/ws/remote`). It is a command/chat
+The Jevons mobile app is a **native iOS app** (SwiftUI) that connects to
+jevonsd's WebSocket endpoint (`/ws/remote`). It is a command/chat
 interface — not a ge rendering client. The ge player is a separate
 dev-only tool.
 
@@ -19,11 +19,11 @@ dev-only tool.
 
 ### Discovery
 
-The user connects to jevond by scanning a QR code displayed in the
-terminal when jevond starts. The QR encodes:
+The user connects to jevonsd by scanning a QR code displayed in the
+terminal when jevonsd starts. The QR encodes:
 
 ```
-jevon://<host>:<port>
+jevons://<host>:<port>
 ```
 
 The app uses AVFoundation for QR scanning (same pattern as the ge
@@ -44,7 +44,7 @@ frames:
 | `init` | `version` | Server greeting |
 | `history` | `entries[]` (role, text, timestamp) | Transcript replay on connect |
 | `text` | `content` | Streaming text fragment |
-| `status` | `state` ("thinking" / "idle") | Jevon activity state |
+| `status` | `state` ("thinking" / "idle") | Jevons activity state |
 | `user_message` | `text`, `timestamp` | Echo of a user's message |
 
 **Client → Server:**
@@ -69,7 +69,7 @@ Reset on successful connection. Show connection status in the UI.
 ### 1. Connect (QR Scanner)
 
 - Full-screen camera viewfinder
-- Scans for `jevon://` QR codes
+- Scans for `jevons://` QR codes
 - Remembers last-connected server (UserDefaults)
 - Manual entry fallback: host:port text field
 
@@ -78,13 +78,13 @@ Reset on successful connection. Show connection status in the UI.
 - Scrolling message list (user messages right-aligned, Jevon
   left-aligned, like iMessage)
 - Text input bar at bottom with send button
-- Status indicator: "Thinking..." when Jevon is processing
-- Streaming text appended to the current Jevon message bubble
+- Status indicator: "Thinking..." when Jevons is processing
+- Streaming text appended to the current Jevons message bubble
 - History loaded on connect
 
 ### 3. Workers (Secondary)
 
-- List of worker sessions (from future `jevon_list_sessions` exposure)
+- List of worker sessions (from future `jevons_list_sessions` exposure)
 - Each row: name, status badge (idle/running/error), last activity
 - Tap to see worker detail (last result, workdir)
 - Not implemented in v1 — placeholder tab
@@ -111,18 +111,18 @@ No `ge/` dependency. No C++. No Dawn. Pure Swift/SwiftUI.
 
 ## How It Differs from the ge Player
 
-| Concern | ge Player | Jevon Mobile App |
+| Concern | ge Player | Jevons Mobile App |
 |---------|-----------|------------------|
 | Purpose | Render WebGPU commands | Send commands, view responses |
-| Protocol | Dawn wire (TCP, binary) | jevond WebSocket (JSON) |
+| Protocol | Dawn wire (TCP, binary) | jevonsd WebSocket (JSON) |
 | Rendering | Full GPU pipeline | Standard SwiftUI views |
 | Dependencies | Dawn, SDL3 (cross-compiled) | None (system frameworks) |
 | Build | CMake → Xcode | Native Xcode project |
-| App-specific | No (renders any ge app) | Yes (Jevon only) |
+| App-specific | No (renders any ge app) | Yes (Jevons only) |
 
 ## Server-Side Changes
 
-jevond already has everything the v1 mobile app needs:
+jevonsd already has everything the v1 mobile app needs:
 
 - `/ws/remote` endpoint with init, history, text, status messages
 - Transcript persistence in SQLite
@@ -130,7 +130,7 @@ jevond already has everything the v1 mobile app needs:
 
 ### Needed additions
 
-1. **QR code on startup**: jevond should print a `jevon://host:port`
+1. **QR code on startup**: jevonsd should print a `jevons://host:port`
    QR code to stderr (like ge's wire session does for `squz-remote://`).
    Use the same `qrcodegen` library (already vendored in ge).
 
@@ -148,12 +148,12 @@ jevond already has everything the v1 mobile app needs:
 2. Implement WebSocket connection manager
 3. Build ChatView with message list and input
 4. Manual connection (hardcoded or text field — no QR yet)
-5. Test against running jevond
+5. Test against running jevonsd
 
 ### Phase 2: QR discovery
 
 1. Add AVFoundation QR scanner
-2. Add `jevon://` QR code generation to jevond startup
+2. Add `jevons://` QR code generation to jevonsd startup
 3. Remember last server in UserDefaults
 
 ### Phase 3: Polish
@@ -166,8 +166,8 @@ jevond already has everything the v1 mobile app needs:
 ## Open Questions
 
 - Should the app support multiple server connections (switch between
-  different jevond instances)?
-- Voice input: should the app capture audio and send it to jevond's
+  different jevonsd instances)?
+- Voice input: should the app capture audio and send it to jevonsd's
   voice pipeline, or use iOS speech-to-text locally?
-- Notifications: should jevond push notifications for confirmation
+- Notifications: should jevonsd push notifications for confirmation
   requests when the app is backgrounded?

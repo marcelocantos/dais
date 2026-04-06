@@ -10,7 +10,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 
-	"github.com/marcelocantos/jevon/internal/memory"
+	"github.com/marcelocantos/jevons/internal/memory"
 )
 
 // SetMemory attaches the transcript memory store and registers search tools.
@@ -18,7 +18,7 @@ func (s *Server) SetMemory(mem *memory.Store) {
 	s.memory = mem
 
 	s.mcpSrv.AddTool(
-		mcp.NewTool("jevon_search_memory",
+		mcp.NewTool("jevons_search_memory",
 			mcp.WithDescription("Search across Claude Code session transcripts. By default searches only interactive sessions (excludes subagents, worktrees, ephemeral). Noise messages (interrupts, compaction summaries, tool-loaded markers) are excluded from the FTS index."),
 			mcp.WithString("query", mcp.Required(), mcp.Description("Search query (FTS5 syntax: words, phrases in quotes, OR, NOT)")),
 			mcp.WithNumber("limit", mcp.Description("Max results (default 20)")),
@@ -28,7 +28,7 @@ func (s *Server) SetMemory(mem *memory.Store) {
 	)
 
 	s.mcpSrv.AddTool(
-		mcp.NewTool("jevon_list_memory_sessions",
+		mcp.NewTool("jevons_list_memory_sessions",
 			mcp.WithDescription("List transcript sessions from the memory index, sorted by most recent activity. By default shows only interactive sessions with at least 6 substantive messages."),
 			mcp.WithString("session_type", mcp.Description(`Filter by session type (default "interactive"). Values: "interactive", "subagent", "worktree", "ephemeral", "all"`)),
 			mcp.WithNumber("min_messages", mcp.Description("Minimum substantive (non-noise) messages to include (default 6)")),
@@ -39,7 +39,7 @@ func (s *Server) SetMemory(mem *memory.Store) {
 	)
 
 	s.mcpSrv.AddTool(
-		mcp.NewTool("jevon_memory_query",
+		mcp.NewTool("jevons_memory_query",
 			mcp.WithDescription(`Run a read-only SQL query against the transcript memory database.
 
 Tables:
@@ -61,7 +61,7 @@ Results capped at 100 rows.`),
 	)
 
 	s.mcpSrv.AddTool(
-		mcp.NewTool("jevon_memory_stats",
+		mcp.NewTool("jevons_memory_stats",
 			mcp.WithDescription("Show transcript memory statistics — sessions and messages broken down by session type, with noise vs substantive counts."),
 		),
 		s.handleMemoryStats,

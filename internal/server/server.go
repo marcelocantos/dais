@@ -22,16 +22,16 @@ import (
 	"github.com/marcelocantos/tern"
 
 	"github.com/coder/websocket"
-	"github.com/marcelocantos/jevon/internal/claude"
-	"github.com/marcelocantos/jevon/internal/db"
-	"github.com/marcelocantos/jevon/internal/jevon"
-	"github.com/marcelocantos/jevon/internal/manager"
-	"github.com/marcelocantos/jevon/internal/ui"
+	"github.com/marcelocantos/jevons/internal/claude"
+	"github.com/marcelocantos/jevons/internal/db"
+	"github.com/marcelocantos/jevons/internal/jevons"
+	"github.com/marcelocantos/jevons/internal/manager"
+	"github.com/marcelocantos/jevons/internal/ui"
 )
 
 // TranscriptEntry is a single turn in the conversation log.
 type TranscriptEntry struct {
-	Role      string    `json:"role"` // "user" or "jevon"
+	Role      string    `json:"role"` // "user" or "jevons"
 	Text      string    `json:"text"`
 	Timestamp time.Time `json:"timestamp"`
 }
@@ -61,7 +61,7 @@ type remoteConn struct {
 
 // Server is the daisd HTTP/WebSocket server.
 type Server struct {
-	jevon   *jevon.Jevon
+	jevon   *jevons.Jevon
 	mgr     *manager.Manager
 	db      *db.DB
 	version string
@@ -91,7 +91,7 @@ func (s *Server) PubKeyBase64() string { return s.pubKeyBase64 }
 // New creates a Server with the given Jevon instance, manager, database, version string,
 // Lua runtime, and view state. The Lua runtime and view state may be nil if the
 // server-driven UI is not yet active.
-func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string, luaRT *ui.LuaRuntime, vs *ui.ViewState) *Server {
+func New(jev *jevons.Jevon, mgr *manager.Manager, database *db.DB, version string, luaRT *ui.LuaRuntime, vs *ui.ViewState) *Server {
 	s := &Server{
 		jevon:         jev,
 		mgr:           mgr,
@@ -129,7 +129,7 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 
 	// Wire Jevon callbacks once — they broadcast to all connected clients.
 	jev.SetRawLog(func(line []byte) {
-		if err := s.db.AppendRawLog("jevon", string(line)); err != nil {
+		if err := s.db.AppendRawLog("jevons", string(line)); err != nil {
 			slog.Error("failed to persist raw log", "err", err)
 		}
 	})
@@ -154,7 +154,7 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 			turnText := s.turnBuf
 			if turnText != "" {
 				s.transcript = append(s.transcript, TranscriptEntry{
-					Role:      "jevon",
+					Role:      "jevons",
 					Text:      turnText,
 					Timestamp: time.Now(),
 				})
@@ -163,8 +163,8 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 			s.mu.Unlock()
 
 			if turnText != "" {
-				if err := s.db.AppendTranscript("jevon", turnText); err != nil {
-					slog.Error("failed to persist jevon turn", "err", err)
+				if err := s.db.AppendTranscript("jevons", turnText); err != nil {
+					slog.Error("failed to persist jevons turn", "err", err)
 				}
 
 				// If voice bridge is active, inject the response for TTS.
@@ -245,7 +245,7 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 		}
 		data, _ := json.Marshal(map[string]any{
 			"type":  "error",
-			"error": "Voice not configured. Run: bin/jevond --set-xai-key",
+			"error": "Voice not configured. Run: bin/jevonsd --set-xai-key",
 		})
 		conn.Write(r.Context(), websocket.MessageText, data)
 		conn.Close(websocket.StatusNormalClosure, "no API key")
@@ -486,8 +486,8 @@ func (s *Server) HandleUserMessage(text string) {
 		s.PushView()
 	}
 
-	s.jevon.Enqueue(jevon.Event{
-		Kind: jevon.EventUserMessage,
+	s.jevon.Enqueue(jevons.Event{
+		Kind: jevons.EventUserMessage,
 		Text: text,
 	})
 }
@@ -615,7 +615,7 @@ func (s *Server) handleControl(conn *websocket.Conn, ctx context.Context, action
 			slog.Error("screenshot_result: decode failed", "err", err)
 			return
 		}
-		path := filepath.Join(os.TempDir(), "jevon-screenshot.png")
+		path := filepath.Join(os.TempDir(), "jevons-screenshot.png")
 		if err := os.WriteFile(path, imgData, 0644); err != nil {
 			slog.Error("screenshot_result: write failed", "err", err)
 			return

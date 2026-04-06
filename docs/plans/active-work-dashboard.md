@@ -4,7 +4,7 @@ Target: 🎯T16.1
 
 ## Overview
 
-New MCP tool `jevon_active_work` that cross-references three signals to
+New MCP tool `jevons_active_work` that cross-references three signals to
 produce a unified "where is active work happening" view per repo.
 
 ## Signal 1: Recent session activity
@@ -20,7 +20,7 @@ ORDER BY last_msg DESC
 ```
 
 Group by project. The `project` field encodes the repo path
-(e.g. `-Users-marcelo-work-github-com-marcelocantos-jevon`). Write a
+(e.g. `-Users-marcelo-work-github-com-marcelocantos-jevons`). Write a
 helper to decode project names back to repo paths by reversing the
 dash encoding.
 
@@ -50,7 +50,7 @@ Unified table per repo, sorted by most recent activity:
 ```
 Repo                        Last Session          Msgs  Working Tree    Branch       PRs
 ─────────────────────────────────────────────────────────────────────────────────────────
-marcelocantos/jevon         2026-03-27 14:30       42   3 changed       dev          #12 ✓
+marcelocantos/jevons         2026-03-27 14:30       42   3 changed       dev          #12 ✓
 marcelocantos/tern          2026-03-26 09:15       18   clean           master       -
 squz/yourworld2             2026-03-25 11:00        8   1 changed       feat/xyz     #5 ⏳
 ```

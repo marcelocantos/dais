@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"crypto/ecdh"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -22,10 +23,10 @@ type KeyPair struct {
 	PublicKey  string `json:"public_key"`  // base64-encoded X25519 public key
 }
 
-// LoadOrGenerateKeyPair loads the key pair from ~/.jevon/keypair.json,
+// LoadOrGenerateKeyPair loads the key pair from ~/.jevons/keypair.json,
 // or generates a new one if it doesn't exist.
 func (s *Server) LoadOrGenerateKeyPair() error {
-	dir := filepath.Join(os.Getenv("HOME"), ".jevon")
+	dir := filepath.Join(os.Getenv("HOME"), ".jevons")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("create .jevon dir: %w", err)
 	}
@@ -37,7 +38,7 @@ func (s *Server) LoadOrGenerateKeyPair() error {
 			return fmt.Errorf("read keypair: %w", err)
 		}
 		// Generate new key pair
-		priv, err := ecdh.X25519().GenerateKey(nil)
+		priv, err := ecdh.X25519().GenerateKey(rand.Reader)
 		if err != nil {
 			return fmt.Errorf("generate key: %w", err)
 		}

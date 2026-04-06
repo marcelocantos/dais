@@ -15,7 +15,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/marcelocantos/jevon/internal/discovery"
+	"github.com/marcelocantos/jevons/internal/discovery"
 )
 
 // Turn represents a single user→assistant exchange extracted from a transcript.

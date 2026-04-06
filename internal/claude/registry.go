@@ -20,7 +20,7 @@ type AgentDef struct {
 	WorkDir   string `json:"workdir"`             // working directory
 	SessionID string `json:"session_id"`          // persistent Claude session ID
 	Model     string `json:"model,omitempty"`     // model override
-	AutoStart bool   `json:"auto_start"`          // start on jevond startup
+	AutoStart bool   `json:"auto_start"`          // start on jevonsd startup
 	Parent        string `json:"parent,omitempty"`         // parent agent name (for tree display)
 	DisallowTools string `json:"disallow_tools,omitempty"` // extra tools to disallow
 }

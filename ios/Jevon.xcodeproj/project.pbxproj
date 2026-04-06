@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		06C7D59A52416E5EEF9BAE79 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F3AF724780252079F6BBE88F /* Assets.xcassets */; };
 		09D8695D9F644B1758B0C267 /* lgc.c in Sources */ = {isa = PBXBuildFile; fileRef = 767F98926A4CDD39B93FB08C /* lgc.c */; settings = {COMPILER_FLAGS = "-w"; }; };
+		0A894C21B2C9E40F57E05AE7 /* WebUIView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73D4CEE301A359770D819422 /* WebUIView.swift */; };
 		0B0B1C8BBBAAA2402D4AC658 /* sqlite3.c in Sources */ = {isa = PBXBuildFile; fileRef = 6DBFCBEB3C44DE016E9C5BBC /* sqlite3.c */; settings = {COMPILER_FLAGS = "-w -DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_PREUPDATE_HOOK"; }; };
 		0C37BC1A5274ACECAABB89B3 /* ltable.c in Sources */ = {isa = PBXBuildFile; fileRef = 6ED85F6E22E15A0E54030607 /* ltable.c */; settings = {COMPILER_FLAGS = "-w"; }; };
 		11130BDE794C601348043619 /* llex.c in Sources */ = {isa = PBXBuildFile; fileRef = 1D651B93285F81BC87BCE2A6 /* llex.c */; settings = {COMPILER_FLAGS = "-w"; }; };
@@ -34,8 +35,8 @@
 		786E8DE692F4B5EEACF73105 /* ViewNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9A55D0E81BA40F9048296D3 /* ViewNode.swift */; };
 		7878DF31AD69DD66231D88E8 /* ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65E43ED786E066072C1260E2 /* ChatMessage.swift */; };
 		815FBE5974F0191EE605A129 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4D1AD6C6D9A966E1EEEA735 /* ChatView.swift */; };
-		831A47E6E1317A0DD182898F /* WebUIView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86D377E429026ECFB5B42748 /* WebUIView.swift */; };
 		874EE114FE3D1A051885CB7C /* lparser.c in Sources */ = {isa = PBXBuildFile; fileRef = 6436BAD32BDBFB01783708D0 /* lparser.c */; settings = {COMPILER_FLAGS = "-w"; }; };
+		908C6C973894717562CD10CB /* JevonsBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A5AD6048167F0A4DF365D9D /* JevonsBridge.swift */; };
 		A0CA3FF7FB582FAE7C7240BE /* lvm.c in Sources */ = {isa = PBXBuildFile; fileRef = 94918391F19A42840284490F /* lvm.c */; settings = {COMPILER_FLAGS = "-w"; }; };
 		AACC45703EF816E5F0719738 /* sqlpipe_capi.cpp in Sources */ = {isa = PBXBuildFile; fileRef = D67D6AFCF329DD1EBBBF3DAD /* sqlpipe_capi.cpp */; settings = {COMPILER_FLAGS = "-w -std=c++23 -DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_PREUPDATE_HOOK"; }; };
 		B03A55C28F6785DFCDF42182 /* lstate.c in Sources */ = {isa = PBXBuildFile; fileRef = FF9E0C501414AAB40986DE5D /* lstate.c */; settings = {COMPILER_FLAGS = "-w"; }; };
@@ -53,12 +54,11 @@
 		DD2008437EAF5D4B7FDB3903 /* SyncPeer.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF9D3D79BB07B91D322731C5 /* SyncPeer.swift */; };
 		DEE551C75300D39BCDE98E1E /* SafeModeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3D6200A03D1E93A629A432B /* SafeModeView.swift */; };
 		E09869084FFE1D0A7938E37D /* Connection.swift in Sources */ = {isa = PBXBuildFile; fileRef = D44D1B4501A4D2EB998B01FB /* Connection.swift */; };
-		271AAB264BC8542A5AE7B40E /* JevonBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B71D1F67C579F2AC7D9D160 /* JevonBridge.swift */; };
 		E0FB6692544B380E52EB01FB /* lopcodes.c in Sources */ = {isa = PBXBuildFile; fileRef = 921A0B6A5656163B64F95ACC /* lopcodes.c */; settings = {COMPILER_FLAGS = "-w"; }; };
 		E46BB6A284F427CE40FB9C5E /* lstrlib.c in Sources */ = {isa = PBXBuildFile; fileRef = 92763019F5464D90C33AF102 /* lstrlib.c */; settings = {COMPILER_FLAGS = "-w"; }; };
 		E5F5E25833EE762B958109F3 /* ltm.c in Sources */ = {isa = PBXBuildFile; fileRef = CACF38C14DD12334E142ED1C /* ltm.c */; settings = {COMPILER_FLAGS = "-w"; }; };
 		E621CA22FC5ABDD7A6FB75EB /* lcode.c in Sources */ = {isa = PBXBuildFile; fileRef = C0ED8BDAE3AF2511CA645D11 /* lcode.c */; settings = {COMPILER_FLAGS = "-w"; }; };
-		E8F33944D4BA29CFE13B7E02 /* JevonApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 952AE9DF6BDA8BD3A3178D30 /* JevonApp.swift */; };
+		E8F33944D4BA29CFE13B7E02 /* JevonsApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 952AE9DF6BDA8BD3A3178D30 /* JevonsApp.swift */; };
 		F136BF55E60A5F9A3F28B016 /* lmathlib.c in Sources */ = {isa = PBXBuildFile; fileRef = 0BFBAFBD500B31DC5BD611B8 /* lmathlib.c */; settings = {COMPILER_FLAGS = "-w"; }; };
 		F3AF9923F6CFA9E81195D03B /* lstring.c in Sources */ = {isa = PBXBuildFile; fileRef = 69BBEE1806E872B08C68858B /* lstring.c */; settings = {COMPILER_FLAGS = "-w"; }; };
 		F57AADF9F7D8016AE40C0ED3 /* sqlift.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 12E12B0FE312ECEA3C708A65 /* sqlift.cpp */; settings = {COMPILER_FLAGS = "-w -std=c++23"; }; };
@@ -90,6 +90,7 @@
 		54EFB1CE9DBC53068D02EC74 /* Jevon.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Jevon.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		55E0CAB8DB4A9B9A3B5E5657 /* ObservableNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservableNode.swift; sourceTree = "<group>"; };
 		58DED5B3E9BE1F53C2E6E0E2 /* lbaselib.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = lbaselib.c; sourceTree = "<group>"; };
+		5A5AD6048167F0A4DF365D9D /* JevonsBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JevonsBridge.swift; sourceTree = "<group>"; };
 		5D68EF32C0E5224ABE2C895F /* lcode.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = lcode.h; sourceTree = "<group>"; };
 		5D8BB1B93886BD293E2F08F1 /* llex.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = llex.h; sourceTree = "<group>"; };
 		5DF3E0AF96541F84BE854A71 /* VoiceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceManager.swift; sourceTree = "<group>"; };
@@ -102,6 +103,7 @@
 		6D82BA1F6ACCF263F3B3706B /* ServerMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerMessage.swift; sourceTree = "<group>"; };
 		6DBFCBEB3C44DE016E9C5BBC /* sqlite3.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = sqlite3.c; sourceTree = "<group>"; };
 		6ED85F6E22E15A0E54030607 /* ltable.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = ltable.c; sourceTree = "<group>"; };
+		73D4CEE301A359770D819422 /* WebUIView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebUIView.swift; sourceTree = "<group>"; };
 		75AF34E8DBE9787C44BDC1CB /* Makefile */ = {isa = PBXFileReference; path = Makefile; sourceTree = "<group>"; };
 		767F98926A4CDD39B93FB08C /* lgc.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = lgc.c; sourceTree = "<group>"; };
 		76A7C913DA907C26DFCB07BE /* SessionSummary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionSummary.swift; sourceTree = "<group>"; };
@@ -112,7 +114,7 @@
 		921A0B6A5656163B64F95ACC /* lopcodes.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = lopcodes.c; sourceTree = "<group>"; };
 		92763019F5464D90C33AF102 /* lstrlib.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = lstrlib.c; sourceTree = "<group>"; };
 		94918391F19A42840284490F /* lvm.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = lvm.c; sourceTree = "<group>"; };
-		952AE9DF6BDA8BD3A3178D30 /* JevonApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JevonApp.swift; sourceTree = "<group>"; };
+		952AE9DF6BDA8BD3A3178D30 /* JevonsApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JevonsApp.swift; sourceTree = "<group>"; };
 		978BDE554FCEF00A4F6EE7EF /* lzio.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = lzio.c; sourceTree = "<group>"; };
 		9801BF014B0D2CA0FAC739F0 /* ldblib.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = ldblib.c; sourceTree = "<group>"; };
 		A3E937A5C98CE4A1C439903F /* ldo.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ldo.h; sourceTree = "<group>"; };
@@ -123,7 +125,6 @@
 		BDE911A39D2E12BBB5D7A747 /* lobject.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = lobject.h; sourceTree = "<group>"; };
 		C0ED8BDAE3AF2511CA645D11 /* lcode.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = lcode.c; sourceTree = "<group>"; };
 		C4D1AD6C6D9A966E1EEEA735 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
-		86D377E429026ECFB5B42748 /* WebUIView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebUIView.swift; sourceTree = "<group>"; };
 		C6B0FCC62D34B28BE89AABF3 /* lparser.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = lparser.h; sourceTree = "<group>"; };
 		C7135F3994F8128ED29DB4F0 /* ServerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerView.swift; sourceTree = "<group>"; };
 		C7EE4F9478910C938DAE8B2B /* ldo.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = ldo.c; sourceTree = "<group>"; };
@@ -134,7 +135,6 @@
 		CF0EF488FC1D2806F1FEFB8B /* SessionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionListView.swift; sourceTree = "<group>"; };
 		D3A689C8FBB03CC626AED792 /* ChevronGestureRecognizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChevronGestureRecognizer.swift; sourceTree = "<group>"; };
 		D44D1B4501A4D2EB998B01FB /* Connection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Connection.swift; sourceTree = "<group>"; };
-		2B71D1F67C579F2AC7D9D160 /* JevonBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JevonBridge.swift; sourceTree = "<group>"; };
 		D5B2EA7B27817CAC862E5819 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		D67D6AFCF329DD1EBBBF3DAD /* sqlpipe_capi.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = sqlpipe_capi.cpp; sourceTree = "<group>"; };
 		D9A55D0E81BA40F9048296D3 /* ViewNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewNode.swift; sourceTree = "<group>"; };
@@ -246,7 +246,7 @@
 				F3AF724780252079F6BBE88F /* Assets.xcassets */,
 				D5B2EA7B27817CAC862E5819 /* Info.plist */,
 				A4A92DBBE45C265A3EE33E12 /* Jevon-Bridging-Header.h */,
-				952AE9DF6BDA8BD3A3178D30 /* JevonApp.swift */,
+				952AE9DF6BDA8BD3A3178D30 /* JevonsApp.swift */,
 				74231EFA109B0C608EFC36AF /* Models */,
 				C32F7A7B0BF1C8FCEC76B3B7 /* Views */,
 			);
@@ -258,7 +258,7 @@
 			children = (
 				65E43ED786E066072C1260E2 /* ChatMessage.swift */,
 				D44D1B4501A4D2EB998B01FB /* Connection.swift */,
-				2B71D1F67C579F2AC7D9D160 /* JevonBridge.swift */,
+				5A5AD6048167F0A4DF365D9D /* JevonsBridge.swift */,
 				02031B5F0DB6FF33848B61E0 /* LuaRuntime.swift */,
 				55E0CAB8DB4A9B9A3B5E5657 /* ObservableNode.swift */,
 				6D82BA1F6ACCF263F3B3706B /* ServerMessage.swift */,
@@ -296,7 +296,6 @@
 			isa = PBXGroup;
 			children = (
 				C4D1AD6C6D9A966E1EEEA735 /* ChatView.swift */,
-				86D377E429026ECFB5B42748 /* WebUIView.swift */,
 				D3A689C8FBB03CC626AED792 /* ChevronGestureRecognizer.swift */,
 				63CF6594FEA5A6E4233EEF8C /* ConnectView.swift */,
 				32CCA0A2734DF00E8974EE7A /* ContentView.swift */,
@@ -304,6 +303,7 @@
 				E3D6200A03D1E93A629A432B /* SafeModeView.swift */,
 				C7135F3994F8128ED29DB4F0 /* ServerView.swift */,
 				CF0EF488FC1D2806F1FEFB8B /* SessionListView.swift */,
+				73D4CEE301A359770D819422 /* WebUIView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -395,13 +395,12 @@
 			files = (
 				7878DF31AD69DD66231D88E8 /* ChatMessage.swift in Sources */,
 				815FBE5974F0191EE605A129 /* ChatView.swift in Sources */,
-				831A47E6E1317A0DD182898F /* WebUIView.swift in Sources */,
 				35857964C5D622D31C74A538 /* ChevronGestureRecognizer.swift in Sources */,
 				469D3D3ECF57391FA0C5363D /* ConnectView.swift in Sources */,
 				E09869084FFE1D0A7938E37D /* Connection.swift in Sources */,
-				271AAB264BC8542A5AE7B40E /* JevonBridge.swift in Sources */,
 				2C70D96EAAB1FD8D92B238F5 /* ContentView.swift in Sources */,
-				E8F33944D4BA29CFE13B7E02 /* JevonApp.swift in Sources */,
+				E8F33944D4BA29CFE13B7E02 /* JevonsApp.swift in Sources */,
+				908C6C973894717562CD10CB /* JevonsBridge.swift in Sources */,
 				1B28C489BE42CEB5BA3A3FE5 /* LuaRuntime.swift in Sources */,
 				CEAC9651B1CB35BFA6055464 /* ObservableNode.swift in Sources */,
 				3D70E5D11EA271CC2594F025 /* QRScannerView.swift in Sources */,
@@ -415,6 +414,7 @@
 				19FA16A8F00BB2160548CC49 /* Transport.swift in Sources */,
 				786E8DE692F4B5EEACF73105 /* ViewNode.swift in Sources */,
 				19A88755100E996AB4F9FC9A /* VoiceManager.swift in Sources */,
+				0A894C21B2C9E40F57E05AE7 /* WebUIView.swift in Sources */,
 				D7B893AD476D43E0608737AB /* lapi.c in Sources */,
 				B08CFC1DE9E5702FFCF55CBC /* lauxlib.c in Sources */,
 				F8A50756D1960604BA6B8E11 /* lbaselib.c in Sources */,
@@ -528,7 +528,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.marcelocantos.jevon;
+				PRODUCT_BUNDLE_IDENTIFIER = com.marcelocantos.jevons;
 				SDKROOT = iphoneos;
 				SWIFT_OBJC_BRIDGING_HEADER = "Jevon/Jevon-Bridging-Header.h";
 				SWIFT_STRICT_CONCURRENCY = complete;
@@ -547,7 +547,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.marcelocantos.jevon;
+				PRODUCT_BUNDLE_IDENTIFIER = com.marcelocantos.jevons;
 				SDKROOT = iphoneos;
 				SWIFT_OBJC_BRIDGING_HEADER = "Jevon/Jevon-Bridging-Header.h";
 				SWIFT_STRICT_CONCURRENCY = complete;
@@ -641,7 +641,7 @@
 			repositoryURL = "https://github.com/marcelocantos/tern";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 0.10.0;
+				minimumVersion = 0.11.0;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */

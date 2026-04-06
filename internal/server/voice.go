@@ -8,8 +8,8 @@ import (
 	"sync"
 
 	"github.com/coder/websocket"
-	"github.com/marcelocantos/jevon/internal/grok"
-	"github.com/marcelocantos/jevon/internal/jevon"
+	"github.com/marcelocantos/jevons/internal/grok"
+	"github.com/marcelocantos/jevons/internal/jevons"
 )
 
 // VoiceBridge manages the Grok Realtime session and bridges audio
@@ -161,7 +161,7 @@ func (vb *VoiceBridge) ensureGrokSession(ctx context.Context) error {
 		SystemPrompt: `You are Jevon, a personal AI assistant. You are the voice
 interface for a multi-agent system. When the user asks you to do
 something that requires code, file operations, research, or any
-substantive work, use the send_to_jevon tool to delegate it.
+substantive work, use the send_to_jevons tool to delegate it.
 
 For simple conversational exchanges (greetings, clarifications,
 opinions), respond directly without delegating.
@@ -172,7 +172,7 @@ conversationally for the user. Be concise and natural.`,
 		Tools: []grok.Tool{
 			{
 				Type:        "function",
-				Name:        "send_to_jevon",
+				Name:        "send_to_jevons",
 				Description: "Send a message to the Jevon agent system for processing. Use this for any request that requires code, file operations, research, or substantive work. The message should be a clear natural language description of what the user wants.",
 				Parameters: json.RawMessage(`{
 					"type": "object",
@@ -228,7 +228,7 @@ conversationally for the user. Be concise and natural.`,
 		OnUserTranscript: func(text string) {
 			slog.Info("voice: user said", "text", text)
 			// Broadcast user transcript to web UI for display only.
-			// Don't send to Claude — only send_to_jevon tool calls go there.
+			// Don't send to Claude — only send_to_jevons tool calls go there.
 			vb.mu.Lock()
 			ws := vb.voiceWS
 			wsCtx := vb.voiceCtx
@@ -242,7 +242,7 @@ conversationally for the user. Be concise and natural.`,
 		},
 
 		OnFunctionCall: func(name string, args json.RawMessage) (string, error) {
-			if name != "send_to_jevon" {
+			if name != "send_to_jevons" {
 				return `{"error":"unknown function"}`, nil
 			}
 
@@ -258,8 +258,8 @@ conversationally for the user. Be concise and natural.`,
 			// Send to jevon asynchronously. The response will be
 			// injected back into the Grok session when it arrives
 			// (via the OnJevonResponse callback wired in main.go).
-			vb.srv.jevon.Enqueue(jevon.Event{
-				Kind: jevon.EventUserMessage,
+			vb.srv.jevon.Enqueue(jevons.Event{
+				Kind: jevons.EventUserMessage,
 				Text: params.Message,
 			})
 
