@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/marcelocantos/tern"
+	"github.com/marcelocantos/pigeon"
 
 	"github.com/coder/websocket"
 	"github.com/marcelocantos/jevons/internal/claude"
@@ -74,7 +74,7 @@ type Server struct {
 
 	luaRT          *ui.LuaRuntime
 	viewState      *ui.ViewState
-	lanSrv         *tern.LANServer // LAN server for direct connections
+	lanSrv         *pigeon.LANServer // LAN server for direct connections
 	serverKP       *ecdh.PrivateKey
 	pubKeyBase64   string
 	openAIKey      string

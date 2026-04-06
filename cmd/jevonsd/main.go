@@ -30,7 +30,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/session"
 	"github.com/marcelocantos/jevons/internal/transcript"
 	"github.com/marcelocantos/jevons/internal/ui"
-	"github.com/marcelocantos/tern/qr"
+	"github.com/marcelocantos/pigeon/qr"
 )
 
 // jevonsCLAUDEMD is the CLAUDE.md template written to Jevons's workdir.
@@ -121,7 +121,7 @@ Prefer the jevons_agent_* tools for new work.
 
 All repos live under ~/work/github.com/<org>/<repo>:
 - ~/work/github.com/marcelocantos/jevons — this project
-- ~/work/github.com/marcelocantos/tern — relay/crypto library
+- ~/work/github.com/marcelocantos/pigeon — relay/crypto library
 - ~/work/github.com/marcelocantos/sqlpipe — state sync
 - ~/work/github.com/squz/yourworld2 — game project
 

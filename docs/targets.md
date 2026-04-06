@@ -13,13 +13,13 @@
 - **Discovered**: 2026-03-08
 
 **Desired state:** mTLS with QR-based device provisioning secures all
-surfaces. The `internal/auth` package is fully implemented.
+surfaces. The `inpigeonal/auth` package is fully implemented.
 
 **Acceptance criteria:**
 - mTLS is enforced on all jevonsd endpoints (HTTP, WebSocket, MCP).
 - QR-based device provisioning flow works end-to-end (scan QR on phone,
   device gets a client certificate).
-- `internal/auth` package has tests covering the provisioning and
+- `inpigeonal/auth` package has tests covering the provisioning and
   verification paths.
 - Unauthenticated requests are rejected.
 
@@ -36,7 +36,7 @@ bypass. Permission tiers from the trust model (🎯T4) are enforced.
 
 **Acceptance criteria:**
 - `--permission-mode bypassPermissions` is removed from Jevon's
-  invocation in `internal/jevons/jevons.go`.
+  invocation in `inpigeonal/jevons/jevons.go`.
 - `--dangerously-skip-permissions` is removed from worker spawning.
 - Confirmation requests from Claude Code are routed to the user via
   the WebSocket protocol.
@@ -67,7 +67,7 @@ SQLite tracks workers for observability. cworkers absorbed into jevonsd.
 - All sub-targets achieved.
 - cworkers repo archived after absorption complete.
 
-**Alternative to evaluate:** Grok's full-duplex realtime API
+**Alpigeonative to evaluate:** Grok's full-duplex realtime API
 (`wss://api.x.ai/v1/realtime`) as the primary agent backend instead of
 Claude Code subprocesses. Benefits: native WebSocket (matches jevonsd's
 architecture), single connection for text + voice, no subprocess
@@ -221,7 +221,7 @@ the UI without app rebuilds or redeployment.
 - **Value**: 13
 - **Cost**: 13
 - **Weight**: 1.0 (value 13 / cost 13)
-- **Status**: converging — `internal/sync/` compiles cleanly with SyncManager, wire framing, and state writes. iOS sqlpipe vendor exists. Protocol not yet converted to pure sqlpipe transport.
+- **Status**: converging — `inpigeonal/sync/` compiles cleanly with SyncManager, wire framing, and state writes. iOS sqlpipe vendor exists. Protocol not yet converted to pure sqlpipe transport.
 - **Discovered**: 2026-03-15
 
 **Desired state:** All state synchronisation between jevonsd and the iOS
@@ -323,7 +323,7 @@ Swift code changes.
 - Visual: `shadow_radius`, `border_color`, `border_width`, `tint`, `resizable`
 - Typography: `text_case`, `monospaced`, `text_selection`, `multiline_alignment`
 - Interaction: `long_press_action`, `context_menu`, `confirmation`, `alert`
-  (structured props as child node types, matching swipe_action pattern)
+  (structured props as child node types, matching swipe_action patpigeon)
 - Navigation: `pull_to_refresh`
 - Accessibility: `a11y_hint`, `a11y_hidden`
 - Animation: `transition`
@@ -418,10 +418,10 @@ with no manual IP entry or configuration.
 - `jevons` CLI binary is separate from `jevonsd` daemon.
 
 **Relay architecture:**
-- A small Go relay runs on Fly.io (`tern.fly.dev`).
-- Each jevonsd connects outbound to `wss://tern.fly.dev/register`
+- A small Go relay runs on Fly.io (`carrier-pigeon.fly.dev`).
+- Each jevonsd connects outbound to `wss://carrier-pigeon.fly.dev/register`
   on startup and gets an instance ID.
-- iOS app connects to `wss://tern.fly.dev/ws/<instance-id>`.
+- iOS app connects to `wss://carrier-pigeon.fly.dev/ws/<instance-id>`.
 - Relay bridges WebSocket traffic between jevonsd and the app.
 - No per-user DNS, no tunnels, fully dynamic. One relay serves all
   users.
@@ -622,14 +622,14 @@ it hears the user directly and calls MCP tools as Grok functions.
   The jevons overseer's model is configurable at startup.
 
 **What exists (current commit):**
-- Grok Realtime client (`internal/grok/realtime.go`): WebSocket,
+- Grok Realtime client (`inpigeonal/grok/realtime.go`): WebSocket,
   session config, function calling, audio forwarding
-- Voice bridge (`internal/server/voice.go`): bridges browser/iOS
+- Voice bridge (`inpigeonal/server/voice.go`): bridges browser/iOS
   audio to Grok, with `send_to_jevons` delegating to Claude
 - Transport abstraction (`web/transport.js`): browser/native dual
   mode with handle-based audio
 - Native iOS bridge (`JevonBridge.swift`): mic capture, audio
-  playback, chat over WebSocket or tern QUIC
+  playback, chat over WebSocket or pigeon QUIC
 
 **Acceptance criteria:**
 - `Agent` interface in Go with Claude and Grok implementations.

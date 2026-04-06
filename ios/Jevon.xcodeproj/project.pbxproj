@@ -26,7 +26,7 @@
 		445388F291E0DC02EAEFA22E /* sqlpipe.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 6895959F63ACE1B80ACCC4B2 /* sqlpipe.cpp */; settings = {COMPILER_FLAGS = "-w -std=c++23 -DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_PREUPDATE_HOOK"; }; };
 		45DF7CEBFD6D0E3001EE4CBA /* ldebug.c in Sources */ = {isa = PBXBuildFile; fileRef = 1212F8875365A88874F22629 /* ldebug.c */; settings = {COMPILER_FLAGS = "-w"; }; };
 		469D3D3ECF57391FA0C5363D /* ConnectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63CF6594FEA5A6E4233EEF8C /* ConnectView.swift */; };
-		4CDD3760E1E3A7BB6FE337B2 /* Tern in Frameworks */ = {isa = PBXBuildFile; productRef = 83975848749538D26ACFA13A /* Tern */; };
+		4CDD3760E1E3A7BB6FE337B2 /* Pigeon in Frameworks */ = {isa = PBXBuildFile; productRef = 83975848749538D26ACFA13A /* Pigeon */; };
 		4DA77C325EFE6F7D7AD4F750 /* sqldeep.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 0C0DFA243C32927F092BAD1C /* sqldeep.cpp */; settings = {COMPILER_FLAGS = "-w -std=c++20"; }; };
 		50B56EC5F694529C3756EC8D /* ldo.c in Sources */ = {isa = PBXBuildFile; fileRef = C7EE4F9478910C938DAE8B2B /* ldo.c */; settings = {COMPILER_FLAGS = "-w"; }; };
 		62E14B425C2079E55B66D620 /* print.c in Sources */ = {isa = PBXBuildFile; fileRef = 773C7AFFDA4FAE963EAAF3C0 /* print.c */; settings = {COMPILER_FLAGS = "-w"; }; };
@@ -155,7 +155,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				4CDD3760E1E3A7BB6FE337B2 /* Tern in Frameworks */,
+				4CDD3760E1E3A7BB6FE337B2 /* Pigeon in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -335,7 +335,7 @@
 			);
 			name = Jevon;
 			packageProductDependencies = (
-				83975848749538D26ACFA13A /* Tern */,
+				83975848749538D26ACFA13A /* Pigeon */,
 			);
 			productName = Jevon;
 			productReference = 54EFB1CE9DBC53068D02EC74 /* Jevon.app */;
@@ -365,7 +365,7 @@
 			mainGroup = 8E2DFFCDFDF916DA7D983DEE;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				6EA481351AD871D3F6198692 /* XCRemoteSwiftPackageReference "tern" */,
+				6EA481351AD871D3F6198692 /* XCRemoteSwiftPackageReference "pigeon" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A63B03DFC4D8B774F36746CC /* Products */;
@@ -636,21 +636,21 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		6EA481351AD871D3F6198692 /* XCRemoteSwiftPackageReference "tern" */ = {
+		6EA481351AD871D3F6198692 /* XCRemoteSwiftPackageReference "pigeon" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/marcelocantos/tern";
+			repositoryURL = "https://github.com/marcelocantos/pigeon";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 0.11.0;
+				minimumVersion = 0.13.0;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		83975848749538D26ACFA13A /* Tern */ = {
+		83975848749538D26ACFA13A /* Pigeon */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 6EA481351AD871D3F6198692 /* XCRemoteSwiftPackageReference "tern" */;
-			productName = Tern;
+			package = 6EA481351AD871D3F6198692 /* XCRemoteSwiftPackageReference "pigeon" */;
+			productName = Pigeon;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

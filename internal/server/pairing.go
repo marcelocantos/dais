@@ -14,8 +14,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/marcelocantos/tern"
-	"github.com/marcelocantos/tern/crypto"
+	"github.com/marcelocantos/pigeon"
+	"github.com/marcelocantos/pigeon/crypto"
 )
 
 type KeyPair struct {
@@ -77,7 +77,7 @@ func (s *Server) LoadOrGenerateKeyPair() error {
 }
 
 // handlePairing handles the key exchange after tern registration.
-func (s *Server) handlePairing(ctx context.Context, conn *tern.Conn, clientPubKey []byte) error {
+func (s *Server) handlePairing(ctx context.Context, conn *pigeon.Conn, clientPubKey []byte) error {
 	if err := s.LoadOrGenerateKeyPair(); err != nil {
 		return fmt.Errorf("load key pair: %w", err)
 	}

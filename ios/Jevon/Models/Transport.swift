@@ -3,7 +3,7 @@
 
 import Foundation
 #if canImport(Network)
-import Tern
+import Pigeon
 #endif
 
 /// A received message from the transport layer.
@@ -58,17 +58,17 @@ final class WSTransport: Transport, @unchecked Sendable {
 
 #if canImport(Network)
 
-/// QUIC relay transport using TernConn from the Tern package.
+/// QUIC relay transport using PigeonConn from the Tern package.
 final class QUICTransport: Transport, @unchecked Sendable {
-    private let conn: TernConn
+    private let conn: PigeonConn
 
-    init(conn: TernConn) {
+    init(conn: PigeonConn) {
         self.conn = conn
     }
 
     /// Connect to a tern relay as a client.
     static func connect(host: String, port: UInt16, instanceID: String) async throws -> QUICTransport {
-        let conn = try await TernConn.connect(host: host, port: port, instanceID: instanceID)
+        let conn = try await PigeonConn.connect(host: host, port: port, instanceID: instanceID)
         return QUICTransport(conn: conn)
     }
 

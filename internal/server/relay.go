@@ -12,38 +12,38 @@ import (
 	"os"
 	"time"
 
-	"github.com/marcelocantos/tern"
+	"github.com/marcelocantos/pigeon"
 )
 
-// ternWriter adapts a tern.Conn to the remoteWriter interface.
-type ternWriter struct{ conn *tern.Conn }
+// pigeonWriter adapts a pigeon.Conn to the remoteWriter interface.
+type pigeonWriter struct{ conn *pigeon.Conn }
 
-func (w ternWriter) WriteText(ctx context.Context, data []byte) error {
+func (w pigeonWriter) WriteText(ctx context.Context, data []byte) error {
 	return w.conn.Send(ctx, data)
 }
-func (w ternWriter) WriteBinary(ctx context.Context, data []byte) error {
+func (w pigeonWriter) WriteBinary(ctx context.Context, data []byte) error {
 	return w.conn.Send(ctx, data)
 }
-func (w ternWriter) Close() error { return w.conn.Close() }
+func (w pigeonWriter) Close() error { return w.conn.Close() }
 
-// ConnectRelay registers with a tern relay server and bridges traffic.
+// ConnectRelay registers with a pigeon relay server and bridges traffic.
 // Returns the instance ID.
 func (s *Server) ConnectRelay(ctx context.Context, relayURL, token, instanceID string) (string, error) {
 	slog.Info("connecting to relay", "url", relayURL)
 
-	lanSrv, err := tern.NewLANServer("", nil) // random port, self-signed TLS
+	lanSrv, err := pigeon.NewLANServer("", nil) // random port, self-signed TLS
 	if err != nil {
 		return "", fmt.Errorf("LAN server: %w", err)
 	}
 	s.lanSrv = lanSrv
 
-	cfg := tern.Config{
+	cfg := pigeon.Config{
 		TLS:        &tls.Config{InsecureSkipVerify: true},
 		Token:      token,
 		InstanceID: instanceID,
 		LANServer:  lanSrv,
 	}
-	conn, err := tern.Register(ctx, relayURL, cfg)
+	conn, err := pigeon.Register(ctx, relayURL, cfg)
 	if err != nil {
 		return "", err
 	}
@@ -55,7 +55,7 @@ func (s *Server) ConnectRelay(ctx context.Context, relayURL, token, instanceID s
 	s.mu.Lock()
 	s.remoteSeq++
 	remoteID := s.remoteSeq
-	s.remotes[remoteID] = remoteConn{writer: ternWriter{conn: conn}, ctx: ctx}
+	s.remotes[remoteID] = remoteConn{writer: pigeonWriter{conn: conn}, ctx: ctx}
 	s.mu.Unlock()
 
 	// Send init + history + scripts.
@@ -131,7 +131,7 @@ func (s *Server) ConnectRelay(ctx context.Context, relayURL, token, instanceID s
 	return instanceID, nil
 }
 
-func (s *Server) sendJSON(ctx context.Context, conn *tern.Conn, v any) {
+func (s *Server) sendJSON(ctx context.Context, conn *pigeon.Conn, v any) {
 	data, err := json.Marshal(v)
 	if err != nil {
 		slog.Error("relay: marshal failed", "err", err)

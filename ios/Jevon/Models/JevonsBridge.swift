@@ -3,7 +3,7 @@
 
 import AVFoundation
 import Foundation
-import Tern
+import Pigeon
 import WebKit
 import os
 
@@ -24,7 +24,7 @@ enum BridgeMode {
 ///
 /// Supports two transport modes:
 /// - **Direct** (LAN): WebSocket to jevond for chat and voice
-/// - **Relay**: TernConn QUIC for chat, voice routed through tern StreamChannel
+/// - **Relay**: PigeonConn QUIC for chat, voice routed through tern StreamChannel
 @MainActor
 final class JevonsBridge: NSObject, WKScriptMessageHandler {
 
@@ -41,9 +41,9 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
     private var chatWS: URLSessionWebSocketTask?
     private var chatSession: URLSession?
 
-    // MARK: - Relay mode: TernConn
+    // MARK: - Relay mode: PigeonConn
 
-    private var ternConn: TernConn?
+    private var pigeonConn: PigeonConn?
 
     // MARK: - Voice (WebSocket in direct mode, tern StreamChannel in relay mode)
 
@@ -194,15 +194,15 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
         }
     }
 
-    // MARK: Relay mode: TernConn
+    // MARK: Relay mode: PigeonConn
 
     private func connectChatTern(host: String, port: UInt16, instanceID: String) {
         Task {
             do {
-                let conn = try await TernConn.connect(
+                let conn = try await PigeonConn.connect(
                     host: host, port: port, instanceID: instanceID
                 )
-                self.ternConn = conn
+                self.pigeonConn = conn
                 logger.info("Chat connected via tern relay (instance: \(instanceID))")
                 injectJS("window._jevonTransport._onOpen()")
                 await ternReceiveLoop(conn)
@@ -213,7 +213,7 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
         }
     }
 
-    private func ternReceiveLoop(_ conn: TernConn) async {
+    private func ternReceiveLoop(_ conn: PigeonConn) async {
         while !Task.isCancelled {
             let data: Data
             do {
@@ -255,8 +255,8 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
         chatWS?.cancel(with: .goingAway, reason: nil)
         chatWS = nil
         chatSession = nil
-        ternConn?.close()
-        ternConn = nil
+        pigeonConn?.close()
+        pigeonConn = nil
     }
 
     private func sendChat(_ text: String) {
@@ -268,7 +268,7 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
                 }
             }
         case .relay:
-            guard let conn = ternConn else { return }
+            guard let conn = pigeonConn else { return }
             Task {
                 do {
                     var payload = Data(text.utf8)

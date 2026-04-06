@@ -36,7 +36,7 @@ func (s *Server) SetRegistry(registry *claude.Registry) {
 		mcp.NewTool("jevons_agent_start",
 			mcp.WithDescription("Start a persistent agent in a repo/directory. Creates and registers it if new. The agent runs as a persistent Claude Code process that retains conversation across messages."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Unique agent name (e.g. 'tern', 'jevon-frontend')")),
-			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory for the agent (e.g. '~/work/github.com/marcelocantos/tern')")),
+			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory for the agent (e.g. '~/work/github.com/marcelocantos/pigeon')")),
 			mcp.WithString("model", mcp.Description("Model override (e.g. 'opus', 'sonnet')")),
 		),
 		s.handleAgentStart,
