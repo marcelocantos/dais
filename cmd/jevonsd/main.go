@@ -26,7 +26,6 @@ import (
 	"github.com/marcelocantos/jevons/internal/jevons"
 	"github.com/marcelocantos/jevons/internal/manager"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
-	"github.com/marcelocantos/jevons/internal/memory"
 	"github.com/marcelocantos/jevons/internal/server"
 	"github.com/marcelocantos/jevons/internal/session"
 	"github.com/marcelocantos/jevons/internal/transcript"
@@ -584,29 +583,8 @@ func main() {
 	// Wire registry into MCP server for agent tools.
 	mcpSrv.SetRegistry(registry)
 
-	// Transcript memory — searchable index of all Claude sessions.
-	claudeProjectsDir := filepath.Join(homeDir, ".claude", "projects")
-	memDBPath := filepath.Join(homeDir, ".jevons", "memory.db")
-	mem, err := memory.New(memDBPath, claudeProjectsDir)
-	if err != nil {
-		slog.Error("transcript memory failed", "err", err)
-	} else {
-		mcpSrv.SetMemory(mem)
-		defer mem.Close()
-		go func() {
-			slog.Info("memory: ingesting existing sessions")
-			if err := mem.IngestAll(); err != nil {
-				slog.Error("memory: initial ingest failed", "err", err)
-			}
-			stats, _ := mem.Stats()
-			if stats != nil {
-				slog.Info("memory: initial ingest complete", "sessions", stats.TotalSessions, "messages", stats.TotalMessages)
-			}
-			if err := mem.Watch(); err != nil {
-				slog.Error("memory: watch failed", "err", err)
-			}
-		}()
-	}
+	// Transcript memory is now provided by the standalone mnemo MCP server.
+	// See https://github.com/marcelocantos/mnemo
 
 	// Ensure the primary overseer agent exists.
 	jevonDef, err := registry.EnsureAgent("jevons", jevDir, "", true)
