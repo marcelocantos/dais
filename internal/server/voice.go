@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"github.com/coder/websocket"
-	"github.com/marcelocantos/jevons/internal/grok"
+	"github.com/marcelocantos/claudia/grok"
 	"github.com/marcelocantos/jevons/internal/jevons"
 )
 

@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/db"
 	"github.com/marcelocantos/jevons/internal/discovery"
-	"github.com/marcelocantos/jevons/internal/session"
 )
 
 // Half-life for session relevance decay (1 day).
@@ -22,7 +22,7 @@ var decayLambda = math.Ln2 / (24 * 60 * 60) // per second
 // SessionEvent wraps a session event with its source session ID.
 type SessionEvent struct {
 	SessionID string
-	Event     session.Event
+	Event     claudia.TaskEvent
 }
 
 // DefaultListLimit is the maximum number of sessions returned by List
@@ -33,7 +33,7 @@ const DefaultListLimit = 20
 type SessionSummary struct {
 	ID        string         `json:"id"`
 	Name      string         `json:"name"`
-	Status    session.Status `json:"status"`
+	Status    claudia.TaskStatus `json:"status"`
 	WorkDir   string         `json:"workdir,omitempty"`
 	ModTime   time.Time      `json:"mod_time,omitempty"`
 	Active    bool           `json:"active,omitempty"`
@@ -55,7 +55,7 @@ type Manager struct {
 	scanner      *discovery.Scanner
 
 	mu       sync.RWMutex
-	sessions map[string]*session.Session // keyed by UUID
+	sessions map[string]*claudia.Task // keyed by UUID
 }
 
 // New creates a Manager with default configuration.
@@ -65,13 +65,13 @@ func New(defaultModel, defaultDir string, database *db.DB, scanner *discovery.Sc
 		defaultDir:   defaultDir,
 		db:           database,
 		scanner:      scanner,
-		sessions:     make(map[string]*session.Session),
+		sessions:     make(map[string]*claudia.Task),
 	}
 }
 
 // Create creates a new session by running claude to establish a session ID.
 // The JSONL file Claude creates becomes the persistent record.
-func (m *Manager) Create(cfg CreateConfig) (*session.Session, error) {
+func (m *Manager) Create(cfg CreateConfig) (*claudia.Task, error) {
 	model := cfg.Model
 	if model == "" {
 		model = m.defaultModel
@@ -88,7 +88,7 @@ func (m *Manager) Create(cfg CreateConfig) (*session.Session, error) {
 	// Create a temporary session without a UUID — Run() will capture
 	// the session ID from the init event.
 	tmpID := fmt.Sprintf("creating-%d", time.Now().UnixNano())
-	s := session.New(session.Config{
+	s := claudia.NewTask(claudia.TaskConfig{
 		ID:      tmpID,
 		Name:    name,
 		WorkDir: workDir,
@@ -96,7 +96,7 @@ func (m *Manager) Create(cfg CreateConfig) (*session.Session, error) {
 	})
 	s.SetRawLog(m.rawLogFunc(tmpID))
 
-	events, err := s.Run(context.Background(), "Ready.")
+	events, err := s.RunTask(context.Background(), "Ready.")
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
 	}
@@ -104,7 +104,7 @@ func (m *Manager) Create(cfg CreateConfig) (*session.Session, error) {
 	// Drain events to find the init event with the session UUID.
 	var uuid string
 	for ev := range events {
-		if ev.Type == session.EventInit && ev.SessionID != "" {
+		if ev.Type == claudia.TaskEventInit && ev.SessionID != "" {
 			uuid = ev.SessionID
 		}
 	}
@@ -125,7 +125,7 @@ func (m *Manager) Create(cfg CreateConfig) (*session.Session, error) {
 
 // Get returns a session by UUID. If the UUID is not in the active sessions
 // map, it attempts to discover it from the filesystem and lazily activate it.
-func (m *Manager) Get(id string) *session.Session {
+func (m *Manager) Get(id string) *claudia.Task {
 	m.mu.RLock()
 	if s, ok := m.sessions[id]; ok {
 		m.mu.RUnlock()
@@ -143,7 +143,7 @@ func (m *Manager) Get(id string) *session.Session {
 	}
 
 	model := m.defaultModel
-	s := session.New(session.Config{
+	s := claudia.NewTask(claudia.TaskConfig{
 		ID:       id,
 		Name:     info.WorkDir,
 		WorkDir:  info.WorkDir,
@@ -188,9 +188,9 @@ func (m *Manager) List(all bool) []SessionSummary {
 
 	for _, d := range discovered {
 		seen[d.UUID] = true
-		status := session.StatusIdle
+		status := claudia.TaskStatusIdle
 		if s, ok := m.sessions[d.UUID]; ok {
-			status = s.Status()
+			status = s.TaskStatus()
 		}
 		score := sessionScore(d.Size, now.Sub(d.ModTime))
 		result = append(result, SessionSummary{
@@ -211,8 +211,8 @@ func (m *Manager) List(all bool) []SessionSummary {
 		}
 		result = append(result, SessionSummary{
 			ID:     id,
-			Name:   s.Name(),
-			Status: s.Status(),
+			Name:   s.TaskName(),
+			Status: s.TaskStatus(),
 			Score:  math.MaxFloat64, // just-created, pin high
 		})
 	}
@@ -240,7 +240,7 @@ func sessionScore(size int64, age time.Duration) float64 {
 	return math.Log(float64(size)) * math.Exp(-decayLambda*age.Seconds())
 }
 
-func (m *Manager) rawLogFunc(sessionID string) session.RawLogFunc {
+func (m *Manager) rawLogFunc(sessionID string) claudia.RawLogFunc {
 	return func(line []byte) {
 		if err := m.db.AppendRawLog(sessionID, string(line)); err != nil {
 			slog.Error("failed to persist raw log", "session", sessionID, "err", err)
@@ -253,7 +253,7 @@ func (m *Manager) rawLogFunc(sessionID string) session.RawLogFunc {
 func (m *Manager) IsExternallyActive(id string) bool {
 	// If we're managing this session and it's running, it's us — not external.
 	m.mu.RLock()
-	if s, ok := m.sessions[id]; ok && s.Status() == session.StatusRunning {
+	if s, ok := m.sessions[id]; ok && s.TaskStatus() == claudia.TaskStatusRunning {
 		m.mu.RUnlock()
 		return false
 	}
@@ -274,7 +274,7 @@ func (m *Manager) Kill(id string) error {
 	delete(m.sessions, id)
 	m.mu.Unlock()
 
-	s.Stop()
+	s.StopTask()
 	slog.Info("session killed", "id", id)
 	return nil
 }

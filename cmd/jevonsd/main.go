@@ -27,8 +27,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/manager"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
 	"github.com/marcelocantos/jevons/internal/server"
-	"github.com/marcelocantos/jevons/internal/session"
-	"github.com/marcelocantos/jevons/internal/transcript"
+"github.com/marcelocantos/jevons/internal/transcript"
 	"github.com/marcelocantos/jevons/internal/ui"
 	"github.com/marcelocantos/pigeon/qr"
 )
@@ -360,14 +359,14 @@ func main() {
 			if err != nil {
 				return "", err
 			}
-			return s.ID(), nil
+			return s.TaskID(), nil
 		},
 		SessionSend: func(id, text string, wait bool) (string, error) {
 			s := mgr.Get(id)
 			if s == nil {
 				return "", fmt.Errorf("session %q not found", id)
 			}
-			events, err := s.Run(context.Background(), text)
+			events, err := s.RunTask(context.Background(), text)
 			if err != nil {
 				return "", err
 			}
@@ -380,7 +379,7 @@ func main() {
 			}
 			var result string
 			for ev := range events {
-				if ev.Type == session.EventText {
+				if ev.Type == claudia.TaskEventText {
 					result += ev.Content
 				}
 			}

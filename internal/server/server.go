@@ -436,10 +436,10 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"id":          sess.ID(),
-		"name":        sess.Name(),
-		"status":      sess.Status(),
-		"workdir":     sess.WorkDir(),
+		"id":          sess.TaskID(),
+		"name":        sess.TaskName(),
+		"status":      sess.TaskStatus(),
+		"workdir":     sess.TaskWorkDir(),
 		"last_result": sess.LastResult(),
 	})
 }

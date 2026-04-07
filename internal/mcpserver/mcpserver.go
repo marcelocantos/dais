@@ -18,7 +18,6 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/manager"
-	"github.com/marcelocantos/jevons/internal/session"
 )
 
 // EventCallback is called when a worker finishes a command.
@@ -211,8 +210,8 @@ func (s *Server) handleSessionStatus(_ context.Context, req mcp.CallToolRequest)
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "Worker: %s (%s)\n", sess.Name(), sess.ID())
-	fmt.Fprintf(&b, "Status: %s\n", sess.Status())
+	fmt.Fprintf(&b, "Worker: %s (%s)\n", sess.TaskName(), sess.TaskID())
+	fmt.Fprintf(&b, "Status: %s\n", sess.TaskStatus())
 	if lr := sess.LastResult(); lr != "" {
 		fmt.Fprintf(&b, "Last result:\n%s\n", lr)
 	}
@@ -239,7 +238,7 @@ func (s *Server) handleCreateSession(_ context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultError(fmt.Sprintf("failed to create session: %v", err)), nil
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("Created session %s (%s)", sess.ID(), sess.Name())), nil
+	return mcp.NewToolResultText(fmt.Sprintf("Created session %s (%s)", sess.TaskID(), sess.TaskName())), nil
 }
 
 func (s *Server) handleSendCommand(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -275,14 +274,14 @@ func (s *Server) handleSendCommand(ctx context.Context, req mcp.CallToolRequest)
 	}
 
 	// Synchronous: run and return the result.
-	events, err := sess.Run(ctx, text)
+	events, err := sess.RunTask(ctx, text)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("run failed: %v", err)), nil
 	}
 
 	var textParts []string
 	for ev := range events {
-		if ev.Type == session.EventText {
+		if ev.Type == claudia.TaskEventText {
 			textParts = append(textParts, ev.Content)
 		}
 	}
@@ -312,19 +311,19 @@ func (s *Server) handleKillSession(_ context.Context, req mcp.CallToolRequest) (
 }
 
 // runAndNotify runs a command asynchronously and fires the event callback.
-func (s *Server) runAndNotify(id string, sess *session.Session, text string) {
-	events, err := sess.Run(context.Background(), text)
+func (s *Server) runAndNotify(id string, sess *claudia.Task, text string) {
+	events, err := sess.RunTask(context.Background(), text)
 	if err != nil {
 		slog.Error("worker run failed", "worker", id, "err", err)
 		if s.onDone != nil {
-			s.onDone(id, sess.Name(), err.Error(), true)
+			s.onDone(id, sess.TaskName(), err.Error(), true)
 		}
 		return
 	}
 
 	var textParts []string
 	for ev := range events {
-		if ev.Type == session.EventText {
+		if ev.Type == claudia.TaskEventText {
 			textParts = append(textParts, ev.Content)
 		}
 	}
@@ -336,7 +335,7 @@ func (s *Server) runAndNotify(id string, sess *session.Session, text string) {
 
 	failed := strings.HasPrefix(result, "error: ")
 	if s.onDone != nil {
-		s.onDone(id, sess.Name(), truncate(result, 2000), failed)
+		s.onDone(id, sess.TaskName(), truncate(result, 2000), failed)
 	}
 }
 
