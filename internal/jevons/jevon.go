@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/marcelocantos/jevons/internal/claude"
+	"github.com/marcelocantos/claudia"
 )
 
 // Config holds Jevon configuration.
@@ -37,7 +37,7 @@ type Jevon struct {
 	onClaudeID ClaudeIDFunc
 
 	mu      sync.Mutex
-	proc    *claude.Process
+	proc    *claudia.Agent
 	waiting bool // true while waiting for a response
 }
 
@@ -80,7 +80,7 @@ func (j *Jevon) SetClaudeIDCallback(fn ClaudeIDFunc) {
 func (j *Jevon) Run(ctx context.Context) {
 	slog.Info("jevons starting persistent claude", "workdir", j.cfg.WorkDir)
 
-	proc, err := claude.Start(claude.Config{
+	proc, err := claudia.Start(claudia.Config{
 		WorkDir: j.cfg.WorkDir,
 		Model:   j.cfg.Model,
 		ExtraArgs: []string{
@@ -109,7 +109,7 @@ func (j *Jevon) Run(ctx context.Context) {
 	j.mu.Unlock()
 
 	// Handle events from the JSONL.
-	proc.OnEvent(func(ev claude.Event) {
+	proc.OnEvent(func(ev claudia.Event) {
 		j.mu.Lock()
 		onOutput := j.onOutput
 		onRawLog := j.onRawLog

@@ -16,7 +16,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/marcelocantos/jevons/internal/claude"
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/manager"
 	"github.com/marcelocantos/jevons/internal/session"
 )
@@ -44,7 +44,7 @@ type TranscriptOps struct {
 // Server wraps an MCP server that provides worker management tools.
 type Server struct {
 	mgr          *manager.Manager
-	registry     *claude.Registry
+	registry     *claudia.Registry
 	workerWD     string
 	onDone       EventCallback
 	reloadViews  ReloadViewsFunc

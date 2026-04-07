@@ -19,7 +19,7 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/marcelocantos/jevons/internal/claude"
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/db"
 	"github.com/marcelocantos/jevons/internal/discovery"
@@ -574,7 +574,7 @@ func main() {
 
 	// Agent registry — manages persistent Claude processes.
 	registryPath := filepath.Join(homeDir, ".jevons", "agents.json")
-	registry, err := claude.NewRegistry(registryPath)
+	registry, err := claudia.NewRegistry(registryPath)
 	if err != nil {
 		slog.Error("agent registry failed", "err", err)
 		os.Exit(1)
@@ -620,7 +620,7 @@ func main() {
 
 	if jevonProc := registry.Get("jevons"); jevonProc != nil {
 		srv.SetProcess(jevonProc)
-		jevonProc.OnEvent(func(ev claude.Event) {
+		jevonProc.OnEvent(func(ev claudia.Event) {
 			srv.BroadcastChat(string(ev.Raw))
 		})
 

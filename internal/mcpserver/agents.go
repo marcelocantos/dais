@@ -14,7 +14,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 
-	"github.com/marcelocantos/jevons/internal/claude"
+	"github.com/marcelocantos/claudia"
 )
 
 // NotifyFunc injects a text message into the Jevon overseer's PTY input.
@@ -22,7 +22,7 @@ type NotifyFunc func(text string)
 
 // SetRegistry attaches the agent registry to the MCP server and
 // registers agent management tools.
-func (s *Server) SetRegistry(registry *claude.Registry) {
+func (s *Server) SetRegistry(registry *claudia.Registry) {
 	s.registry = registry
 
 	s.mcpSrv.AddTool(
@@ -153,11 +153,11 @@ func (s *Server) handleAgentStop(_ context.Context, req mcp.CallToolRequest) (*m
 // wireAgentEvents sets up the event handler for an agent process.
 // It broadcasts to the web UI and notifies Jevon when the agent
 // produces a text response.
-func (s *Server) wireAgentEvents(name string, proc *claude.Process) {
+func (s *Server) wireAgentEvents(name string, proc *claudia.Agent) {
 	var mu sync.Mutex
 	var responseText strings.Builder
 
-	proc.OnEvent(func(ev claude.Event) {
+	proc.OnEvent(func(ev claudia.Event) {
 		// Broadcast raw event to web UI activity feed.
 		s.broadcastAgentEvent(name, ev)
 
@@ -202,7 +202,7 @@ func (s *Server) notify(agentName, text string) {
 }
 
 // broadcastAgentEvent sends agent events to the web UI.
-func (s *Server) broadcastAgentEvent(name string, ev claude.Event) {
+func (s *Server) broadcastAgentEvent(name string, ev claudia.Event) {
 	data, _ := json.Marshal(map[string]any{
 		"type":  "agent_event",
 		"agent": name,

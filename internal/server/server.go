@@ -22,7 +22,7 @@ import (
 	"github.com/marcelocantos/pigeon"
 
 	"github.com/coder/websocket"
-	"github.com/marcelocantos/jevons/internal/claude"
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/db"
 	"github.com/marcelocantos/jevons/internal/jevons"
 	"github.com/marcelocantos/jevons/internal/manager"
@@ -81,8 +81,8 @@ type Server struct {
 	voiceBridge    *VoiceBridge
 	lastScreenshot string
 	screenshotCh   chan string
-	proc           *claude.Process
-	registry       *claude.Registry
+	proc           *claudia.Agent
+	registry       *claudia.Registry
 	chatListeners  []chan string
 }
 

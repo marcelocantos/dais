@@ -1,6 +1,6 @@
 module github.com/marcelocantos/jevons
 
-go 1.25.7
+go 1.26.1
 
 require (
 	github.com/charmbracelet/bubbles v1.0.0
@@ -11,6 +11,7 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
+	github.com/marcelocantos/claudia v0.1.0
 	github.com/marcelocantos/pigeon v0.13.0
 	github.com/mark3labs/mcp-go v0.44.1
 	github.com/mattn/go-sqlite3 v1.14.37
