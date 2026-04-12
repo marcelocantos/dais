@@ -18,7 +18,7 @@ maintenance activities. Append-only — newest entries at the bottom.
 
 ## 2026-04-12 — /release v0.3.0
 
-- **Commit**: `pending`
+- **Commit**: `61eb19b`
 - **Outcome**: Released v0.3.0 (darwin-arm64, linux-amd64, linux-arm64).
 - **Changes**: Project renamed Jevon → Jevons; Grok Realtime voice bridge with adaptive VAD and transport abstraction; Claude Code session/agent management extracted to the `claudia` library (~1900 lines removed); transcript memory moved out-of-process to the `mnemo` MCP server; tern → pigeon migration; live agent terminal viewer; async fire-and-forget `jevons_agent_send`; Swift `JevonBridge` / `WebUIView`; ConnectView full-screen QR; interactive API-key prompts.
 - **Workflow fixes**: `.github/workflows/release.yml`, `Makefile`, `.gitignore` all updated for the `jevon → jevons` rename (stale package paths and binary names). Linux arm64 build switched to native `ubuntu-24.04-arm` runner, dropping the `gcc-aarch64-linux-gnu` cross-compiler step.
