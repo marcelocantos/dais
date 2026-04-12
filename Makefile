@@ -45,7 +45,7 @@ player: $(ge/PLAYER)
 
 # ── Go binaries ─────────────────────────────────────
 VERSION  ?= dev
-LDFLAGS  := -ldflags "-X github.com/marcelocantos/jevon/internal/cli.Version=$(VERSION)"
+LDFLAGS  := -ldflags "-X github.com/marcelocantos/jevons/internal/cli.Version=$(VERSION)"
 # mattn/go-sqlite3 needs these defines for sqlpipe session extension support.
 export CGO_CFLAGS += -DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_PREUPDATE_HOOK -DSQLITE_ENABLE_FTS5
 # Suppress macOS linker warning about duplicate -lm from go-sqlite3 opt files.

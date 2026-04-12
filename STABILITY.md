@@ -10,7 +10,7 @@ right before locking them in.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.2.0.
+Snapshot as of v0.3.0.
 
 ### CLI: `jevonsd`
 
@@ -20,11 +20,22 @@ Snapshot as of v0.2.0.
 | `--relay` | string | `""` | Fluid — URL format and registration protocol may change |
 | `--relay-token` | string | `""` | Fluid |
 | `--instance-id` | string | `""` | Fluid |
-| `--set-openai-key` | string | `""` | Stable |
+| `--set-openai-key` | bool | `false` | Stable — interactive key prompt |
+| `--set-xai-key` | bool | `false` | Fluid — new in v0.3.0, interactive xAI key prompt for Grok voice bridge |
 | `--workdir` | string | `"."` | Needs review — semantics may evolve |
 | `--model` | string | `""` | Needs review — may consolidate with config |
 | `--jevons-model` | string | `""` | Needs review — same concern |
 | `--debug` | bool | `false` | Stable |
+| `--version` | bool | `false` | Stable |
+| `--help-agent` | bool | `false` | Stable |
+
+### CLI: `remote`
+
+Terminal UI client for jevonsd.
+
+| Flag | Type | Default | Stability |
+|---|---|---|---|
+| `--addr` | string | `"localhost:13705"` | Stable |
 | `--version` | bool | `false` | Stable |
 | `--help-agent` | bool | `false` | Stable |
 
@@ -37,15 +48,19 @@ Snapshot as of v0.2.0.
 | `jevons_create_session` | `name?, workdir?, model?` | Stable |
 | `jevons_send_command` | `id, text, wait?=true` | Stable |
 | `jevons_kill_session` | `id: string` | Stable |
-| `jevons_agent_list` | (none) | Fluid — new in v0.2.0 |
-| `jevons_agent_start` | `name, workdir, model?` | Fluid — new in v0.2.0 |
-| `jevons_agent_send` | `name, text` | Fluid — new in v0.2.0 |
-| `jevons_agent_stop` | `name` | Fluid — new in v0.2.0 |
-| `jevons_search_memory` | `query, limit?, session_type?` | Fluid — new in v0.2.0 |
-| `jevons_memory_query` | `query` (SQL/sqldeep) | Fluid — new in v0.2.0 |
-| `jevons_memory_stats` | (none) | Fluid — new in v0.2.0 |
-| `jevons_list_memory_sessions` | `session_type?, min_messages?, limit?, project?` | Fluid — new in v0.2.0 |
+| `jevons_agent_list` | (none) | Fluid |
+| `jevons_agent_start` | `name, workdir, model?` | Fluid |
+| `jevons_agent_send` | `name, text` | Fluid — async fire-and-forget since v0.3.0 |
+| `jevons_agent_stop` | `name` | Fluid |
+| `jevons_transcript_read` | `session?, limit?` | Fluid — new in v0.3.0, reads Jevon conversation history |
+| `jevons_transcript_rewind` | `session, n?` | Fluid — new in v0.3.0, trims Jevon history |
 | `jevons_reload_views` | (none) | Fluid |
+
+Transcript memory search has moved out-of-process. Global search across all
+Claude Code sessions is now provided by the standalone
+[`mnemo`](https://github.com/marcelocantos/mnemo) MCP server (previously
+`jevons_search_memory`, `jevons_memory_query`, `jevons_memory_stats`,
+`jevons_list_memory_sessions` — all removed in v0.3.0).
 
 ### WebSocket protocol
 
@@ -73,13 +88,33 @@ Structured JSON messages for the iOS remote client.
 
 Dev-only hot reload signal. Server sends "reload" on file changes.
 
+#### `/ws/agent-terminal` (new in v0.3.0)
+
+Live PTY viewer for a running agent. Click an agent in the web UI to
+stream its Claude Code session output.
+
+| Direction | Format | Stability |
+|---|---|---|
+| Server → Client | Raw PTY bytes | Fluid |
+
+#### `/ws/voice` (new in v0.3.0)
+
+Grok Realtime voice bridge. Full-duplex audio between the browser/iOS
+client and the xAI Realtime API (`wss://api.x.ai/v1/realtime`). Server
+transcodes, applies adaptive local VAD, and relays audio and events.
+
+| Direction | Format | Stability |
+|---|---|---|
+| Server ↔ Client | Binary audio frames + JSON events | Fluid |
+
 ### REST API
 
 | Method | Path | Stability |
 |---|---|---|
 | `GET` | `/health` | Stable |
 | `GET` | `/` | Fluid — serves web UI from `web/` directory |
-| `GET` | `/api/agents` | Fluid — new in v0.2.0 |
+| `GET` | `/api/agents` | Fluid |
+| `GET` | `/scripts/*` | Fluid — new in v0.3.0, serves JS modules (transport.js, etc.) from `web/scripts/` |
 | `GET` | `/api/sessions` | Stable |
 | `GET` | `/api/sessions/{id}` | Stable |
 | `POST` | `/api/sessions/{id}/kill` | Stable |
@@ -98,28 +133,22 @@ New in v0.2.0. JSON array of agent definitions.
 | `auto_start` | bool | Fluid |
 | `parent` | string (optional) | Fluid |
 
-### Transcript memory (`~/.jevons/memory.db`)
-
-New in v0.2.0. SQLite FTS5 index of all Claude Code session transcripts.
-
-| Table | Columns | Stability |
-|---|---|---|
-| `messages` | `id, session_id, project, role, text, timestamp, type, is_noise` | Fluid |
-| `messages_fts` | FTS5 virtual table on text/role/project/session_id | Fluid |
-| `sessions` | View: session_id, project, session_type, total_msgs, substantive_msgs, first_msg, last_msg | Fluid |
-| `ingest_state` | `path, offset` | Fluid |
-
 ### Configuration
 
 | Path | Purpose | Stability |
 |---|---|---|
 | `~/.jevons/` | Data directory | Stable |
 | `~/.jevons/jevons.db` | SQLite database | Stable |
-| `~/.jevons/agents.json` | Agent registry | Fluid — new in v0.2.0 |
-| `~/.jevons/memory.db` | Transcript memory index | Fluid — new in v0.2.0 |
+| `~/.jevons/agents.json` | Agent registry | Fluid |
 | `~/.jevons/jevons/CLAUDE.md` | Generated Jevons instructions | Fluid |
 | `~/.jevons/jevons/.mcp.json` | MCP server config for Jevons | Fluid |
-| `web/` | Web UI (served from disk, hot-reloaded) | Fluid — new in v0.2.0 |
+| `~/.jevons/lua/views/` | Lua view scripts | Fluid |
+| `~/.jevons/remote_history` | `remote` TUI input history | Stable |
+| `web/` | Web UI (served from disk, hot-reloaded) | Fluid |
+
+Transcript memory (`~/.jevons/memory.db`) was removed in v0.3.0. The
+mnemo MCP server now provides global session indexing; jevonsd no
+longer maintains its own transcript database.
 
 ## Gaps and prerequisites
 
@@ -128,16 +157,22 @@ New in v0.2.0. SQLite FTS5 index of all Claude Code session transcripts.
 - Workers and Jevons run with permissions bypassed.
 
 ### Architecture
-- Legacy Jevons process (voice pipeline) still runs alongside new agent registry.
-- sqlpipe removed but some legacy code paths (Lua views, sync) remain as stubs.
-- Agent MCP tools exist but not fully tested end-to-end.
+- Claude Code session/agent management was extracted to the `claudia`
+  library in v0.3.0; remaining Grok realtime bridge still lives in-tree.
+- Lua view script runtime (🎯T9) is partially implemented — server-side
+  rendering works; client-side Lua on iOS is not yet wired.
+- sqlpipe state sync (🎯T10) is incomplete — `internal/sync/` compiles
+  but WebSocket protocol has not been cut over.
 
 ### Testing
-- No integration tests for WebSocket, agent lifecycle, or transcript memory.
+- No integration tests for WebSocket, agent lifecycle, or voice bridge.
+- No automated test for the end-to-end voice path (browser mic → Grok
+  Realtime → TTS response).
 
 ### Documentation
 - NOTICES file missing for vendored dependencies.
-- README needs updating to reflect new architecture.
+- README install section documents only the GitHub releases download
+  path; no packaged distribution (brew, apt) yet.
 
 ## Out of scope for 1.0
 

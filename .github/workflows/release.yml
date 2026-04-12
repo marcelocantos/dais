@@ -33,7 +33,7 @@ jobs:
           - runner: ubuntu-latest
             goos: linux
             goarch: amd64
-          - runner: ubuntu-latest
+          - runner: ubuntu-24.04-arm
             goos: linux
             goarch: arm64
     runs-on: ${{ matrix.runner }}
@@ -43,10 +43,6 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install cross-compiler
-        if: matrix.goos == 'linux' && matrix.goarch == 'arm64'
-        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
-
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
@@ -55,25 +51,20 @@ jobs:
           CGO_CFLAGS: "-DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_PREUPDATE_HOOK -DSQLITE_ENABLE_FTS5"
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          LDFLAGS="-X github.com/marcelocantos/jevon/internal/cli.Version=${VERSION}"
+          LDFLAGS="-X github.com/marcelocantos/jevons/internal/cli.Version=${VERSION}"
           cp agents-guide.md internal/cli/help_agent.md
 
-          CC=""
-          if [[ "${{ matrix.goos }}" == "linux" && "${{ matrix.goarch }}" == "arm64" ]]; then
-            CC=aarch64-linux-gnu-gcc
-          fi
-
-          CC="${CC}" go build -tags "sqlite_preupdate_hook sqlite_fts5" \
-            -ldflags "${LDFLAGS}" -o jevond ./cmd/jevond
-          CC="${CC}" go build -tags "sqlite_preupdate_hook sqlite_fts5" \
+          go build -tags "sqlite_preupdate_hook sqlite_fts5" \
+            -ldflags "${LDFLAGS}" -o jevonsd ./cmd/jevonsd
+          go build -tags "sqlite_preupdate_hook sqlite_fts5" \
             -ldflags "${LDFLAGS}" -o remote ./cmd/remote
 
-          tar czf "jevon-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz" \
-            jevond remote
+          tar czf "jevons-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz" \
+            jevonsd remote
 
       - name: Upload artifacts
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "${{ github.ref_name }}" \
-            jevon-*-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+            jevons-*-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
