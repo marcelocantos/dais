@@ -6,7 +6,7 @@ import Observation
 import os
 import UIKit
 
-private let logger = Logger(subsystem: "com.marcelocantos.jevon", category: "Connection")
+private let logger = Logger(subsystem: "com.marcelocantos.jevons", category: "Connection")
 
 /// Manages the WebSocket connection to jevond.
 @Observable
@@ -39,7 +39,7 @@ final class Connection {
         notificationBody = nil
     }
 
-    /// Text being streamed from the current Jevon response.
+    /// Text being streamed from the current Jevons response.
     private var streamingText: String = ""
 
     // MARK: - Client-side Lua rendering
@@ -580,7 +580,7 @@ final class Connection {
         let formatter = ISO8601DateFormatter()
         let msgs: [[String: Any]] = messages.map { msg in
             [
-                "role": msg.role == .user ? "user" : "jevon",
+                "role": msg.role == .user ? "user" : "jevons",
                 "text": msg.text,
                 "timestamp": formatter.string(from: msg.timestamp),
             ]

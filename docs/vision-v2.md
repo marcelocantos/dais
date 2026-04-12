@@ -9,7 +9,7 @@ predetermined tree. The shape of the work determines the shape of the
 system. The session the user talks to is just a session whose target
 happens to be "interact with the user."
 
-The daemon (`jevond`) is not an agent. It is infrastructure — a session
+The daemon (`jevonsd`) is not an agent. It is infrastructure — a session
 runtime that manages lifecycles, routes work, and enforces capabilities.
 It is to sessions what an OS kernel is to processes.
 
@@ -20,7 +20,7 @@ sessions can *be* (their scope, authority, and resource budget).
 
 ## Lineage
 
-Jevon absorbs two donor projects:
+Jevons absorbs two donor projects:
 
 - **cworkers** — session pooling, shadowing, dispatch, SQLite tracking,
   Svelte dashboard, MCP server infrastructure. These become the daemon's
@@ -55,7 +55,7 @@ practically unique: it's the one the user talks to.
 
 ### The daemon itself
 
-`jevond` is the one entity that genuinely isn't a session. It's a Go
+`jevonsd` is the one entity that genuinely isn't a session. It's a Go
 process that must be running before any session exists. You can't
 bootstrap infrastructure from the thing that depends on it. It runs
 as a brew service or launchd agent.
@@ -81,7 +81,7 @@ This is environment-level, not session-level.
 
 ### MCP discovery
 
-Sessions discover `jevond` via MCP configuration. Global config in
+Sessions discover `jevonsd` via MCP configuration. Global config in
 `~/.claude/.mcp.json` solves this — every `claude` process,
 regardless of directory context, finds the daemon automatically.
 
@@ -213,7 +213,7 @@ Work decoupled from workers enables:
 
 ## MCP Interface
 
-Jevon exposes its capabilities as MCP tools. Every session has access
+Jevons exposes its capabilities as MCP tools. Every session has access
 to `jwork`. Control-plane tools require sufficient authority.
 
 | Tool | Purpose |
@@ -230,7 +230,7 @@ the caller holds a capability token that covers the target session.
 
 ## Infrastructure Layers
 
-### Daemon — jevond (session runtime)
+### Daemon — jevonsd (session runtime)
 
 The daemon is dumb infrastructure. It provides:
 
@@ -283,9 +283,9 @@ rules:
 ### Relationship
 
 ```
-   session ──→ jevond       "submit work / spawn session / kill session"
+   session ──→ jevonsd       "submit work / spawn session / kill session"
    session ──→ exec-safety  "execute this command safely"
-   jevond  ──→ session      "here's new work / you're being deactivated"
+   jevonsd  ──→ session      "here's new work / you're being deactivated"
 ```
 
 The daemon manages the session graph. Execution safety manages the
@@ -360,7 +360,7 @@ the user:
 - Approves/denies permission requests
 - Uses voice for hands-free interaction
 
-The mobile app talks to `jevond` over a secure channel (mTLS with
+The mobile app talks to `jevonsd` over a secure channel (mTLS with
 QR-based device provisioning, per the existing auth architecture).
 
 ## Design Rationale
@@ -374,7 +374,7 @@ assumed constraint:
    session that hits a snag can pause, get unblocked, and resume.
    There's no reason to force single-shot semantics.
 
-2. **"Why impose a tree?"** The initial design had Jevon → repo
+2. **"Why impose a tree?"** The initial design had Jevons → repo
    sessions → workers as a strict hierarchy. But what about work that
    spans ge, sqlpipe, and sqldeep? Why arbitrarily insist it must live
    in one repo? The tree shape is itself a constraint, and an
@@ -456,15 +456,15 @@ components to absorb:
   evaluate whether this is still needed or whether direct shell
   execution with policy gating is sufficient.
 
-### Already in jevon
+### Already in jevons
 
 | Component | Location | Status | Relationship to vision |
 |-----------|----------|--------|----------------------|
-| **jevond daemon** | `cmd/jevond/main.go` | Real | Becomes the session runtime. Rewrite internals to use session model. |
+| **jevonsd daemon** | `cmd/jevonsd/main.go` | Real | Becomes the session runtime. Rewrite internals to use session model. |
 | **Session management** | `internal/session/` | Real | Wraps `claude -p` with NDJSON parsing. Foundation for session activation. |
 | **Manager** | `internal/manager/` | Real | Multi-session lifecycle with relevance scoring. Evolves into the session registry with routing. |
-| **MCP server** | `internal/mcpserver/` | Real | 5 tools (`jevon_list/create/status/send_command/kill`). Becomes the `jwork/jsessions/jkill/jprioritise/jstatus` surface. |
-| **HTTP/WebSocket server** | `internal/server/` | Real | Broadcasts Jevon events to connected clients. Continues serving mobile app + remote TUI. |
+| **MCP server** | `internal/mcpserver/` | Real | 5 tools (`jevons_list/create/status/send_command/kill`). Becomes the `jwork/jsessions/jkill/jprioritise/jstatus` surface. |
+| **HTTP/WebSocket server** | `internal/server/` | Real | Broadcasts Jevons events to connected clients. Continues serving mobile app + remote TUI. |
 | **TUI client (remote)** | `cmd/remote/main.go` | Real | Bubble Tea terminal UI with markdown rendering. One possible user I/O channel. |
 | **iOS app** | `ios/Jevon/` | Real | SwiftUI app with QR scanning, WebSocket, chat UI. Primary mobile I/O channel. |
 | **SQLite** | `internal/db/` | Real | Transcript, KV, raw log tables. Extend with session registry, metrics, routing data. |
@@ -480,15 +480,15 @@ components to absorb:
 
 ### Phase 1: Session model foundation
 
-Replace jevon's current `internal/session/` + `internal/manager/` with
+Replace jevons's current `internal/session/` + `internal/manager/` with
 the session-as-universal-primitive model. Key changes:
 
 - Sessions have targets, capabilities, provenance, directory context
 - Session registry in SQLite (not just transcript/KV)
 - `jwork` MCP tool that submits targets (initially routes to new
   sessions only — routing intelligence comes later)
-- Remove the "Jevon is a special coordinator session" concept from
-  `internal/jevon/` — it becomes just another session
+- Remove the "Jevons is a special coordinator session" concept from
+  `internal/jevons/` — it becomes just another session
 
 ### Phase 2: Absorb cworkers primitives
 
@@ -558,7 +558,7 @@ This vision supersedes:
   approach (from cworkers) with emergent session patterns replaces
   this.
 - **cworkers `docs/proposal-unified-substrate.md`** — described a
-  strict hierarchy (Jevon → repo sessions → workers) with Jevon as a
+  strict hierarchy (Jevons → repo sessions → workers) with Jevons as a
   separate user-facing product sitting above cworkers.
 
 The key shifts from both:
@@ -570,7 +570,7 @@ The key shifts from both:
 - **Work decoupled from workers** — `jwork` submits a target, the
   daemon routes it. The caller doesn't know or care whether the daemon
   reactivated an old session or spawned a new one.
-- **Jevon is not special** — the interactive session is just a session
+- **Jevons is not special** — the interactive session is just a session
   whose target is "interact with the user."
 - **Execution safety is infrastructure** — between sessions and the OS,
   not between sessions.

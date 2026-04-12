@@ -6,29 +6,32 @@ package server
 
 import (
 	"context"
+	"crypto/ecdh"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
-	"strings"
+	"net/http"
 	"os"
 	"path/filepath"
-	"net/http"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/marcelocantos/pigeon"
+
 	"github.com/coder/websocket"
-	"github.com/marcelocantos/jevon/internal/claude"
-	"github.com/marcelocantos/jevon/internal/db"
-	"github.com/marcelocantos/jevon/internal/jevon"
-	"github.com/marcelocantos/jevon/internal/manager"
-	"github.com/marcelocantos/jevon/internal/ui"
+	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/db"
+	"github.com/marcelocantos/jevons/internal/jevons"
+	"github.com/marcelocantos/jevons/internal/manager"
+	"github.com/marcelocantos/jevons/internal/ui"
 )
 
 // TranscriptEntry is a single turn in the conversation log.
 type TranscriptEntry struct {
-	Role      string    `json:"role"`      // "user" or "jevon"
+	Role      string    `json:"role"` // "user" or "jevons"
 	Text      string    `json:"text"`
 	Timestamp time.Time `json:"timestamp"`
 }
@@ -58,7 +61,7 @@ type remoteConn struct {
 
 // Server is the daisd HTTP/WebSocket server.
 type Server struct {
-	jevon   *jevon.Jevon
+	jevon   *jevons.Jevon
 	mgr     *manager.Manager
 	db      *db.DB
 	version string
@@ -69,30 +72,35 @@ type Server struct {
 	transcript []TranscriptEntry
 	turnBuf    string // accumulates Jevon text for current turn
 
-	luaRT     *ui.LuaRuntime
-	viewState *ui.ViewState
-
+	luaRT          *ui.LuaRuntime
+	viewState      *ui.ViewState
+	lanSrv         *pigeon.LANServer // LAN server for direct connections
+	serverKP       *ecdh.PrivateKey
+	pubKeyBase64   string
+	openAIKey      string
+	voiceBridge    *VoiceBridge
 	lastScreenshot string
 	screenshotCh   chan string
-
-	openAIKey     string // set via SetOpenAIKey
-	proc          *claude.Process
-	registry      *claude.Registry
-	chatListeners []chan string
+	proc           *claudia.Agent
+	registry       *claudia.Registry
+	chatListeners  []chan string
 }
+
+func (s *Server) PubKeyBase64() string { return s.pubKeyBase64 }
 
 // New creates a Server with the given Jevon instance, manager, database, version string,
 // Lua runtime, and view state. The Lua runtime and view state may be nil if the
 // server-driven UI is not yet active.
-func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string, luaRT *ui.LuaRuntime, vs *ui.ViewState) *Server {
+func New(jev *jevons.Jevon, mgr *manager.Manager, database *db.DB, version string, luaRT *ui.LuaRuntime, vs *ui.ViewState) *Server {
 	s := &Server{
-		jevon:     jev,
-		mgr:       mgr,
-		db:        database,
-		version:   version,
-		remotes:   make(map[int]remoteConn),
-		luaRT:     luaRT,
-		viewState: vs,
+		jevon:         jev,
+		mgr:           mgr,
+		db:            database,
+		version:       version,
+		remotes:       make(map[int]remoteConn),
+		luaRT:         luaRT,
+		viewState:     vs,
+		chatListeners: make([]chan string, 0),
 	}
 
 	// Load persisted transcript.
@@ -121,7 +129,7 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 
 	// Wire Jevon callbacks once — they broadcast to all connected clients.
 	jev.SetRawLog(func(line []byte) {
-		if err := s.db.AppendRawLog("jevon", string(line)); err != nil {
+		if err := s.db.AppendRawLog("jevons", string(line)); err != nil {
 			slog.Error("failed to persist raw log", "err", err)
 		}
 	})
@@ -135,7 +143,6 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 			"content": text,
 		})
 
-
 		if s.viewState != nil {
 			s.viewState.UpdateStreamingText(text)
 			s.PushView()
@@ -147,7 +154,7 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 			turnText := s.turnBuf
 			if turnText != "" {
 				s.transcript = append(s.transcript, TranscriptEntry{
-					Role:      "jevon",
+					Role:      "jevons",
 					Text:      turnText,
 					Timestamp: time.Now(),
 				})
@@ -156,8 +163,13 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 			s.mu.Unlock()
 
 			if turnText != "" {
-				if err := s.db.AppendTranscript("jevon", turnText); err != nil {
-					slog.Error("failed to persist jevon turn", "err", err)
+				if err := s.db.AppendTranscript("jevons", turnText); err != nil {
+					slog.Error("failed to persist jevons turn", "err", err)
+				}
+
+				// If voice bridge is active, inject the response for TTS.
+				if s.voiceBridge != nil {
+					s.voiceBridge.InjectResponse(turnText)
 				}
 			}
 
@@ -171,7 +183,6 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 			"state": state,
 		})
 
-
 		if s.viewState != nil {
 			s.viewState.SetStatus(state)
 			s.PushView()
@@ -180,7 +191,6 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 
 	return s
 }
-
 
 // BroadcastBinary sends a binary WebSocket message to all connected clients.
 func (s *Server) BroadcastBinary(data []byte) {
@@ -204,7 +214,6 @@ func (s *Server) BroadcastBinary(data []byte) {
 	}
 }
 
-
 // RegisterRoutes adds HTTP and WebSocket routes to the mux.
 // Additional routes (e.g. MCP server) should be registered separately.
 // Static file serving is handled by DevServer.
@@ -218,6 +227,31 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{id}", s.handleGetSession)
 	mux.HandleFunc("POST /api/sessions/{id}/kill", s.handleKillSession)
 	mux.HandleFunc("POST /api/realtime/token", s.handleRealtimeToken)
+	mux.HandleFunc("/ws/voice", s.handleVoice)
+}
+
+func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	vb := s.voiceBridge
+	s.mu.RUnlock()
+	if vb == nil {
+		// Accept the WebSocket so the client gets a clear JSON error
+		// (failed upgrades don't surface error text to JavaScript).
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+			InsecureSkipVerify: true,
+		})
+		if err != nil {
+			return
+		}
+		data, _ := json.Marshal(map[string]any{
+			"type":  "error",
+			"error": "Voice not configured. Run: bin/jevonsd --set-xai-key",
+		})
+		conn.Write(r.Context(), websocket.MessageText, data)
+		conn.Close(websocket.StatusNormalClosure, "no API key")
+		return
+	}
+	vb.HandleVoiceWS(w, r)
 }
 
 // handleRealtimeToken proxies an ephemeral token request to the OpenAI
@@ -255,6 +289,16 @@ func (s *Server) handleRealtimeToken(w http.ResponseWriter, r *http.Request) {
 
 // SetOpenAIKey sets the OpenAI API key for Realtime API token proxying.
 func (s *Server) SetOpenAIKey(key string) { s.openAIKey = key }
+
+// SetVoiceBridge attaches a Grok voice bridge for the /ws/voice endpoint.
+func (s *Server) SetVoiceBridge(vb *VoiceBridge) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.voiceBridge = vb
+}
+
+// VoiceBridgeRef returns the voice bridge, if configured.
+func (s *Server) VoiceBridgeRef() *VoiceBridge { return s.voiceBridge }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
@@ -392,10 +436,10 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"id":          sess.ID(),
-		"name":        sess.Name(),
-		"status":      sess.Status(),
-		"workdir":     sess.WorkDir(),
+		"id":          sess.TaskID(),
+		"name":        sess.TaskName(),
+		"status":      sess.TaskStatus(),
+		"workdir":     sess.TaskWorkDir(),
 		"last_result": sess.LastResult(),
 	})
 }
@@ -431,7 +475,6 @@ func (s *Server) HandleUserMessage(text string) {
 		slog.Error("failed to persist user message", "err", err)
 	}
 
-
 	s.Broadcast(map[string]any{
 		"type":      "user_message",
 		"text":      text,
@@ -443,8 +486,8 @@ func (s *Server) HandleUserMessage(text string) {
 		s.PushView()
 	}
 
-	s.jevon.Enqueue(jevon.Event{
-		Kind: jevon.EventUserMessage,
+	s.jevon.Enqueue(jevons.Event{
+		Kind: jevons.EventUserMessage,
 		Text: text,
 	})
 }
@@ -572,7 +615,7 @@ func (s *Server) handleControl(conn *websocket.Conn, ctx context.Context, action
 			slog.Error("screenshot_result: decode failed", "err", err)
 			return
 		}
-		path := filepath.Join(os.TempDir(), "jevon-screenshot.png")
+		path := filepath.Join(os.TempDir(), "jevons-screenshot.png")
 		if err := os.WriteFile(path, imgData, 0644); err != nil {
 			slog.Error("screenshot_result: write failed", "err", err)
 			return

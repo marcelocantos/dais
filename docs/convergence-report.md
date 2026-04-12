@@ -6,22 +6,24 @@ Standing invariants: all green.
 
 ## Movement
 
-- 🎯T13: (new target — first evaluation)
-- 🎯T12: (new target — first evaluation)
-- 🎯T14: (new target — first evaluation)
-- 🎯T11: (unchanged)
+- 🎯T13: significant → close (token proxy and interruption handling added since last eval)
+- 🎯T12: (unchanged — server-side versioning still missing)
+- 🎯T11: (unchanged — T11.1 achieved, T11.2 not started)
 - 🎯T8: (unchanged)
-- 🎯T10: (unchanged)
+- 🎯T17: (new target — first evaluation)
+- 🎯T16: (new target — first evaluation, blocked by 🎯T8)
 - 🎯T9: (unchanged)
+- 🎯T10: (unchanged)
 - 🎯T7: (unchanged)
+- 🎯T14: (unchanged)
 - 🎯T5: (unchanged)
 - 🎯T6: (unchanged)
 
 ## Gap Report
 
 ### 🎯T13 Full-duplex voice input  [weight 1.6]
-Gap: significant
-iOS `VoiceManager.swift` is well-implemented: local VAD via `AVAudioEngine`, OpenAI Realtime API WebSocket with semantic VAD, 24kHz PCM16 streaming, silence timeout, ephemeral token request flow. However, the server-side ephemeral token proxy endpoint (`api/realtime/token`) does not exist in jevond. Interruption handling (cancel current Claude process and restart on new utterance) is not implemented. No tests for the voice path.
+Gap: close
+iOS VoiceManager fully implemented (local VAD, OpenAI Realtime API WebSocket, 24kHz PCM16 streaming, silence timeout, ephemeral token request flow). Server-side token proxy endpoint (`POST /api/realtime/token`) implemented in jevonsd. Interruption handling in place (`Process.Interrupt()` sends Esc to cancel current turn). Remaining: test end-to-end on real device (Pippa).
 
 ### 🎯T11 Lua-controllable SwiftUI modifier surface  [weight 1.6]  (visual)
 Gap: converging (1/2 sub-targets achieved)
@@ -33,7 +35,7 @@ Visual verification outstanding — target is tagged `visual` but no verificatio
 
 ### 🎯T12 Script versioning and safe mode  [weight 1.6]
 Gap: significant
-iOS scaffolding exists: `ChevronGestureRecognizer.swift` (two-finger chevron gesture) and `SafeModeView.swift` (pure-Swift safe mode screen with snapshot listing and rollback UI). However, the server-side is missing: no `script_versions` table in the DB, no snapshot/rollback handlers in jevond, no control channel implementation. `SafeModeView` calls `connection.sendControl()` which does not appear to be implemented. Gates 🎯T9.
+iOS scaffolding exists: `ChevronGestureRecognizer.swift` (two-finger chevron gesture) and `SafeModeView.swift` (pure-Swift safe mode screen). Server-side control channel stub exists (`handleControl` in server.go) but rollback returns "sync not available" and `list_snapshots` is similarly stubbed. No `script_versions` table in the DB. No snapshot/rollback implementation. Gates 🎯T9.
 
 ### 🎯T8 Stateless worker dispatch  [weight 1.2]
 Gap: not started (0/3 sub-targets achieved)
@@ -42,21 +44,34 @@ Gap: not started (0/3 sub-targets achieved)
   [ ] 🎯T8.2 Observability — not started (blocked by 🎯T8.1)
   [ ] 🎯T8.3 Execution safety absorbed (doit) — not started (blocked by 🎯T8.1)
 
+### 🎯T9 Server-driven UI for mobile app  [weight 1.0]  (visual)  (status only)
+Status: converging
+Changed files overlap: `internal/ui/schema.go`, `ios/Jevon/Views/ServerView.swift`, `ios/Jevon/Models/LuaRuntime.swift` — may be affected.
+
 ### 🎯T10 sqlpipe-based state sync  [weight 1.0]  (status only)
 Status: converging
 Changed files overlap: `internal/sync/sync.go` — may be affected.
 
-### 🎯T9 Server-driven UI for mobile app  [weight 1.0]  (visual)  (status only)
-Status: converging
-Changed files overlap: `internal/ui/schema.go`, `ios/Jevon/Views/ServerView.swift` — may be affected.
-
-### 🎯T7 Mobile app for Jevon  [weight 1.0]  (visual)  (status only)
+### 🎯T7 Mobile app for Jevons  [weight 1.0]  (visual)  (status only)
 Status: converging
 Changed files overlap: `ios/Jevon/Views/ChatView.swift` — may be affected.
 
 ### 🎯T14 Onboarding and device pairing  [weight 1.0]  (status only)
 Status: identified
 Protocol state machine framework (🎯T15) achieved — provides foundation for the pairing ceremony.
+
+### 🎯T16 Session-to-agent migration  [weight 1.0]  (BLOCKED by 🎯T8)
+Gap: not started (0/2 sub-targets achieved)
+
+  [ ] 🎯T16.1 Active work dashboard — not started (plan in `docs/plans/active-work-dashboard.md`)
+  [ ] 🎯T16.2 Session grandfathering — not started (blocked by 🎯T16.1)
+
+### 🎯T17 Jevons UI renders via ge engine  [weight 0.6]
+Gap: not started (0/3 sub-targets achieved)
+
+  [ ] 🎯T17.1 jevons-ui C++ ge application scaffold — not started
+  [ ] 🎯T17.2 jevons-ui feature parity with web UI — not started (blocked by 🎯T17.1)
+  [ ] 🎯T17.3 jevons-ui runs headless with scene protocol — not started (blocked by 🎯T17.2)
 
 ### 🎯T5 Authentication implemented  [weight 0.6]  (status only)
 Status: identified
@@ -69,21 +84,23 @@ No changed files overlap. `--dangerously-skip-permissions` still present.
 ## Recommendation
 
 Work on: **🎯T13 Full-duplex voice input**
-Reason: Tied for highest effective weight (1.6) with 🎯T11, 🎯T12, and 🎯T8.1. 🎯T13 has the most progress already — the iOS client is substantially implemented. The remaining work (server-side token proxy, interruption handling) is well-scoped and builds on existing jevond infrastructure. Closing this target adds a transformative UX capability (hands-free voice interaction), whereas 🎯T11.2 is incremental and 🎯T8.1 is greenfield.
+Reason: Tied for highest effective weight (1.6) with 🎯T11, 🎯T12, and 🎯T8.1. 🎯T13 has the smallest gap — "close" vs "significant" or "not started" for the others. All server and client code is implemented; the only remaining work is real-device testing on Pippa. Closing this target is the cheapest win among the top-weighted targets.
 
 ## Suggested action
 
-Add the ephemeral token proxy endpoint to jevond: a `POST /api/realtime/token` handler that requests a short-lived session token from the OpenAI API using the server's API key (stored in Keychain or env var) and returns it to the iOS client. This unblocks the full voice pipeline without exposing the API key to the device.
+Connect Pippa and test the full voice pipeline end-to-end: build and install the iOS app via `xcodebuild`, verify the mic activates local VAD, confirm audio streams to OpenAI via the ephemeral token from jevonsd's `/api/realtime/token` endpoint, and check that completed utterances arrive as chat messages. Test interruption by speaking while the agent is responding.
 
 <!-- convergence-deps
-evaluated: 2026-03-22T00:26:12Z
-sha: 1590194
+evaluated: 2026-03-29T06:52:52Z
+sha: afe8751
 
 🎯T13:
-  gap: significant
-  assessment: "iOS VoiceManager fully implemented (VAD, OpenAI Realtime, PCM16 streaming). Server-side token proxy and interruption handling missing."
+  gap: close
+  assessment: "iOS VoiceManager complete. Token proxy and interruption handling implemented. Remaining: real-device testing on Pippa."
   read:
-    - ios/Jevon/Models/VoiceManager.swift
+    - internal/server/server.go
+    - internal/server/chat.go
+    - internal/claude/process.go
 
 🎯T11:
   gap: converging
@@ -107,12 +124,10 @@ sha: 1590194
 
 🎯T12:
   gap: significant
-  assessment: "iOS scaffolding exists (ChevronGestureRecognizer, SafeModeView). Server-side versioning, control channel, and sendControl not implemented."
+  assessment: "iOS scaffolding exists (ChevronGestureRecognizer, SafeModeView). Control channel stub in server.go but rollback/snapshots return errors. No script_versions table."
   read:
-    - ios/Jevon/Views/ChevronGestureRecognizer.swift
-    - ios/Jevon/Views/SafeModeView.swift
-    - ios/Jevon/Models/Connection.swift
-    - internal/db/schema.go
+    - internal/server/server.go
+    - internal/db/db.go
 
 🎯T8:
   gap: not started
@@ -122,7 +137,7 @@ sha: 1590194
 
 🎯T8.1:
   gap: not started
-  assessment: "No jwork MCP tool. No on-demand claude -p spawning. Session struct basic."
+  assessment: "No jwork MCP tool. No on-demand claude -p spawning."
   read:
     - internal/session/session.go
 
@@ -136,10 +151,9 @@ sha: 1590194
   gap: significant
   assessment: "Server-side Lua works. Client LuaRuntime.swift exists. Mid-pivot to client-side."
   read:
-    - internal/ui/lua.go
     - internal/ui/schema.go
-    - ios/Jevon/Models/LuaRuntime.swift
     - ios/Jevon/Views/ServerView.swift
+    - ios/Jevon/Models/LuaRuntime.swift
 
 🎯T7:
   gap: close
@@ -150,6 +164,26 @@ sha: 1590194
 🎯T14:
   gap: not started
   assessment: "Protocol framework achieved (T15). Pairing ceremony not yet wired."
+  read: []
+
+🎯T16:
+  gap: not started
+  assessment: "Blocked by T8. Plan exists in docs/plans/active-work-dashboard.md."
+  read: []
+
+🎯T16.1:
+  gap: not started
+  assessment: "Plan exists. Parent blocked by T8."
+  read: []
+
+🎯T17:
+  gap: not started
+  assessment: "New target. No implementation yet."
+  read: []
+
+🎯T17.1:
+  gap: not started
+  assessment: "No scaffold. ge submodule exists but no jevons-ui binary."
   read: []
 
 🎯T5:

@@ -1,25 +1,25 @@
-# Jevon
+# Jevons
 
 Remote control for Claude Code instances. Mobile UI rendered via ge engine's
 WebGPU wire protocol; Go coordinator daemon manages Claude Code workers.
 
 ## Architecture
 
-### C++ App (`bin/jevon`)
+### C++ App (`bin/jevons`)
 - Phone UI rendered via ge's wire protocol (server on desktop, player on phone)
 - Built on the ge engine submodule (`ge/`)
 - Source in `src/`
 
-### Go Coordinator (`bin/jevond`)
+### Go Coordinator (`bin/jevonsd`)
 - HTTP/WebSocket server managing Claude Code workers
-- In-process MCP server for Jevon → worker management (no separate binary)
+- In-process MCP server for Jevons → worker management (no separate binary)
 - Voice pipeline: AssemblyAI streaming STT → LLM cleanup → learning memory
 - mTLS auth with QR-based device provisioning
 - Exposed to the internet via ngrok
-- Source in `cmd/jevond/` and `internal/`
+- Source in `cmd/jevonsd/` and `internal/`
 
 ### Communication
-Currently independent processes. Future: the C++ app connects to jevond
+Currently independent processes. Future: the C++ app connects to jevonsd
 for command routing and status updates.
 
 ## Build
@@ -27,8 +27,8 @@ for command routing and status updates.
 ```bash
 make              # Build both components
 make player       # Build squz player (desktop testing)
-make jevond       # Build Go coordinator only
-make bin/jevon    # Build C++ app only (requires LFS libs)
+make jevonsd       # Build Go coordinator only
+make bin/jevons    # Build C++ app only (requires LFS libs)
 ```
 
 **Note:** The C++ app requires Git LFS objects (Dawn, SDL3 static
@@ -45,9 +45,9 @@ make run-app
 make player && bin/player
 
 # Terminal 3: Go coordinator
-make run-jevond
+make run-jevonsd
 
-# Or run both jevon + jevond together:
+# Or run both jevons + jevonsd together:
 make run
 ```
 
@@ -99,7 +99,7 @@ make test-go      # Run Go tests only
 ## Project Structure
 
 ```
-jevon/
+jevons/
 ├── Makefile              # Build orchestration
 ├── go.mod                # Go module
 ├── CLAUDE.md             # This file
@@ -108,7 +108,7 @@ jevon/
 │   ├── App.h             # App class
 │   └── App.cpp           # Render, update, event handling
 ├── cmd/
-│   └── jevond/
+│   └── jevonsd/
 │       └── main.go       # Go coordinator entry point
 ├── internal/
 │   ├── server/           # HTTP/WebSocket server

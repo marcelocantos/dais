@@ -15,8 +15,8 @@ import (
 
 // Capabilities provides Go functions callable from Lua action handlers.
 type Capabilities struct {
-	JevonEnqueue  func(text string)
-	JevonReset    func()
+	JevonsEnqueue  func(text string)
+	JevonsReset    func()
 	SessionList   func(all bool) []map[string]any
 	SessionKill   func(id string) error
 	SessionCreate func(name, workdir, model string) (string, error)
@@ -32,7 +32,7 @@ type Capabilities struct {
 	TranscriptTruncate func(sessionID string, keepTurns int) error
 	TranscriptFork     func(sessionID string, keepTurns int) (string, error)
 
-	// File I/O — sandboxed to ~/.jevon/.
+	// File I/O — sandboxed to ~/.jevons/.
 	FileRead  func(path string) (string, error)
 	FileWrite func(path, content string) error
 	FileList  func(dir string) ([]string, error)
@@ -82,13 +82,13 @@ func (r *LuaRuntime) registerCaps() {
 	caps := r.caps
 	L := r.L
 
-	L.SetGlobal("jevon_enqueue", L.NewFunction(func(L *lua.LState) int {
-		caps.JevonEnqueue(L.CheckString(1))
+	L.SetGlobal("jevons_enqueue", L.NewFunction(func(L *lua.LState) int {
+		caps.JevonsEnqueue(L.CheckString(1))
 		return 0
 	}))
 
-	L.SetGlobal("jevon_reset", L.NewFunction(func(L *lua.LState) int {
-		caps.JevonReset()
+	L.SetGlobal("jevons_reset", L.NewFunction(func(L *lua.LState) int {
+		caps.JevonsReset()
 		return 0
 	}))
 

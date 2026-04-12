@@ -7,11 +7,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/marcelocantos/jevon/internal/db"
-	"github.com/marcelocantos/jevon/internal/jevon"
+	"github.com/marcelocantos/jevons/internal/db"
+	"github.com/marcelocantos/jevons/internal/jevons"
 )
 
-func newTestServer(t *testing.T) (*Server, *jevon.Jevon) {
+func newTestServer(t *testing.T) (*Server, *jevons.Jevon) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
 	database, err := db.Open(dbPath)
@@ -20,7 +20,7 @@ func newTestServer(t *testing.T) (*Server, *jevon.Jevon) {
 	}
 	t.Cleanup(func() { database.Close() })
 
-	jev := jevon.New(jevon.Config{WorkDir: t.TempDir()})
+	jev := jevons.New(jevons.Config{WorkDir: t.TempDir()})
 	return New(jev, nil, database, "test-v0.0.1", nil, nil), jev
 }
 
@@ -75,9 +75,9 @@ func TestTranscriptLoadedOnConstruction(t *testing.T) {
 
 	// Seed transcript before creating server.
 	database.AppendTranscript("user", "hello")
-	database.AppendTranscript("jevon", "hi there")
+	database.AppendTranscript("jevons", "hi there")
 
-	jev := jevon.New(jevon.Config{WorkDir: t.TempDir()})
+	jev := jevons.New(jevons.Config{WorkDir: t.TempDir()})
 	s := New(jev, nil, database, "v0", nil, nil)
 	database.Close()
 
@@ -107,7 +107,7 @@ func TestTurnAccumulation(t *testing.T) {
 	}
 	t.Cleanup(func() { database.Close() })
 
-	jev := jevon.New(jevon.Config{WorkDir: t.TempDir()})
+	jev := jevons.New(jevons.Config{WorkDir: t.TempDir()})
 	s := New(jev, nil, database, "v0", nil, nil)
 
 	// Simulate Jevon output callbacks (these are wired in New).

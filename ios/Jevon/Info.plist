@@ -5,9 +5,9 @@
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleName</key>
-	<string>Jevon</string>
+	<string>Jevons</string>
 	<key>CFBundleDisplayName</key>
-	<string>Jevon</string>
+	<string>Jevons</string>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleVersion</key>
@@ -41,10 +41,10 @@
 		<true/>
 	</dict>
 	<key>NSCameraUsageDescription</key>
-	<string>Jevon uses the camera to scan QR codes for connecting to the server.</string>
+	<string>Jevons uses the camera to scan QR codes for connecting to the server.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Jevon uses the microphone for voice input to the AI assistant.</string>
+	<string>Jevons uses the microphone for voice input to the AI assistant.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Jevon uses speech recognition for voice commands.</string>
+	<string>Jevons uses speech recognition for voice commands.</string>
 </dict>
 </plist>

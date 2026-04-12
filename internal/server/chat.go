@@ -14,18 +14,18 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/marcelocantos/jevon/internal/claude"
+	"github.com/marcelocantos/claudia"
 )
 
 // SetProcess attaches the persistent Claude process for the /ws/chat endpoint.
-func (s *Server) SetProcess(proc *claude.Process) {
+func (s *Server) SetProcess(proc *claudia.Agent) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.proc = proc
 }
 
 // SetRegistry attaches the agent registry for the /api/agents endpoint.
-func (s *Server) SetRegistry(reg *claude.Registry) {
+func (s *Server) SetRegistry(reg *claudia.Registry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.registry = reg

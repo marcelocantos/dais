@@ -6,6 +6,8 @@ github.com/alecthomas/chroma/v2 v2.14.0 h1:R3+wzpnUArGcQz7fCETQBzO5n9IMNi13iIs46
 github.com/alecthomas/chroma/v2 v2.14.0/go.mod h1:QolEbTfmUHIMVpBqxeDnNBj2uoeI4EbYP4i6n68SG4I=
 github.com/alecthomas/repr v0.4.0 h1:GhI2A8MACjfegCPVq9f1FLvIBS+DrQ2KQBFZP1iFzXc=
 github.com/alecthomas/repr v0.4.0/go.mod h1:Fr0507jx4eOXV7AlPV6AVZLYrLIuIeSOWtW57eE/O/4=
+github.com/arr-ai/frozen v1.11.0 h1:QGcFWpMLCCsaUuErhJFCfn2BohWlssB0a4YU1Q6xcVU=
+github.com/arr-ai/frozen v1.11.0/go.mod h1:Cih+8KiWwdjPikisT49wUvPzIU2G/Ru6xopYY5uaHwU=
 github.com/atotto/clipboard v0.1.4 h1:EH0zSVneZPSuFR11BlR9YppQTVDbh5+16AmcJi4g1z4=
 github.com/atotto/clipboard v0.1.4/go.mod h1:ZY9tmq7sm5xIbd9bOK4onWV4S6X0u6GY7Vn0Yu86PYI=
 github.com/aymanbagabas/go-osc52/v2 v2.0.1 h1:HwpRHbFMcZLEVr42D4p7XBqjyuxQH5SMiErDT4WkJ2k=
@@ -79,8 +81,10 @@ github.com/lucasb-eyer/go-colorful v1.3.0 h1:2/yBRLdWBZKrf7gB40FoiKfAWYQ0lqNcbuQ
 github.com/lucasb-eyer/go-colorful v1.3.0/go.mod h1:R4dSotOR9KMtayYi1e77YzuveK+i7ruzyGqttikkLy0=
 github.com/mailru/easyjson v0.7.7 h1:UGYAvKxe3sBsEDzO8ZeWOSlIQfWFlxbzLZe7hwFURr0=
 github.com/mailru/easyjson v0.7.7/go.mod h1:xzfreul335JAWq5oZzymOObrkdz5UnU4kGfJJLY9Nlc=
-github.com/marcelocantos/tern v0.7.0 h1:Q/tVTcnSlnDQmHE1KvBoFrLh8blJVxjb+pV6iVlKstw=
-github.com/marcelocantos/tern v0.7.0/go.mod h1:+L+W51v0ZKe8o230tPyZTeG3AjPNuv0+zVe0SqN/g6U=
+github.com/marcelocantos/claudia v0.2.0 h1:Fs/hz9AXdm8GJorUzhe+0CaMrmPEQ0iu0a+3AIRzWLU=
+github.com/marcelocantos/claudia v0.2.0/go.mod h1:iDXl9XnI/KHjVvQOUGNE4PDA9ADZGgJb2fo9DE4TrtY=
+github.com/marcelocantos/pigeon v0.13.0 h1:5Wa+j2dtyGZ1hG2OR40wgDb1OXXmNl9uPtt8qQG2jgE=
+github.com/marcelocantos/pigeon v0.13.0/go.mod h1:qcNuZm+Ub9UwEsKsxvJzH0Dh3VcZ+OuPH4d98lUDDXc=
 github.com/mark3labs/mcp-go v0.44.1 h1:2PKppYlT9X2fXnE8SNYQLAX4hNjfPB0oNLqQVcN6mE8=
 github.com/mark3labs/mcp-go v0.44.1/go.mod h1:YnJfOL382MIWDx1kMY+2zsRHU/q78dBg9aFb8W6Thdw=
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=

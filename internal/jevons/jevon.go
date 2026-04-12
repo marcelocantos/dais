@@ -1,4 +1,4 @@
-package jevon
+package jevons
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/marcelocantos/jevon/internal/claude"
+	"github.com/marcelocantos/claudia"
 )
 
 // Config holds Jevon configuration.
@@ -37,7 +37,7 @@ type Jevon struct {
 	onClaudeID ClaudeIDFunc
 
 	mu      sync.Mutex
-	proc    *claude.Process
+	proc    *claudia.Agent
 	waiting bool // true while waiting for a response
 }
 
@@ -78,9 +78,9 @@ func (j *Jevon) SetClaudeIDCallback(fn ClaudeIDFunc) {
 // Run starts the persistent Claude Code process and blocks until ctx
 // is cancelled.
 func (j *Jevon) Run(ctx context.Context) {
-	slog.Info("jevon starting persistent claude", "workdir", j.cfg.WorkDir)
+	slog.Info("jevons starting persistent claude", "workdir", j.cfg.WorkDir)
 
-	proc, err := claude.Start(claude.Config{
+	proc, err := claudia.Start(claudia.Config{
 		WorkDir: j.cfg.WorkDir,
 		Model:   j.cfg.Model,
 		ExtraArgs: []string{
@@ -91,7 +91,7 @@ func (j *Jevon) Run(ctx context.Context) {
 		},
 	})
 	if err != nil {
-		slog.Error("jevon: failed to start claude", "err", err)
+		slog.Error("jevons: failed to start claude", "err", err)
 		return
 	}
 
@@ -109,7 +109,7 @@ func (j *Jevon) Run(ctx context.Context) {
 	j.mu.Unlock()
 
 	// Handle events from the JSONL.
-	proc.OnEvent(func(ev claude.Event) {
+	proc.OnEvent(func(ev claudia.Event) {
 		j.mu.Lock()
 		onOutput := j.onOutput
 		onRawLog := j.onRawLog
@@ -150,7 +150,7 @@ func (j *Jevon) Enqueue(ev Event) {
 		ev.Timestamp = time.Now()
 	}
 
-	slog.Info("jevon enqueue", "kind", ev.Kind, "text", ev.Text)
+	slog.Info("jevons enqueue", "kind", ev.Kind, "text", ev.Text)
 
 	if ev.Kind != EventUserMessage {
 		return
@@ -161,7 +161,7 @@ func (j *Jevon) Enqueue(ev Event) {
 	j.mu.Unlock()
 
 	if proc == nil {
-		slog.Warn("jevon: message received before claude started")
+		slog.Warn("jevons: message received before claude started")
 		return
 	}
 
@@ -170,10 +170,10 @@ func (j *Jevon) Enqueue(ev Event) {
 	j.mu.Unlock()
 	j.emitStatus("thinking")
 
-	slog.Info("jevon sending to claude", "text", ev.Text)
+	slog.Info("jevons sending to claude", "text", ev.Text)
 
 	if err := proc.Send(ev.Text); err != nil {
-		slog.Error("jevon: send failed", "err", err)
+		slog.Error("jevons: send failed", "err", err)
 		j.mu.Lock()
 		j.waiting = false
 		j.mu.Unlock()

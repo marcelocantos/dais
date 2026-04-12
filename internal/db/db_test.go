@@ -23,7 +23,7 @@ func TestTranscriptRoundTrip(t *testing.T) {
 	if err := d.AppendTranscript("user", "hello"); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.AppendTranscript("jevon", "hi there"); err != nil {
+	if err := d.AppendTranscript("jevons", "hi there"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -37,7 +37,7 @@ func TestTranscriptRoundTrip(t *testing.T) {
 	if entries[0].Role != "user" || entries[0].Text != "hello" {
 		t.Errorf("entry[0] = {%q, %q}, want {user, hello}", entries[0].Role, entries[0].Text)
 	}
-	if entries[1].Role != "jevon" || entries[1].Text != "hi there" {
+	if entries[1].Role != "jevons" || entries[1].Text != "hi there" {
 		t.Errorf("entry[1] = {%q, %q}, want {jevon, hi there}", entries[1].Role, entries[1].Text)
 	}
 }
@@ -78,7 +78,7 @@ func TestKVRoundTrip(t *testing.T) {
 
 func TestRawLog(t *testing.T) {
 	d := newTestDB(t)
-	if err := d.AppendRawLog("jevon", `{"type":"text"}`); err != nil {
+	if err := d.AppendRawLog("jevons", `{"type":"text"}`); err != nil {
 		t.Fatal(err)
 	}
 	// Multiple sources.
@@ -92,7 +92,7 @@ func TestTranscriptOrder(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		role := "user"
 		if i%2 == 1 {
-			role = "jevon"
+			role = "jevons"
 		}
 		if err := d.AppendTranscript(role, fmt.Sprintf("msg-%d", i)); err != nil {
 			t.Fatal(err)

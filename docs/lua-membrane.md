@@ -56,7 +56,7 @@ automatic placement later without building infrastructure now.
    same set of builder functions (`text`, `vstack`, `hstack`,
    `padding`, etc.). Divergence breaks location transparency.
 
-3. **Jevon writes scripts, not locations.** When the AI agent modifies
+3. **Jevons writes scripts, not locations.** When the AI agent modifies
    a view script, it writes Lua. It doesn't decide where that Lua
    runs. The runtime handles placement.
 
@@ -74,23 +74,23 @@ a priority, but the constraint above keeps the door open.
 
 ### Self-improving UI
 
-Jevon can edit Lua scripts at runtime via `jevon_reload_views`. This
+Jevons can edit Lua scripts at runtime via `jevons_reload_views`. This
 creates two tiers of improvement:
 
 - **Lua-only changes** (layout tweaks, new screens, style changes) —
   take effect immediately via script push. No app rebuild. These can
   be committed to the repo and ship to all users in the next release.
 - **Swift-level changes** (new primitives, renderers, gestures) —
-  require an app rebuild. Jevon can write the code but it needs to be
+  require an app rebuild. Jevons can write the code but it needs to be
   built and deployed.
 
-The more expressive the Lua primitives, the more Jevon can improve
+The more expressive the Lua primitives, the more Jevons can improve
 without touching Swift. Each time a Swift change is needed to support
 a Lua feature (e.g. `bottom_inset`), that's a signal that the
 primitive set should be expanded.
 
 Script versioning (🎯T12) provides rollback for broken changes.
-The control channel and `exec_lua` MCP tool give Jevon direct access
+The control channel and `exec_lua` MCP tool give Jevons direct access
 to the client runtime for diagnostics and ad-hoc fixes.
 
 **Open question:** When a product update ships improved base scripts,
@@ -113,5 +113,5 @@ go in this direction. The ambition stalled but the thinking is
 relevant. See also: Naiad/Differential Dataflow, Dedalus/Bloom,
 CALM theorem.
 
-Parked — not actionable for jevon now, but the `subscribe(sql)`
+Parked — not actionable for jevons now, but the `subscribe(sql)`
 constraint preserves the option.

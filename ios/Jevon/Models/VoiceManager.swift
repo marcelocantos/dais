@@ -6,7 +6,7 @@ import Foundation
 import Observation
 import os
 
-private let logger = Logger(subsystem: "com.marcelocantos.jevon", category: "VoiceManager")
+private let logger = Logger(subsystem: "com.marcelocantos.jevons", category: "VoiceManager")
 
 /// Manages full-duplex voice input: local VAD → OpenAI Realtime API → transcription.
 ///

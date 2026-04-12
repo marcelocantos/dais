@@ -92,7 +92,7 @@ func (vs *ViewState) FlushStreaming() {
 	defer vs.mu.Unlock()
 	if vs.streamingText != "" {
 		vs.messages = append(vs.messages, MessageEntry{
-			Role:      "jevon",
+			Role:      "jevons",
 			Text:      vs.streamingText,
 			Timestamp: time.Now().Format(time.RFC3339),
 		})

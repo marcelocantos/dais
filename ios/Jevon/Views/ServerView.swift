@@ -14,48 +14,48 @@ struct ServerView: View {
 
     // MARK: - Node dispatch
 
-    @ViewBuilder
-    private func renderNode() -> some View {
+    // Using AnyView to erase types — the large switch with heterogeneous
+    // return types causes the Swift 6 compiler to crash during type inference.
+    private func renderNode() -> AnyView {
         switch node.type {
         case "text":
-            renderText()
+            AnyView(renderText())
         case "vstack":
-            renderVStack()
+            AnyView(renderVStack())
         case "hstack":
-            renderHStack()
+            AnyView(renderHStack())
         case "zstack":
-            renderZStack()
+            AnyView(renderZStack())
         case "spacer":
-            Spacer(minLength: node.props?.minLength.map { CGFloat($0) })
+            AnyView(Spacer(minLength: node.props?.minLength.map { CGFloat($0) }))
         case "scroll":
-            renderScroll()
+            AnyView(renderScroll())
         case "list":
-            renderList()
+            AnyView(renderList())
         case "button":
-            renderButton()
+            AnyView(renderButton())
         case "icon_button":
-            renderIconButton()
+            AnyView(renderIconButton())
         case "text_field":
-            ServerTextField(node: node, onAction: onAction)
+            AnyView(ServerTextField(node: node, onAction: onAction))
         case "image":
-            renderImage()
+            AnyView(renderImage())
         case "nav":
-            renderNav()
+            AnyView(renderNav())
         case "badge":
-            renderBadge()
+            AnyView(renderBadge())
         case "progress":
-            renderProgress()
+            AnyView(renderProgress())
         case "padding":
-            renderPaddingWrapper()
+            AnyView(renderPaddingWrapper())
         case "background":
-            renderBackgroundWrapper()
+            AnyView(renderBackgroundWrapper())
         case "tap":
-            renderTap()
+            AnyView(renderTap())
         default:
-            // Unknown types render their children if any, or nothing.
-            ForEach(indexedChildren()) { child in
+            AnyView(ForEach(indexedChildren()) { child in
                 ServerView(node: child.node, onAction: onAction)
-            }
+            })
         }
     }
 

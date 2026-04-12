@@ -14,7 +14,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 
-	"github.com/marcelocantos/jevon/internal/claude"
+	"github.com/marcelocantos/claudia"
 )
 
 // NotifyFunc injects a text message into the Jevon overseer's PTY input.
@@ -22,28 +22,28 @@ type NotifyFunc func(text string)
 
 // SetRegistry attaches the agent registry to the MCP server and
 // registers agent management tools.
-func (s *Server) SetRegistry(registry *claude.Registry) {
+func (s *Server) SetRegistry(registry *claudia.Registry) {
 	s.registry = registry
 
 	s.mcpSrv.AddTool(
-		mcp.NewTool("jevon_agent_list",
+		mcp.NewTool("jevons_agent_list",
 			mcp.WithDescription("List all registered agents and their status (running/stopped)."),
 		),
 		s.handleAgentList,
 	)
 
 	s.mcpSrv.AddTool(
-		mcp.NewTool("jevon_agent_start",
+		mcp.NewTool("jevons_agent_start",
 			mcp.WithDescription("Start a persistent agent in a repo/directory. Creates and registers it if new. The agent runs as a persistent Claude Code process that retains conversation across messages."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Unique agent name (e.g. 'tern', 'jevon-frontend')")),
-			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory for the agent (e.g. '~/work/github.com/marcelocantos/tern')")),
+			mcp.WithString("workdir", mcp.Required(), mcp.Description("Working directory for the agent (e.g. '~/work/github.com/marcelocantos/pigeon')")),
 			mcp.WithString("model", mcp.Description("Model override (e.g. 'opus', 'sonnet')")),
 		),
 		s.handleAgentStart,
 	)
 
 	s.mcpSrv.AddTool(
-		mcp.NewTool("jevon_agent_send",
+		mcp.NewTool("jevons_agent_send",
 			mcp.WithDescription("Send a message to a running agent. Returns immediately — the agent processes asynchronously. When the agent responds, you will receive a notification with the response text."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name")),
 			mcp.WithString("text", mcp.Required(), mcp.Description("Message to send")),
@@ -52,7 +52,7 @@ func (s *Server) SetRegistry(registry *claude.Registry) {
 	)
 
 	s.mcpSrv.AddTool(
-		mcp.NewTool("jevon_agent_stop",
+		mcp.NewTool("jevons_agent_stop",
 			mcp.WithDescription("Stop a running agent. It can be restarted later and will resume its session."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name")),
 		),
@@ -153,11 +153,11 @@ func (s *Server) handleAgentStop(_ context.Context, req mcp.CallToolRequest) (*m
 // wireAgentEvents sets up the event handler for an agent process.
 // It broadcasts to the web UI and notifies Jevon when the agent
 // produces a text response.
-func (s *Server) wireAgentEvents(name string, proc *claude.Process) {
+func (s *Server) wireAgentEvents(name string, proc *claudia.Agent) {
 	var mu sync.Mutex
 	var responseText strings.Builder
 
-	proc.OnEvent(func(ev claude.Event) {
+	proc.OnEvent(func(ev claudia.Event) {
 		// Broadcast raw event to web UI activity feed.
 		s.broadcastAgentEvent(name, ev)
 
@@ -202,7 +202,7 @@ func (s *Server) notify(agentName, text string) {
 }
 
 // broadcastAgentEvent sends agent events to the web UI.
-func (s *Server) broadcastAgentEvent(name string, ev claude.Event) {
+func (s *Server) broadcastAgentEvent(name string, ev claudia.Event) {
 	data, _ := json.Marshal(map[string]any{
 		"type":  "agent_event",
 		"agent": name,
