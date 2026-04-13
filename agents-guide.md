@@ -39,6 +39,20 @@ remote --addr localhost:13705
 - **Remote clients**: Multiple TUI or mobile clients can connect
   simultaneously. User messages and responses are broadcast to all.
 
+## MCP tools
+
+jevonsd exposes an in-process MCP server at `/mcp`. Key tools:
+
+- **`jevons_active_work`** — Unified dashboard of active work across all repos.
+  Cross-references recent Claude Code sessions, dirty working trees, and open
+  GitHub PRs. Parameters: `hours` (default 72), `include_clean` (default false).
+- **`jwork`** — On-demand worker dispatch. Spawns a Claude Code worker to execute
+  a task. Parameters: `task` (required), `repo` (optional), `model` (optional).
+- **`jevons_agent_list`** — List all registered agents and their status.
+- **`jevons_agent_start`** — Start a persistent agent in a repo/directory.
+- **`jevons_agent_send`** — Send a message to a running agent (async fire-and-forget).
+- **`jevons_agent_stop`** — Stop a running agent.
+
 ## WebSocket protocol
 
 Clients connect to `ws://<host>:<port>/ws/remote`. Messages are JSON:

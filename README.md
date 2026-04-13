@@ -24,7 +24,11 @@ you scroll up.
 
 ## Install
 
-Download a binary from the
+```bash
+brew install marcelocantos/tap/jevons
+```
+
+Or download a binary from the
 [latest release](https://github.com/marcelocantos/jevons/releases/latest)
 (macOS arm64, Linux x86_64, Linux arm64), or build from source:
 
