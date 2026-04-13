@@ -476,10 +476,11 @@ targets:
     discovered: 2026-03-14
   T8.1:
     name: Worker dispatch foundation
-    status: identified
+    status: achieved
     value: 8.0
     cost: 5.0
     observable: true
+    actual_cost: 5.0
     acceptance:
     - '`jwork` MCP tool accepts task text, optional cwd and model'
     - Spawns `claude -p` subprocess, writes task to stdin, reads NDJSON from stdout
@@ -492,6 +493,7 @@ targets:
       description is self-contained — no implicit context injection.
     origin: manual
     discovered: 2026-03-14
+    achieved: 2026-04-13
   T8.2:
     name: Worker observability
     status: identified
