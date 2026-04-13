@@ -248,7 +248,7 @@ targets:
     discovered: 2026-03-27
   T16.1:
     name: Active work dashboard
-    status: identified
+    status: converging
     value: 8.0
     cost: 5.0
     observable: true
@@ -258,12 +258,20 @@ targets:
     - Tool checks GitHub API for open PRs on repos with activity
     - 'Output is a unified table: repo, last session activity, working tree state, open PRs, agent assignment'
     - Repos with no activity across any signal are omitted by default
-    context: |
+    context: |-
       Desired state: `jevons_active_work` MCP tool cross-references three
       signals (recent transcript sessions, dirty working trees, open PRs) to
       produce a unified per-repo view of where active work is happening.
 
       Plan in `docs/plans/active-work-dashboard.md`.
+
+      Implementation complete: `internal/mcpserver/activework.go` with
+      `SetScanner`, three signal collectors (sessions via discovery.Scanner,
+      git status/branch via subprocess, PRs via `gh pr list`), agent
+      assignment from registry, bounded concurrency, and formatted table
+      output. Wired into jevonsd via `SetScanner(scanner)`. Tests added.
+
+      Remaining: end-to-end verification with jevonsd running.
     origin: manual
     discovered: 2026-03-27
   T16.2:
