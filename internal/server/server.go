@@ -7,6 +7,7 @@ package server
 import (
 	"context"
 	"crypto/ecdh"
+	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/auth"
 	"github.com/marcelocantos/jevons/internal/db"
 	"github.com/marcelocantos/jevons/internal/jevons"
 	"github.com/marcelocantos/jevons/internal/manager"
@@ -65,6 +67,7 @@ type Server struct {
 	mgr     *manager.Manager
 	db      *db.DB
 	version string
+	ca      *auth.CA
 
 	mu         sync.RWMutex
 	remoteSeq  int
@@ -194,6 +197,7 @@ func (s *Server) BroadcastBinary(data []byte) {
 // Static file serving is handled by DevServer.
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("POST /api/provision", s.handleProvision)
 	mux.HandleFunc("/ws/chat", s.handleChat)
 	mux.HandleFunc("/ws/remote", s.handleRemote)
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
@@ -274,6 +278,90 @@ func (s *Server) SetVoiceBridge(vb *VoiceBridge) {
 
 // VoiceBridgeRef returns the voice bridge, if configured.
 func (s *Server) VoiceBridgeRef() *VoiceBridge { return s.voiceBridge }
+
+// SetCA attaches a CA for mTLS device provisioning.
+func (s *Server) SetCA(ca *auth.CA) { s.ca = ca }
+
+// provisionRequest is the JSON body for POST /api/provision.
+type provisionRequest struct {
+	DeviceID  string `json:"device_id"`
+	PublicKey string `json:"public_key"` // base64-encoded Ed25519 public key
+}
+
+// provisionResponse is the JSON body returned by POST /api/provision.
+type provisionResponse struct {
+	Certificate   string `json:"certificate"`    // PEM-encoded client cert
+	CACertificate string `json:"ca_certificate"` // PEM-encoded CA cert
+}
+
+// handleProvision issues a client certificate for a new device.
+// This endpoint is intentionally accessible without a client certificate —
+// it is the bootstrap step for provisioning new devices.
+func (s *Server) handleProvision(w http.ResponseWriter, r *http.Request) {
+	if s.ca == nil {
+		http.Error(w, `{"error":"CA not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	var req provisionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	if req.DeviceID == "" {
+		http.Error(w, `{"error":"device_id is required"}`, http.StatusBadRequest)
+		return
+	}
+	if req.PublicKey == "" {
+		http.Error(w, `{"error":"public_key is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	keyBytes, err := base64.StdEncoding.DecodeString(req.PublicKey)
+	if err != nil {
+		http.Error(w, `{"error":"public_key must be base64-encoded"}`, http.StatusBadRequest)
+		return
+	}
+	if len(keyBytes) != ed25519.PublicKeySize {
+		http.Error(w, `{"error":"public_key must be a 32-byte Ed25519 public key"}`, http.StatusBadRequest)
+		return
+	}
+	pubKey := ed25519.PublicKey(keyBytes)
+
+	certPEM, err := s.ca.IssueCert(pubKey, req.DeviceID)
+	if err != nil {
+		slog.Error("provision: IssueCert failed", "device_id", req.DeviceID, "err", err)
+		http.Error(w, `{"error":"certificate issuance failed"}`, http.StatusInternalServerError)
+		return
+	}
+
+	slog.Info("device provisioned", "device_id", req.DeviceID)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(provisionResponse{
+		Certificate:   string(certPEM),
+		CACertificate: string(s.ca.CertPEM()),
+	})
+}
+
+// ClientCertMiddleware wraps an http.Handler and enforces that the client
+// presented a valid certificate on all routes except those in exemptPaths.
+// Use this when the TLS config has ClientAuth: VerifyClientCertIfGiven so
+// that provisioning endpoints remain reachable before a cert is issued.
+func ClientCertMiddleware(next http.Handler, exemptPaths ...string) http.Handler {
+	exempt := make(map[string]bool, len(exemptPaths))
+	for _, p := range exemptPaths {
+		exempt[p] = true
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !exempt[r.URL.Path] {
+			if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 {
+				http.Error(w, `{"error":"client certificate required"}`, http.StatusUnauthorized)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")

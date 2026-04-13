@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -20,6 +21,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/auth"
 	"github.com/marcelocantos/jevons/internal/cli"
 	"github.com/marcelocantos/jevons/internal/db"
 	"github.com/marcelocantos/jevons/internal/discovery"
@@ -27,7 +29,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/manager"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
 	"github.com/marcelocantos/jevons/internal/server"
-"github.com/marcelocantos/jevons/internal/transcript"
+	"github.com/marcelocantos/jevons/internal/transcript"
 	"github.com/marcelocantos/jevons/internal/ui"
 	"github.com/marcelocantos/pigeon/qr"
 )
@@ -140,6 +142,7 @@ func main() {
 	model := flag.String("model", "", "default model for worker sessions")
 	jevonsModel := flag.String("jevons-model", "", "model for Jevonss (default: same as --model)")
 	debug := flag.Bool("debug", false, "enable debug logging")
+	enableTLS := flag.Bool("tls", false, "enable mTLS on the HTTP listener (requires client certs after provisioning)")
 	setOpenAIKey := flag.Bool("set-openai-key", false, "prompt for OpenAI API key, store in macOS Keychain, and exit")
 	setXAIKey := flag.Bool("set-xai-key", false, "prompt for xAI API key, store in macOS Keychain, and exit")
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -219,6 +222,13 @@ func main() {
 	}
 	defer database.Close()
 
+	// Initialize CA for mTLS device provisioning.
+	ca, err := auth.NewCA(filepath.Join(homeDir, ".jevons"))
+	if err != nil {
+		slog.Error("cannot initialize CA", "err", err)
+		os.Exit(1)
+	}
+
 	// Create components.
 	scanner := discovery.NewScanner(filepath.Join(homeDir, ".claude", "projects"))
 	mgr := manager.New(*model, *workDir, database, scanner)
@@ -248,6 +258,7 @@ func main() {
 	defer luaRT.Close()
 
 	srv := server.New(jev, mgr, database, cli.Version, luaRT)
+	srv.SetCA(ca)
 
 	if err := srv.LoadOrGenerateKeyPair(); err != nil {
 		slog.Error("failed to load key pair", "err", err)
@@ -604,7 +615,13 @@ func main() {
 	srv.SetRegistry(registry)
 
 	listenAddr := fmt.Sprintf(":%d", *port)
-	httpSrv := &http.Server{Addr: listenAddr, Handler: mux}
+
+	// Build the handler, optionally wrapping with mTLS middleware.
+	var handler http.Handler = mux
+	if *enableTLS {
+		handler = server.ClientCertMiddleware(mux, "/health", "/api/provision")
+	}
+	httpSrv := &http.Server{Addr: listenAddr, Handler: handler}
 
 	// Start HTTP server before agents so the MCP endpoint is reachable.
 	ln, err := net.Listen("tcp", listenAddr)
@@ -612,6 +629,22 @@ func main() {
 		slog.Error("listen failed", "err", err)
 		os.Exit(1)
 	}
+
+	if *enableTLS {
+		tlsHosts := []string{"localhost", "127.0.0.1", qr.LanIP()}
+		tlsCfg, err := ca.TLSConfig(tlsHosts)
+		if err != nil {
+			slog.Error("cannot build TLS config", "err", err)
+			os.Exit(1)
+		}
+		// Allow optional client certs so the provision endpoint is reachable
+		// before a device has a cert. The ClientCertMiddleware enforces the
+		// requirement on all other routes.
+		tlsCfg.ClientAuth = tls.VerifyClientCertIfGiven
+		ln = tls.NewListener(ln, tlsCfg)
+		slog.Info("mTLS enabled", "hosts", tlsHosts)
+	}
+
 	go func() {
 		if err := httpSrv.Serve(ln); err != http.ErrServerClosed {
 			slog.Error("server failed", "err", err)

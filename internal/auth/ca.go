@@ -156,6 +156,11 @@ func writePEM(path, blockType string, data []byte, mode os.FileMode) error {
 	return pem.Encode(f, &pem.Block{Type: blockType, Bytes: data})
 }
 
+// CertPEM returns the CA certificate in PEM format.
+func (ca *CA) CertPEM() []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.certDER})
+}
+
 // randomSerial returns a random 128-bit certificate serial number.
 func randomSerial() (*big.Int, error) {
 	return rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
