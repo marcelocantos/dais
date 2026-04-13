@@ -10,7 +10,7 @@ right before locking them in.
 
 ## Interaction surface catalogue
 
-Snapshot as of v0.3.0.
+Snapshot as of v0.4.0.
 
 ### CLI: `jevonsd`
 
@@ -52,6 +52,8 @@ Terminal UI client for jevonsd.
 | `jevons_agent_start` | `name, workdir, model?` | Fluid |
 | `jevons_agent_send` | `name, text` | Fluid — async fire-and-forget since v0.3.0 |
 | `jevons_agent_stop` | `name` | Fluid |
+| `jevons_active_work` | `hours?, include_clean?` | Fluid — new in v0.4.0, cross-repo work dashboard |
+| `jwork` | `task, repo?, model?` | Fluid — new in v0.4.0, on-demand worker dispatch |
 | `jevons_transcript_read` | `session?, limit?` | Fluid — new in v0.3.0, reads Jevon conversation history |
 | `jevons_transcript_rewind` | `session, n?` | Fluid — new in v0.3.0, trims Jevon history |
 | `jevons_reload_views` | (none) | Fluid |
@@ -163,6 +165,7 @@ longer maintains its own transcript database.
   rendering works; client-side Lua on iOS is not yet wired.
 - sqlpipe state sync (🎯T10) is incomplete — `internal/sync/` compiles
   but WebSocket protocol has not been cut over.
+- Active work dashboard (🎯T16.1) complete — `jevons_active_work` tool cross-references sessions, git status, and PRs.
 
 ### Testing
 - No integration tests for WebSocket, agent lifecycle, or voice bridge.
@@ -171,8 +174,7 @@ longer maintains its own transcript database.
 
 ### Documentation
 - NOTICES file missing for vendored dependencies.
-- README install section documents only the GitHub releases download
-  path; no packaged distribution (brew, apt) yet.
+- README install section updated for Homebrew tap (`brew install marcelocantos/tap/jevons`) in v0.4.0.
 
 ## Out of scope for 1.0
 
