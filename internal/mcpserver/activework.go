@@ -136,10 +136,15 @@ func (s *Server) handleActiveWork(_ context.Context, req mcp.CallToolRequest) (*
 
 	orgRepoFromPath := func(path string) string {
 		parts := strings.SplitN(path, "github.com/", 2)
-		if len(parts) == 2 {
-			return parts[1]
+		if len(parts) != 2 {
+			return ""
 		}
-		return ""
+		// Normalize to org/repo — strip anything after the second component.
+		segments := strings.SplitN(parts[1], "/", 3)
+		if len(segments) < 2 {
+			return ""
+		}
+		return segments[0] + "/" + segments[1]
 	}
 
 	// Add repos from sessions.
@@ -175,8 +180,17 @@ func (s *Server) handleActiveWork(_ context.Context, req mcp.CallToolRequest) (*
 		ri.branch = gs.branch
 	}
 
-	// ── Signal 3: open PRs (only for repos in the map) ────────────────────
-	prResults := fetchPRs(repoMap)
+	// ── Signal 3: open PRs (only for repos with session activity) ─────────
+	// Skip repos that only appear via dirty working tree — querying GitHub
+	// for upstream clones (torvalds/linux, golang/go, etc.) wastes API calls
+	// and produces noise.
+	activeRepos := make(map[string]*repoInfo, len(repoMap))
+	for or, ri := range repoMap {
+		if ri.sessionCount > 0 {
+			activeRepos[or] = ri
+		}
+	}
+	prResults := fetchPRs(activeRepos)
 	for or, prs := range prResults {
 		if ri, ok := repoMap[or]; ok {
 			ri.prs = prs
@@ -354,7 +368,15 @@ func renderActiveWorkTable(repos []*repoInfo) string {
 	b.WriteString(divider)
 	b.WriteByte('\n')
 
+	// Track whether we've printed the separator between active and dirty-only repos.
+	printedSep := false
 	for _, ri := range repos {
+		if !printedSep && ri.sessionCount == 0 {
+			b.WriteString(divider)
+			b.WriteByte('\n')
+			printedSep = true
+		}
+
 		activityStr := "-"
 		if !ri.lastActivity.IsZero() {
 			activityStr = ri.lastActivity.Format("2006-01-02 15:04")
