@@ -248,10 +248,11 @@ targets:
     discovered: 2026-03-27
   T16.1:
     name: Active work dashboard
-    status: converging
+    status: achieved
     value: 8.0
     cost: 5.0
     observable: true
+    actual_cost: 5.0
     acceptance:
     - Tool queries memory DB for recent interactive sessions, groups by repo
     - Tool scans ~/work/github.com/ for repos with uncommitted changes or non-default branches
@@ -274,6 +275,7 @@ targets:
       Remaining: end-to-end verification with jevonsd running.
     origin: manual
     discovered: 2026-03-27
+    achieved: 2026-04-13
   T16.2:
     name: Session grandfathering
     status: identified
