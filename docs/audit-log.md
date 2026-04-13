@@ -26,7 +26,7 @@ maintenance activities. Append-only — newest entries at the bottom.
 
 ## 2026-04-13 — /release v0.4.0
 
-- **Commit**: pending
+- **Commit**: `be06295`
 - **Outcome**: Released v0.4.0 (darwin-arm64, linux-amd64, linux-arm64). Homebrew formula added.
 - **Changes**: `jevons_active_work` MCP tool (cross-repo work dashboard), `jwork` MCP tool (on-demand worker dispatch), bullseye standing-invariants hook, targets.yaml → bullseye.yaml rename. Homebrew tap configured with homebrew-releaser CI job.
 - **STABILITY.md**: Updated to v0.4.0 snapshot — added 2 new MCP tools (`jevons_active_work`, `jwork`).
