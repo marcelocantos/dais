@@ -109,3 +109,12 @@ test-go:
 	go test ./...
 
 test: test-go
+
+# ── Standing invariants (bullseye) ──────────────────
+.PHONY: bullseye
+bullseye:
+	@go build $(GO_TAGS) ./... && echo "✓ build"
+	@go test $(GO_TAGS) ./... && echo "✓ tests"
+	@go vet $(GO_TAGS) ./... && echo "✓ vet"
+	@test -z "$$(git status --porcelain)" && echo "✓ clean" || \
+	 (echo "✗ dirty tree"; git status --short; exit 1)
