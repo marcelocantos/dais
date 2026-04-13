@@ -579,8 +579,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Wire registry into MCP server for agent tools.
+	// Wire registry and scanner into MCP server.
 	mcpSrv.SetRegistry(registry)
+	mcpSrv.SetScanner(scanner)
 
 	// Transcript memory is now provided by the standalone mnemo MCP server.
 	// See https://github.com/marcelocantos/mnemo
