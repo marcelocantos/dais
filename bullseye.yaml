@@ -394,7 +394,7 @@ targets:
     achieved: 2026-04-09
   T5:
     name: Authentication implemented
-    status: identified
+    status: converging
     value: 8.0
     cost: 13.0
     observable: true
@@ -403,9 +403,16 @@ targets:
     - QR-based device provisioning flow works end-to-end (scan QR on phone, device gets a client certificate)
     - internal/auth package has tests covering the provisioning and verification paths
     - Unauthenticated requests are rejected
-    context: |
+    context: |-
       Desired state: mTLS with QR-based device provisioning secures all surfaces.
-      The `internal/auth` package is fully implemented.
+
+      The `internal/auth` package is fully implemented and tested (CA management, cert issuance, mTLS config, Ed25519 keys). The provisioning endpoint (`POST /api/provision`) is wired into jevonsd. The `--tls` flag enables mTLS on the HTTP listener with `ClientCertMiddleware` exempting `/health` and `/api/provision`.
+
+      Remaining:
+      - Wire provisioning into the QR-based pairing flow (handlePairing in pairing.go)
+      - Test end-to-end: scan QR → provision → mTLS connection
+      - Add tests for the provisioning endpoint
+      - Verify unauthenticated requests are rejected when --tls is enabled
     depends_on:
     - T4
     origin: manual
@@ -553,28 +560,18 @@ targets:
     - Generic SwiftUI renderer maps Lua-produced view trees to native views
     - No business logic in Swift — all view logic in Lua scripts
     - Smoke test; Jevons writes path abbreviation via conversation, pushes script update, phone re-renders without app rebuild
-    context: |
+    context: |-
       Desired state: the iOS app is a programmable thin client. Lua view
       scripts run on the device, rendering native SwiftUI from local state.
       jevonsd pushes script updates and state changes; the phone renders
       locally. Jevons (the AI agent) can modify scripts at runtime to
       reshape the UI without app rebuilds or redeployment.
 
-      Architecture:
-      - Client-side Lua (C Lua, ~25KB) on device against local state.
-      - Script distribution: jevonsd holds canonical scripts, pushes on connect/change.
-      - State protocol: structured state updates over WebSocket, merged into local state.
-      - Primitives, not components: fine-grained view schema (text, vstack, hstack, spacer, image, padding, background, etc.).
-      - Inline assets via SF Symbols, data URIs, or bundled assets.
-      - Dev flow: edit on server → push draft → preview → approve → promote.
-      - Reserved `embed` component for future ge wire protocol integration.
+      Most criteria met. Dead server-side rendering code removed (viewstate.go, schema.go deleted). Draft/preview/promote MCP tools implemented (jevons_preview_script, jevons_promote_script, jevons_discard_draft).
 
-      Current status: server-side Lua rendering works end-to-end. Pivoting to
-      client-side Lua execution. Go side has Lua runtime (gopher-lua), view
-      state manager, view schema, MCP reload tool. iOS side has generic
-      recursive SwiftUI renderer (`ServerView`). Remaining: embed C Lua in
-      iOS, port view builders to Swift bindings, change WebSocket protocol to
-      state updates not view trees, add draft/preview/promote flow.
+      Remaining:
+      - Run smoke test on device (edit script → reload → verify phone re-renders)
+      - Verify draft overlay works end-to-end via MCP tools
     tags:
     - visual
     origin: manual
