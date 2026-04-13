@@ -18,6 +18,7 @@ import (
 
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/db"
+	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/manager"
 )
 
@@ -45,6 +46,7 @@ type TranscriptOps struct {
 type Server struct {
 	mgr          *manager.Manager
 	registry     *claudia.Registry
+	scanner      *discovery.Scanner
 	workerWD     string
 	onDone       EventCallback
 	reloadViews  ReloadViewsFunc
