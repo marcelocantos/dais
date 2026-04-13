@@ -17,6 +17,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/marcelocantos/claudia"
+	"github.com/marcelocantos/jevons/internal/db"
 	"github.com/marcelocantos/jevons/internal/manager"
 )
 
@@ -50,6 +51,7 @@ type Server struct {
 	execLua      ExecLuaFunc
 	screenshot   ScreenshotFunc
 	transcript   *TranscriptOps
+	db           *db.DB
 	mcpSrv       *server.MCPServer
 	transport    *server.StreamableHTTPServer
 
@@ -60,10 +62,11 @@ type Server struct {
 // New creates an MCP server with jevon tools wired to the given manager.
 // reloadViews may be nil if server-driven UI is not active.
 // transcript may be nil if transcript ops are not available.
-func New(mgr *manager.Manager, workerWD string, onDone EventCallback, reloadViews ReloadViewsFunc, execLua ExecLuaFunc, screenshot ScreenshotFunc, transcript *TranscriptOps) *Server {
+func New(mgr *manager.Manager, workerWD string, database *db.DB, onDone EventCallback, reloadViews ReloadViewsFunc, execLua ExecLuaFunc, screenshot ScreenshotFunc, transcript *TranscriptOps) *Server {
 	s := &Server{
 		mgr:         mgr,
 		workerWD:    workerWD,
+		db:          database,
 		onDone:      onDone,
 		reloadViews: reloadViews,
 		execLua:     execLua,
@@ -161,6 +164,8 @@ func New(mgr *manager.Manager, workerWD string, onDone EventCallback, reloadView
 			s.handleTranscriptRewind,
 		)
 	}
+
+	s.registerJwork()
 
 	s.transport = server.NewStreamableHTTPServer(mcpSrv, server.WithStateLess(true))
 	return s

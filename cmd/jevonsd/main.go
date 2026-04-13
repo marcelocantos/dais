@@ -500,7 +500,7 @@ func main() {
 	})
 
 	// Wire MCP server with Jevons event callback.
-	mcpSrv := mcpserver.New(mgr, *workDir, func(workerID, workerName, result string, failed bool) {
+	mcpSrv := mcpserver.New(mgr, *workDir, database, func(workerID, workerName, result string, failed bool) {
 		kind := jevons.EventWorkerCompleted
 		if failed {
 			kind = jevons.EventWorkerFailed
