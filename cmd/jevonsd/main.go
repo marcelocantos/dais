@@ -496,6 +496,13 @@ func main() {
 		},
 	})
 
+	// pushScripts reloads the Lua runtime and broadcasts scripts (including any draft)
+	// to all connected clients.
+	pushScripts := func() error {
+		srv.PushScripts()
+		return nil
+	}
+
 	// Wire MCP server with Jevons event callback.
 	mcpSrv := mcpserver.New(mgr, *workDir, database, func(workerID, workerName, result string, failed bool) {
 		kind := jevons.EventWorkerCompleted
@@ -514,7 +521,7 @@ func main() {
 		}
 		srv.PushScripts()
 		return nil
-	}, func(code string) {
+	}, luaRT, pushScripts, func(code string) {
 		srv.Broadcast(map[string]any{
 			"type":   "control",
 			"action": "exec_lua",

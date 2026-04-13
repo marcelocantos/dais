@@ -51,8 +51,10 @@ type LuaRuntime struct {
 	dir  string
 	caps *Capabilities
 
-	mu sync.Mutex
-	L  *lua.LState
+	mu          sync.Mutex
+	L           *lua.LState
+	draftName   string
+	draftSource string
 }
 
 // NewLuaRuntime creates a runtime that loads .lua files from dir.
@@ -329,6 +331,61 @@ func (r *LuaRuntime) Close() {
 	}
 }
 
+// SetDraft stores a draft script that overlays the canonical scripts.
+// When a draft is set, Scripts() returns canonical + draft concatenated.
+func (r *LuaRuntime) SetDraft(name, source string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.draftName = name
+	r.draftSource = source
+	slog.Info("lua draft set", "name", name)
+}
+
+// ClearDraft removes the current draft.
+func (r *LuaRuntime) ClearDraft() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.draftName = ""
+	r.draftSource = ""
+	slog.Info("lua draft cleared")
+}
+
+// HasDraft reports whether a draft is currently set.
+func (r *LuaRuntime) HasDraft() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.draftSource != ""
+}
+
+// DraftName returns the name of the current draft, or "" if none.
+func (r *LuaRuntime) DraftName() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.draftName
+}
+
+// PromoteDraft writes the current draft to the canonical scripts directory
+// and clears the draft state. Returns error if no draft is set.
+func (r *LuaRuntime) PromoteDraft() error {
+	r.mu.Lock()
+	if r.draftSource == "" {
+		r.mu.Unlock()
+		return fmt.Errorf("no draft set")
+	}
+	name := r.draftName
+	source := r.draftSource
+	r.draftName = ""
+	r.draftSource = ""
+	r.mu.Unlock()
+
+	path := filepath.Join(r.dir, name+".lua")
+	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	slog.Info("lua draft promoted", "name", name, "path", path)
+	return r.Reload()
+}
+
 // Reload re-reads all .lua files from the configured directory.
 func (r *LuaRuntime) Reload() error {
 	r.mu.Lock()
@@ -370,6 +427,8 @@ func (r *LuaRuntime) Reload() error {
 
 // Scripts reads and concatenates all .lua files from the configured directory,
 // returning the raw source text. This is sent to clients for client-side rendering.
+// If a draft is set, it is appended after the canonical scripts (draft overrides
+// canonical definitions via Lua's last-definition-wins semantics).
 func (r *LuaRuntime) Scripts() (string, error) {
 	entries, err := os.ReadDir(r.dir)
 	if err != nil {
@@ -394,6 +453,17 @@ func (r *LuaRuntime) Scripts() (string, error) {
 		}
 		buf = append(buf, data...)
 	}
+
+	r.mu.Lock()
+	draft := r.draftSource
+	r.mu.Unlock()
+	if draft != "" {
+		if len(buf) > 0 {
+			buf = append(buf, '\n')
+		}
+		buf = append(buf, []byte(draft)...)
+	}
+
 	return string(buf), nil
 }
 

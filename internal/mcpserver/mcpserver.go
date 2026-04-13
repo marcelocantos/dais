@@ -20,6 +20,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/db"
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/manager"
+	"github.com/marcelocantos/jevons/internal/ui"
 )
 
 // EventCallback is called when a worker finishes a command.
@@ -27,6 +28,9 @@ type EventCallback func(workerID, workerName, result string, failed bool)
 
 // ReloadViewsFunc reloads Lua view scripts and pushes updated views.
 type ReloadViewsFunc func() error
+
+// PushScriptsFunc pushes current scripts (including any draft) to connected clients.
+type PushScriptsFunc func() error
 
 // ExecLuaFunc sends Lua code to connected clients for execution.
 type ExecLuaFunc func(code string)
@@ -50,6 +54,8 @@ type Server struct {
 	workerWD     string
 	onDone       EventCallback
 	reloadViews  ReloadViewsFunc
+	pushScripts  PushScriptsFunc
+	luaRT        *ui.LuaRuntime
 	execLua      ExecLuaFunc
 	screenshot   ScreenshotFunc
 	transcript   *TranscriptOps
@@ -63,14 +69,17 @@ type Server struct {
 
 // New creates an MCP server with jevon tools wired to the given manager.
 // reloadViews may be nil if server-driven UI is not active.
+// luaRT and pushScripts may be nil if draft/preview is not active.
 // transcript may be nil if transcript ops are not available.
-func New(mgr *manager.Manager, workerWD string, database *db.DB, onDone EventCallback, reloadViews ReloadViewsFunc, execLua ExecLuaFunc, screenshot ScreenshotFunc, transcript *TranscriptOps) *Server {
+func New(mgr *manager.Manager, workerWD string, database *db.DB, onDone EventCallback, reloadViews ReloadViewsFunc, luaRT *ui.LuaRuntime, pushScripts PushScriptsFunc, execLua ExecLuaFunc, screenshot ScreenshotFunc, transcript *TranscriptOps) *Server {
 	s := &Server{
 		mgr:         mgr,
 		workerWD:    workerWD,
 		db:          database,
 		onDone:      onDone,
 		reloadViews: reloadViews,
+		luaRT:       luaRT,
+		pushScripts: pushScripts,
 		execLua:     execLua,
 		screenshot:  screenshot,
 		transcript:  transcript,
@@ -129,6 +138,29 @@ func New(mgr *manager.Manager, workerWD string, database *db.DB, onDone EventCal
 				mcp.WithDescription("Reload Lua view scripts and push updated UI to connected clients. Call this after editing files in ~/.jevons/lua/views/."),
 			),
 			s.handleReloadViews,
+		)
+	}
+
+	if s.luaRT != nil && s.pushScripts != nil {
+		mcpSrv.AddTool(
+			mcp.NewTool("jevons_preview_script",
+				mcp.WithDescription("Push a draft Lua view script to connected clients for preview without modifying the canonical scripts. The draft overrides canonical definitions via Lua's last-definition-wins semantics."),
+				mcp.WithString("name", mcp.Required(), mcp.Description("Script name without the .lua extension")),
+				mcp.WithString("source", mcp.Required(), mcp.Description("Lua source code for the script")),
+			),
+			s.handlePreviewScript,
+		)
+		mcpSrv.AddTool(
+			mcp.NewTool("jevons_promote_script",
+				mcp.WithDescription("Promote the current draft Lua script to canonical, writing it to the scripts directory. Returns the promoted script name."),
+			),
+			s.handlePromoteScript,
+		)
+		mcpSrv.AddTool(
+			mcp.NewTool("jevons_discard_draft",
+				mcp.WithDescription("Discard the current draft Lua script and push the canonical scripts to connected clients."),
+			),
+			s.handleDiscardDraft,
 		)
 	}
 
@@ -354,6 +386,51 @@ func (s *Server) handleReloadViews(_ context.Context, _ mcp.CallToolRequest) (*m
 		return mcp.NewToolResultError(fmt.Sprintf("reload failed: %v", err)), nil
 	}
 	return mcp.NewToolResultText("Views reloaded and pushed to connected clients."), nil
+}
+
+func (s *Server) handlePreviewScript(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	name, _ := args["name"].(string)
+	source, _ := args["source"].(string)
+	if name == "" {
+		return mcp.NewToolResultError("missing required parameter: name"), nil
+	}
+	if source == "" {
+		return mcp.NewToolResultError("missing required parameter: source"), nil
+	}
+	s.luaRT.SetDraft(name, source)
+	if err := s.pushScripts(); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("push failed: %v", err)), nil
+	}
+	slog.Info("MCP: preview script pushed", "name", name)
+	return mcp.NewToolResultText(fmt.Sprintf("Draft %q pushed to connected clients for preview.", name)), nil
+}
+
+func (s *Server) handlePromoteScript(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if !s.luaRT.HasDraft() {
+		return mcp.NewToolResultError("no draft set — use jevons_preview_script first"), nil
+	}
+	name := s.luaRT.DraftName()
+	if err := s.luaRT.PromoteDraft(); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("promote failed: %v", err)), nil
+	}
+	if err := s.pushScripts(); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("push failed: %v", err)), nil
+	}
+	slog.Info("MCP: script promoted", "name", name)
+	return mcp.NewToolResultText(fmt.Sprintf("Script %q promoted to canonical and pushed to connected clients.", name)), nil
+}
+
+func (s *Server) handleDiscardDraft(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if !s.luaRT.HasDraft() {
+		return mcp.NewToolResultText("No draft to discard."), nil
+	}
+	s.luaRT.ClearDraft()
+	if err := s.pushScripts(); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("push failed: %v", err)), nil
+	}
+	slog.Info("MCP: draft discarded")
+	return mcp.NewToolResultText("Draft discarded. Canonical scripts pushed to connected clients."), nil
 }
 
 func (s *Server) handleScreenshot(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
