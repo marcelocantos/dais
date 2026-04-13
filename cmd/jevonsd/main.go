@@ -247,10 +247,7 @@ func main() {
 	}
 	defer luaRT.Close()
 
-	vs := ui.NewViewState()
-	vs.SetConnected(cli.Version, os.Getenv("HOME"))
-
-	srv := server.New(jev, mgr, database, cli.Version, luaRT, vs)
+	srv := server.New(jev, mgr, database, cli.Version, luaRT)
 
 	if err := srv.LoadOrGenerateKeyPair(); err != nil {
 		slog.Error("failed to load key pair", "err", err)

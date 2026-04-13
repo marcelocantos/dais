@@ -73,7 +73,6 @@ type Server struct {
 	turnBuf    string // accumulates Jevon text for current turn
 
 	luaRT          *ui.LuaRuntime
-	viewState      *ui.ViewState
 	lanSrv         *pigeon.LANServer // LAN server for direct connections
 	serverKP       *ecdh.PrivateKey
 	pubKeyBase64   string
@@ -89,9 +88,8 @@ type Server struct {
 func (s *Server) PubKeyBase64() string { return s.pubKeyBase64 }
 
 // New creates a Server with the given Jevon instance, manager, database, version string,
-// Lua runtime, and view state. The Lua runtime and view state may be nil if the
-// server-driven UI is not yet active.
-func New(jev *jevons.Jevon, mgr *manager.Manager, database *db.DB, version string, luaRT *ui.LuaRuntime, vs *ui.ViewState) *Server {
+// and Lua runtime. The Lua runtime may be nil if script distribution is not yet active.
+func New(jev *jevons.Jevon, mgr *manager.Manager, database *db.DB, version string, luaRT *ui.LuaRuntime) *Server {
 	s := &Server{
 		jevon:         jev,
 		mgr:           mgr,
@@ -99,7 +97,6 @@ func New(jev *jevons.Jevon, mgr *manager.Manager, database *db.DB, version strin
 		version:       version,
 		remotes:       make(map[int]remoteConn),
 		luaRT:         luaRT,
-		viewState:     vs,
 		chatListeners: make([]chan string, 0),
 	}
 
@@ -116,14 +113,6 @@ func New(jev *jevons.Jevon, mgr *manager.Manager, database *db.DB, version strin
 		}
 		if len(s.transcript) > 0 {
 			slog.Info("loaded transcript from database", "entries", len(s.transcript))
-		}
-
-		// Populate view state with persisted transcript.
-		if vs != nil {
-			for _, e := range entries {
-				vs.AddMessage(e.Role, e.Text)
-			}
-			vs.SetConnected(version, os.Getenv("HOME"))
 		}
 	}
 
@@ -142,11 +131,6 @@ func New(jev *jevons.Jevon, mgr *manager.Manager, database *db.DB, version strin
 			"type":    "text",
 			"content": text,
 		})
-
-		if s.viewState != nil {
-			s.viewState.UpdateStreamingText(text)
-			s.PushView()
-		}
 	})
 	jev.SetStatus(func(state string) {
 		if state == "idle" {
@@ -172,21 +156,12 @@ func New(jev *jevons.Jevon, mgr *manager.Manager, database *db.DB, version strin
 					s.voiceBridge.InjectResponse(turnText)
 				}
 			}
-
-			if s.viewState != nil {
-				s.viewState.FlushStreaming()
-			}
 		}
 
 		s.Broadcast(map[string]any{
 			"type":  "status",
 			"state": state,
 		})
-
-		if s.viewState != nil {
-			s.viewState.SetStatus(state)
-			s.PushView()
-		}
 	})
 
 	return s
@@ -481,11 +456,6 @@ func (s *Server) HandleUserMessage(text string) {
 		"timestamp": now,
 	})
 
-	if s.viewState != nil {
-		s.viewState.AddMessage("user", text)
-		s.PushView()
-	}
-
 	s.jevon.Enqueue(jevons.Event{
 		Kind: jevons.EventUserMessage,
 		Text: text,
@@ -523,12 +493,7 @@ func (s *Server) HandleAction(action, value string) {
 		s.PushSessions()
 
 	case action == "dismiss_sheet":
-		// Client handles dismiss locally when using client-side Lua.
-		// Still support server-side fallback.
-		if s.viewState != nil {
-			s.viewState.SetSheet("")
-			s.broadcastDismiss("sheet")
-		}
+		// Client handles dismiss locally.
 
 	case action == "disconnect":
 		slog.Info("disconnect requested via action")
@@ -670,24 +635,6 @@ func (s *Server) RequestScreenshot(timeout time.Duration) (string, error) {
 	}
 }
 
-// PushView renders the current view state via Lua and broadcasts to all clients.
-func (s *Server) PushView() {
-	if s.luaRT == nil || s.viewState == nil {
-		return
-	}
-
-	msgs, err := s.viewState.Render(s.luaRT)
-	if err != nil {
-		slog.Error("view render failed", "err", err)
-		return
-	}
-
-	slog.Debug("pushView", "messages", len(msgs), "clients", len(s.remotes))
-	for _, msg := range msgs {
-		s.Broadcast(msg)
-	}
-}
-
 // PushScripts broadcasts the Lua source to all connected clients for client-side rendering.
 func (s *Server) PushScripts() {
 	if s.luaRT == nil {
@@ -730,33 +677,6 @@ func (s *Server) PushSessions() {
 	s.Broadcast(map[string]any{
 		"type":     "sessions",
 		"sessions": entries,
-	})
-}
-
-// refreshSessions fetches the current session list and updates the view state.
-func (s *Server) refreshSessions() {
-	if s.viewState == nil {
-		return
-	}
-	summaries := s.mgr.List(false)
-	entries := make([]ui.SessionEntry, len(summaries))
-	for i, sum := range summaries {
-		entries[i] = ui.SessionEntry{
-			ID:      sum.ID,
-			Name:    sum.Name,
-			Status:  string(sum.Status),
-			WorkDir: sum.WorkDir,
-			Active:  sum.Active,
-		}
-	}
-	s.viewState.SetSessions(entries)
-}
-
-// broadcastDismiss sends a dismiss message for the given slot.
-func (s *Server) broadcastDismiss(slot string) {
-	s.Broadcast(ui.DismissMessage{
-		Type: "dismiss",
-		Slot: slot,
 	})
 }
 

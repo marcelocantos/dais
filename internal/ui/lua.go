@@ -397,39 +397,6 @@ func (r *LuaRuntime) Scripts() (string, error) {
 	return string(buf), nil
 }
 
-// CallScreen calls a named Lua function with the given state and returns the
-// resulting node tree. If the function doesn't exist, it returns a fallback node.
-func (r *LuaRuntime) CallScreen(name string, state map[string]any) (*Node, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	fn := r.L.GetGlobal(name)
-	if fn == lua.LNil {
-		return &Node{
-			Type:  "text",
-			Props: Props{Text: fmt.Sprintf("screen %q not defined", name)},
-		}, nil
-	}
-
-	stateTable := goToLua(r.L, state)
-	if err := r.L.CallByParam(lua.P{
-		Fn:      fn,
-		NRet:    1,
-		Protect: true,
-	}, stateTable); err != nil {
-		return nil, fmt.Errorf("call %s: %w", name, err)
-	}
-
-	ret := r.L.Get(-1)
-	r.L.Pop(1)
-
-	node, err := luaToNode(ret)
-	if err != nil {
-		return nil, fmt.Errorf("convert %s result: %w", name, err)
-	}
-	return node, nil
-}
-
 // registerNodeFuncs adds all the UI builder functions to the Lua state.
 func registerNodeFuncs(L *lua.LState) {
 	// text(str) or text(str, props_table)
@@ -802,187 +769,6 @@ func addVarChildren(L *lua.LState, t *lua.LTable, startIdx int) {
 	}
 }
 
-// --- Lua table → Node conversion ---
-
-func luaToNode(v lua.LValue) (*Node, error) {
-	t, ok := v.(*lua.LTable)
-	if !ok {
-		return nil, fmt.Errorf("expected table, got %s", v.Type())
-	}
-
-	node := &Node{
-		Type: luaString(t, "type"),
-		ID:   luaString(t, "id"),
-	}
-
-	// Props
-	node.Props.Text = luaString(t, "text")
-	node.Props.Placeholder = luaString(t, "placeholder")
-	node.Props.SFSymbol = luaString(t, "sf_symbol")
-	node.Props.ImageAsset = luaString(t, "image_asset")
-	node.Props.ImageURL = luaString(t, "image_url")
-	node.Props.Font = luaString(t, "font")
-	node.Props.Weight = luaString(t, "weight")
-	node.Props.Color = luaString(t, "color")
-	node.Props.BgColor = luaString(t, "bg_color")
-	node.Props.CornerRadius = luaFloat(t, "corner_radius")
-	node.Props.Opacity = luaFloat(t, "opacity")
-	node.Props.Spacing = luaInt(t, "spacing")
-	node.Props.MinLength = luaInt(t, "min_length")
-	node.Props.Alignment = luaString(t, "alignment")
-	node.Props.MaxLines = luaInt(t, "max_lines")
-	node.Props.Truncate = luaString(t, "truncate")
-	node.Props.Title = luaString(t, "title")
-	node.Props.TitleDisplayMode = luaString(t, "title_display_mode")
-	node.Props.Disabled = luaBool(t, "disabled")
-	node.Props.Action = luaString(t, "action")
-	node.Props.Style = luaString(t, "style")
-
-	// Input
-	node.Props.Keyboard = luaString(t, "keyboard")
-	node.Props.Autocorrect = luaOptBool(t, "autocorrect")
-	node.Props.Autocapitalize = luaString(t, "autocapitalize")
-	node.Props.SubmitLabel = luaString(t, "submit_label")
-
-	// Scroll
-	node.Props.ScrollAnchor = luaString(t, "scroll_anchor")
-	node.Props.ScrollDismissKeyboard = luaString(t, "scroll_dismiss_keyboard")
-	node.Props.KeyboardAvoidance = luaString(t, "keyboard_avoidance")
-
-	// Frame
-	node.Props.FrameWidth = luaFloat(t, "frame_width")
-	node.Props.FrameHeight = luaFloat(t, "frame_height")
-	node.Props.FrameMaxWidth = luaFrameDim(t, "frame_max_width")
-	node.Props.FrameMaxHeight = luaFrameDim(t, "frame_max_height")
-
-	// Visual
-	node.Props.ForegroundStyle = luaString(t, "foreground_style")
-	node.Props.ContentMode = luaString(t, "content_mode")
-
-	// Accessibility
-	node.Props.A11yLabel = luaString(t, "a11y_label")
-
-	// Padding
-	if pt, ok := t.RawGetString("padding").(*lua.LTable); ok {
-		pt.ForEach(func(_, v lua.LValue) {
-			if n, ok := v.(lua.LNumber); ok {
-				node.Props.Padding = append(node.Props.Padding, int(n))
-			}
-		})
-	}
-
-	// Children
-	if ct, ok := t.RawGetString("children").(*lua.LTable); ok {
-		ct.ForEach(func(_, v lua.LValue) {
-			child, err := luaToNode(v)
-			if err != nil {
-				slog.Warn("skipping invalid child node", "err", err)
-				return
-			}
-			node.Children = append(node.Children, *child)
-		})
-	}
-
-	return node, nil
-}
-
-func luaString(t *lua.LTable, key string) string {
-	v := t.RawGetString(key)
-	if s, ok := v.(lua.LString); ok {
-		return string(s)
-	}
-	return ""
-}
-
-func luaFloat(t *lua.LTable, key string) float64 {
-	v := t.RawGetString(key)
-	if n, ok := v.(lua.LNumber); ok {
-		return float64(n)
-	}
-	return 0
-}
-
-func luaInt(t *lua.LTable, key string) int {
-	v := t.RawGetString(key)
-	if n, ok := v.(lua.LNumber); ok {
-		return int(n)
-	}
-	return 0
-}
-
-func luaBool(t *lua.LTable, key string) bool {
-	v := t.RawGetString(key)
-	if b, ok := v.(lua.LBool); ok {
-		return bool(b)
-	}
-	return false
-}
-
-func luaOptBool(t *lua.LTable, key string) *bool {
-	v := t.RawGetString(key)
-	if b, ok := v.(lua.LBool); ok {
-		val := bool(b)
-		return &val
-	}
-	return nil
-}
-
-// luaFrameDim reads a field that can be a number or the string "infinity".
-func luaFrameDim(t *lua.LTable, key string) any {
-	v := t.RawGetString(key)
-	switch val := v.(type) {
-	case lua.LNumber:
-		if float64(val) != 0 {
-			return float64(val)
-		}
-	case lua.LString:
-		if string(val) == "infinity" {
-			return "infinity"
-		}
-	}
-	return nil
-}
-
-// luaTableToGoMap converts a Lua table to a Go map[string]any.
-func luaTableToGoMap(t *lua.LTable) map[string]any {
-	m := make(map[string]any)
-	t.ForEach(func(k, v lua.LValue) {
-		key, ok := k.(lua.LString)
-		if !ok {
-			return
-		}
-		m[string(key)] = luaToGo(v)
-	})
-	return m
-}
-
-// luaToGo converts a Lua value to a Go value.
-func luaToGo(v lua.LValue) any {
-	switch val := v.(type) {
-	case *lua.LNilType:
-		return nil
-	case lua.LBool:
-		return bool(val)
-	case lua.LNumber:
-		return float64(val)
-	case lua.LString:
-		return string(val)
-	case *lua.LTable:
-		// Check if it's an array (sequential integer keys starting at 1).
-		maxN := val.MaxN()
-		if maxN > 0 {
-			arr := make([]any, 0, maxN)
-			for i := 1; i <= maxN; i++ {
-				arr = append(arr, luaToGo(val.RawGetInt(i)))
-			}
-			return arr
-		}
-		return luaTableToGoMap(val)
-	default:
-		return fmt.Sprint(v)
-	}
-}
-
 // goToLua converts a Go value to a Lua value, recursively handling maps and slices.
 func goToLua(L *lua.LState, v any) lua.LValue {
 	switch val := v.(type) {
@@ -1018,5 +804,44 @@ func goToLua(L *lua.LState, v any) lua.LValue {
 		return t
 	default:
 		return lua.LString(fmt.Sprint(val))
+	}
+}
+
+// luaTableToGoMap converts a Lua table to a Go map[string]any.
+func luaTableToGoMap(t *lua.LTable) map[string]any {
+	m := make(map[string]any)
+	t.ForEach(func(k, v lua.LValue) {
+		key, ok := k.(lua.LString)
+		if !ok {
+			return
+		}
+		m[string(key)] = luaToGo(v)
+	})
+	return m
+}
+
+// luaToGo converts a Lua value to a Go value.
+func luaToGo(v lua.LValue) any {
+	switch val := v.(type) {
+	case *lua.LNilType:
+		return nil
+	case lua.LBool:
+		return bool(val)
+	case lua.LNumber:
+		return float64(val)
+	case lua.LString:
+		return string(val)
+	case *lua.LTable:
+		maxN := val.MaxN()
+		if maxN > 0 {
+			arr := make([]any, 0, maxN)
+			for i := 1; i <= maxN; i++ {
+				arr = append(arr, luaToGo(val.RawGetInt(i)))
+			}
+			return arr
+		}
+		return luaTableToGoMap(val)
+	default:
+		return fmt.Sprint(v)
 	}
 }
