@@ -1,4 +1,4 @@
-schema_version: 2
+schema_version: 3
 last_evaluated: afe8751
 targets:
   T1:
@@ -214,13 +214,15 @@ targets:
     cost: 0.0
     acceptance:
     - jevonsd no longer carries bespoke X25519 key management — internal/server/pairing.go is deleted and serverKP/pubKeyBase64 are removed from Server
-    - Pairing flow uses pigeon.PairingHost.Mint and emits artifact.MarshalText() in the QR (or via cmd/pigeon-pair for out-of-band deploy)
+    - Pairing flow uses pigeon.PairingHost.Mint and emits artifact.MarshalText() in the QR (or via `pigeon pair` for out-of-band deploy)
     - Server-side crypto.PairingRecord set is persisted at ~/.jevons/credentials.json and loaded on startup; incoming relay connections look up the matching record and reject unknown/expired peers
-    - iOS Transport / JevonsBridge use pigeon.connectWithArtifact, with the artifact persisted via KeychainCredentialStore
+    - jevonsd accepts server records out-of-band via `--add-credential <path>` (or watched ~/.jevons/credentials.d/) so deploy scripts can register peers without a daemon restart
+    - iOS Transport / JevonsBridge use PigeonConn.connect(artifact:) with the artifact persisted via KeychainCredentialStore
     - iOS QR scanner decodes via PairingArtifact.unmarshalText and drops the legacy {id,relay,pub} JSON + jevons:// parsers
-    - App launch tries credential-store load → connectWithArtifact, falls back to QR scanner on ErrPairingExpired / ErrNoCredential
-    - 'End-to-end smoke: pair via QR on iPad → send chat message → force-expire artifact → re-pair UI fires'
-    context: Pigeon master (commit c0688aa, expected v0.19.0) ships PairingArtifact + PairingHost + CredentialStore + ConnectWithArtifact, exactly matching the device-pairing shape jevons needs. This sub-target adopts those primitives, deleting the bespoke key/QR/pairing code in jevonsd and the manual PigeonConn.connect plumbing in the iOS app. See docs/plans/pigeon-migration.md for the full step-by-step. Blocked on pigeon v0.19.0 being tagged.
+    - App launch checks PIGEON_PAIRING_ARTIFACT env var first (decode + persist), then loads from credential store → connectWithArtifact, falls back to QR scanner on ErrPairingExpired / ErrNoCredential
+    - 'End-to-end smoke (developer flow): `xcrun devicectl ... process launch --environment-variables PIGEON_PAIRING_ARTIFACT=$(pigeon pair ...)` works zero-touch on the iPad'
+    - 'End-to-end smoke (user flow): pair via QR on iPad → send chat message → force-expire artifact → re-pair UI fires'
+    context: Pigeon v0.19.0 ships PairingArtifact + PairingHost + CredentialStore + ConnectWithArtifact across Go/Swift/Kotlin, plus Swift PigeonConn.connect(artifact:) and a `pigeon pair` subcommand. This sub-target adopts those primitives, deleting the bespoke key/QR/pairing code in jevonsd and the manual PigeonConn.connect plumbing in the iOS app. The developer-flow deploy path uses `pigeon pair` to mint an artifact, passes it to the iOS app via PIGEON_PAIRING_ARTIFACT env var on launch (no QR scan needed), and registers the server record with jevonsd via --add-credential. End-user pairing remains QR-driven. See docs/plans/pigeon-migration.md for the 13-step migration.
     origin: manual
     discovered: 2026-04-25
   T15:

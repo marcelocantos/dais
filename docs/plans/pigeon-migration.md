@@ -21,8 +21,10 @@ shape jevons needs:
   E2E channel from `record`, sets pairing record on the conn.
 - `pigeon.ErrPairingExpired` — sentinel returned by `ConnectWithArtifact`
   past `ExpiresAt`. Callers route to a re-pair flow.
-- `cmd/pigeon-pair` — CLI that mints an artifact for out-of-band injection
-  (deploy script use case: `xcrun devicectl device copy to`).
+- `pigeon pair` subcommand (folded in from the standalone `cmd/pigeon-pair`
+  in v0.19.0) — mints an artifact for out-of-band injection.
+- Swift: `PigeonConn.connect(artifact:)` mirrors Go's `ConnectWithArtifact`,
+  so iOS doesn't need its own glue.
 
 **Goal:** delete jevons' bespoke key/QR/pairing code (`internal/server/pairing.go`,
 the ad-hoc QR JSON in `cmd/jevonsd/main.go`, the iOS QR JSON parser,
@@ -92,14 +94,34 @@ the bump unlocks the work below.
 4. On scan, decode via `PairingArtifact.unmarshalText`, save via the
    credential store, then `ConnectWithArtifact`.
 
-### Out-of-band provisioning (xcrun deploy)
-For developer-flow deploys, jevons's iOS deploy script can call
-`pigeon-pair --relay=$RELAY --instance=$DEVICE_ID --ttl=720h
---format=text --out=/tmp/artifact.txt --server-record-out=/tmp/server.json`,
-copy `artifact.txt` onto the device's app sandbox via `xcrun devicectl
-device copy to`, register `server.json` with jevonsd, then launch the
-app. First run loads the artifact and connects without ever scanning a
-QR.
+### Out-of-band provisioning (xcrun deploy — primary developer flow)
+The deploy script mints an artifact, captures the server record, and
+launches the app with the artifact in an env var:
+
+```bash
+xcrun devicectl device install app --device <UDID> Jevon.app && \
+xcrun devicectl device process launch --device <UDID> \
+  com.marcelocantos.jevon \
+  --environment-variables PIGEON_PAIRING_ARTIFACT="$(pigeon pair \
+    --relay=https://carrier-pigeon.fly.dev \
+    --instance=$(uuidgen) \
+    --format=text \
+    2>/tmp/pigeon-server.json)"
+# then register the server record with jevonsd:
+jevonsd --add-credential /tmp/pigeon-server.json &
+```
+
+**iOS startup contract:** on launch, check for `PIGEON_PAIRING_ARTIFACT`
+in the process environment. If present, decode via
+`PairingArtifact.unmarshalText`, persist via `KeychainCredentialStore`,
+then proceed with the normal artifact-driven connect path. This makes
+first-run zero-touch for developer deploys; QR scanning is reserved for
+end-user pairing.
+
+**jevonsd contract:** accept either `--add-credential <path>` (one-shot,
+register and exit) or watch a known directory like
+`~/.jevons/credentials.d/` so the deploy script can drop server records
+without restarting the daemon.
 
 ## Migration steps
 
@@ -133,8 +155,10 @@ QR.
     + `BridgeMode.direct` into a single artifact-driven connect. The
     `e2eChannel` field becomes dead code (`ConnectWithArtifact` sets it
     on the conn).
-11. **iOS: app startup** — load credential, attempt connect, fall back
-    to scanner on `ErrPairingExpired` / `ErrNoCredential`.
+11. **iOS: app startup** — first check `ProcessInfo.processInfo.environment["PIGEON_PAIRING_ARTIFACT"]`;
+    if present, decode + save to credential store. Then load credential,
+    attempt connect, fall back to scanner on `ErrPairingExpired` /
+    `ErrNoCredential`.
 12. **End-to-end smoke test** — `jevonsd --pair pippa-dev` on laptop,
     scan on iPad, send a chat message. Force-expire (set TTL=10s),
     confirm re-pair UI fires.
