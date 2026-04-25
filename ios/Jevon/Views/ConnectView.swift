@@ -11,6 +11,14 @@ struct ConnectView: View {
             // Full-screen QR scanner.
             #if !targetEnvironment(simulator)
             QRScannerView(
+                onScanArtifact: { artifact in
+                    // Persist for the next launch — the production
+                    // artifact-driven WKWebView path picks it up. Full
+                    // Connection-level artifact integration is the
+                    // remaining T14.1 work; for now Keychain hand-off
+                    // covers the developer flow.
+                    try? PigeonAccount.shared.save(artifact)
+                },
                 onScan: { host, port in
                     connection.connect(to: host, port: port)
                 },

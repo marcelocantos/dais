@@ -13,8 +13,12 @@ private let logger = Logger(subsystem: "com.marcelocantos.jevons", category: "Je
 enum BridgeMode {
     /// Direct LAN connection via WebSocket (http://host:port).
     case direct(URL)
-    /// Relay connection via tern QUIC (relay host:port + instance ID).
+    /// Relay connection via pigeon QUIC (legacy raw host/port form).
     case relay(host: String, port: UInt16, instanceID: String)
+    /// Artifact-driven relay connection (the production pigeon flow):
+    /// PigeonConn.connect(artifact:) extracts host/port/instance from
+    /// the artifact and derives the matching E2E channel.
+    case relayArtifact(PairingArtifact)
 }
 
 /// Bridges the web UI running in WKWebView to jevond.
@@ -142,6 +146,34 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
             connectChatWebSocket(serverURL)
         case .relay(let host, let port, let instanceID):
             connectChatTern(host: host, port: port, instanceID: instanceID)
+        case .relayArtifact(let artifact):
+            connectChatArtifact(artifact)
+        }
+    }
+
+    /// Connect via a persisted PairingArtifact. Pigeon's
+    /// PigeonConn.connect(artifact:) handles relay dial + channel
+    /// derivation in one call; the returned channel becomes our
+    /// e2eChannel for encrypted send/recv.
+    private func connectChatArtifact(_ artifact: PairingArtifact) {
+        Task {
+            do {
+                let (conn, channel) = try await PigeonConn.connect(artifact: artifact)
+                self.pigeonConn = conn
+                self.e2eChannel = channel
+                logger.info("Chat connected via artifact (peer: \(artifact.record.peerInstanceID))")
+                injectJS("window._jevonTransport._onOpen()")
+                await ternReceiveLoop(conn)
+            } catch let error as PairingError {
+                logger.error("Pairing error: \(error.localizedDescription)")
+                if case .expired = error {
+                    PigeonAccount.shared.reset()
+                }
+                injectError("Pairing artifact rejected: \(error.localizedDescription)")
+            } catch {
+                logger.error("Artifact connect failed: \(error.localizedDescription)")
+                injectError("Relay connection failed: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -267,7 +299,7 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
                     logger.error("Chat send failed: \(error.localizedDescription)")
                 }
             }
-        case .relay:
+        case .relay, .relayArtifact:
             guard let conn = pigeonConn else { return }
             Task {
                 do {
@@ -277,7 +309,7 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
                     }
                     try await conn.send(payload)
                 } catch {
-                    logger.error("Tern send failed: \(error.localizedDescription)")
+                    logger.error("Pigeon send failed: \(error.localizedDescription)")
                 }
             }
         }
@@ -297,8 +329,8 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
         switch mode {
         case .direct(let serverURL):
             startVoiceWebSocket(serverURL)
-        case .relay:
-            // TODO: Route voice through tern StreamChannel.
+        case .relay, .relayArtifact:
+            // TODO: Route voice through pigeon StreamChannel.
             // For now, voice only works in direct mode.
             injectVoiceEvent(["type": "error", "error": "Voice over relay not yet supported. Connect directly to use voice."])
         }

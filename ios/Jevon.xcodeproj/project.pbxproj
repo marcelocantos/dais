@@ -21,6 +21,7 @@
 		20F257D130EB53F10D2B5272 /* ldblib.c in Sources */ = {isa = PBXBuildFile; fileRef = 9801BF014B0D2CA0FAC739F0 /* ldblib.c */; settings = {COMPILER_FLAGS = "-w"; }; };
 		23C1EC0A7F934759C446D00C /* lobject.c in Sources */ = {isa = PBXBuildFile; fileRef = 451F1BA6F92FCE68B784C589 /* lobject.c */; settings = {COMPILER_FLAGS = "-w"; }; };
 		2C70D96EAAB1FD8D92B238F5 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32CCA0A2734DF00E8974EE7A /* ContentView.swift */; };
+		35440D5A0A5E72EB884B9654 /* PigeonAccount.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6189C37BE35BD4EFF8B727C5 /* PigeonAccount.swift */; };
 		35857964C5D622D31C74A538 /* ChevronGestureRecognizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3A689C8FBB03CC626AED792 /* ChevronGestureRecognizer.swift */; };
 		3790B003B6721505C7EE80E5 /* SessionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51D98B6D4193CCFF5327F735 /* SessionService.swift */; };
 		3D70E5D11EA271CC2594F025 /* QRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9F43AD48FCE71F3814FAF86 /* QRScannerView.swift */; };
@@ -95,6 +96,7 @@
 		5D68EF32C0E5224ABE2C895F /* lcode.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = lcode.h; sourceTree = "<group>"; };
 		5D8BB1B93886BD293E2F08F1 /* llex.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = llex.h; sourceTree = "<group>"; };
 		5DF3E0AF96541F84BE854A71 /* VoiceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceManager.swift; sourceTree = "<group>"; };
+		6189C37BE35BD4EFF8B727C5 /* PigeonAccount.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PigeonAccount.swift; sourceTree = "<group>"; };
 		637A7A8665520342F582A6F0 /* lapi.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = lapi.h; sourceTree = "<group>"; };
 		63CF6594FEA5A6E4233EEF8C /* ConnectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectView.swift; sourceTree = "<group>"; };
 		6436BAD32BDBFB01783708D0 /* lparser.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = lparser.c; sourceTree = "<group>"; };
@@ -261,6 +263,7 @@
 				0A15B93E667A3238AF376EBF /* JevonsBridge.swift */,
 				02031B5F0DB6FF33848B61E0 /* LuaRuntime.swift */,
 				55E0CAB8DB4A9B9A3B5E5657 /* ObservableNode.swift */,
+				6189C37BE35BD4EFF8B727C5 /* PigeonAccount.swift */,
 				6D82BA1F6ACCF263F3B3706B /* ServerMessage.swift */,
 				51D98B6D4193CCFF5327F735 /* SessionService.swift */,
 				76A7C913DA907C26DFCB07BE /* SessionSummary.swift */,
@@ -403,6 +406,7 @@
 				5CF79B8276B8D6F63B5A5F31 /* JevonsBridge.swift in Sources */,
 				1B28C489BE42CEB5BA3A3FE5 /* LuaRuntime.swift in Sources */,
 				CEAC9651B1CB35BFA6055464 /* ObservableNode.swift in Sources */,
+				35440D5A0A5E72EB884B9654 /* PigeonAccount.swift in Sources */,
 				3D70E5D11EA271CC2594F025 /* QRScannerView.swift in Sources */,
 				DEE551C75300D39BCDE98E1E /* SafeModeView.swift in Sources */,
 				D29310C94C488F00D029E0C2 /* ServerMessage.swift in Sources */,
