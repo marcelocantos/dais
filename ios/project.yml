@@ -11,16 +11,16 @@ settings:
     DEVELOPMENT_TEAM: WG8QTTL954
 
 packages:
-  Tern:
-    url: https://github.com/marcelocantos/tern
-    from: 0.11.0
+  Pigeon:
+    url: https://github.com/marcelocantos/pigeon
+    from: 0.18.0
 
 targets:
   Jevon:
     type: application
     platform: iOS
     dependencies:
-      - package: Tern
+      - package: Pigeon
     sources:
       - path: Jevon
         excludes: ["Models/E2ECrypto.swift", "Protocol/PairingCeremonyMachine.swift"]
