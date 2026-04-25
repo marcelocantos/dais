@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 last_evaluated: afe8751
 targets:
   T1:
@@ -17,7 +17,7 @@ targets:
     status: converging
     value: 13.0
     cost: 13.0
-    observable: true
+    showcase: true
     acceptance:
     - WebSocket carries only sqlpipe peer messages — no application-level JSON messages
     - Server writes to transcript/sessions/scripts/state tables; changes stream to client automatically
@@ -136,7 +136,7 @@ targets:
     status: converging
     value: 13.0
     cost: 5.0
-    observable: true
+    showcase: true
     acceptance:
     - Speak in browser → Grok transcribes → response spoken aloud
     - Speak on iPad (WKWebView) → same flow via native audio bridge
@@ -203,8 +203,26 @@ targets:
       jevonsd generates persistent device secret; app stores secret in iOS
       Keychain. Subsequent connections use device fingerprint
       (identifierForVendor) + stored secret.
+    depends_on:
+    - T14.1
     origin: manual
     discovered: 2026-03-21
+  T14.1:
+    name: Adopt pigeon's PairingArtifact / PairingHost / CredentialStore primitives
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - jevonsd no longer carries bespoke X25519 key management — internal/server/pairing.go is deleted and serverKP/pubKeyBase64 are removed from Server
+    - Pairing flow uses pigeon.PairingHost.Mint and emits artifact.MarshalText() in the QR (or via cmd/pigeon-pair for out-of-band deploy)
+    - Server-side crypto.PairingRecord set is persisted at ~/.jevons/credentials.json and loaded on startup; incoming relay connections look up the matching record and reject unknown/expired peers
+    - iOS Transport / JevonsBridge use pigeon.connectWithArtifact, with the artifact persisted via KeychainCredentialStore
+    - iOS QR scanner decodes via PairingArtifact.unmarshalText and drops the legacy {id,relay,pub} JSON + jevons:// parsers
+    - App launch tries credential-store load → connectWithArtifact, falls back to QR scanner on ErrPairingExpired / ErrNoCredential
+    - 'End-to-end smoke: pair via QR on iPad → send chat message → force-expire artifact → re-pair UI fires'
+    context: Pigeon master (commit c0688aa, expected v0.19.0) ships PairingArtifact + PairingHost + CredentialStore + ConnectWithArtifact, exactly matching the device-pairing shape jevons needs. This sub-target adopts those primitives, deleting the bespoke key/QR/pairing code in jevonsd and the manual PigeonConn.connect plumbing in the iOS app. See docs/plans/pigeon-migration.md for the full step-by-step. Blocked on pigeon v0.19.0 being tagged.
+    origin: manual
+    discovered: 2026-04-25
   T15:
     name: Protocol state machines are formally verifiable
     status: achieved
@@ -251,7 +269,7 @@ targets:
     status: achieved
     value: 8.0
     cost: 5.0
-    observable: true
+    showcase: true
     actual_cost: 5.0
     acceptance:
     - Tool queries memory DB for recent interactive sessions, groups by repo
@@ -323,7 +341,7 @@ targets:
     status: converging
     value: 13.0
     cost: 8.0
-    observable: true
+    showcase: true
     acceptance:
     - '`Agent` interface in Go with Claude and Grok implementations'
     - Grok agent receives all MCP tools as function definitions
@@ -397,7 +415,7 @@ targets:
     status: converging
     value: 8.0
     cost: 13.0
-    observable: true
+    showcase: true
     acceptance:
     - mTLS is enforced on all jevonsd endpoints (HTTP, WebSocket, MCP)
     - QR-based device provisioning flow works end-to-end (scan QR on phone, device gets a client certificate)
@@ -496,7 +514,7 @@ targets:
     status: achieved
     value: 8.0
     cost: 5.0
-    observable: true
+    showcase: true
     actual_cost: 5.0
     acceptance:
     - '`jwork` MCP tool accepts task text, optional cwd and model'
@@ -551,7 +569,7 @@ targets:
     status: converging
     value: 13.0
     cost: 13.0
-    observable: true
+    showcase: true
     acceptance:
     - Lua runtime embedded in iOS app, running view scripts locally
     - jevonsd pushes script updates over WebSocket; client caches and executes them
