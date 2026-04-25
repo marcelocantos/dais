@@ -11,7 +11,7 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
 	github.com/marcelocantos/claudia v0.2.0
-	github.com/marcelocantos/pigeon v0.13.0
+	github.com/marcelocantos/pigeon v0.18.0
 	github.com/mark3labs/mcp-go v0.44.1
 	github.com/mattn/go-sqlite3 v1.14.37
 	github.com/peterh/liner v1.2.2
