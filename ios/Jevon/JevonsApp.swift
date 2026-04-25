@@ -28,6 +28,7 @@ struct JevonsApp: App {
                     }
                 }
                 .onAppear {
+                    UIApplication.shared.isIdleTimerDisabled = true
                     installChevronGesture()
                 }
                 .sheet(isPresented: $showSafeMode) {
