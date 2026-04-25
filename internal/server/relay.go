@@ -51,6 +51,24 @@ func (s *Server) ConnectRelay(ctx context.Context, relayURL, token, instanceID s
 	instanceID = conn.InstanceID()
 	slog.Info("registered with relay", "instance_id", instanceID)
 
+	// If we have a paired credential, derive the server-side channel
+	// from its PairingRecord. The client side derives the matching
+	// channel from its PairingArtifact in pigeon.ConnectWithArtifact;
+	// info strings are swapped (the client's send is the server's
+	// recv and vice versa).
+	if rec := s.creds.Get(); rec != nil {
+		ch, err := rec.DeriveChannel([]byte("server-to-client"), []byte("client-to-server"))
+		if err != nil {
+			conn.Close()
+			return "", fmt.Errorf("derive channel from credential: %w", err)
+		}
+		conn.SetChannel(ch)
+		conn.SetPairingRecord(rec)
+		slog.Info("relay channel encrypted", "peer", rec.PeerInstanceID)
+	} else {
+		slog.Warn("relay running without credential — traffic will be unencrypted; pair a device with `jevonsd --pair`")
+	}
+
 	// Register as a virtual remote client.
 	s.mu.Lock()
 	s.remoteSeq++

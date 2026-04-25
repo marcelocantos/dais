@@ -6,7 +6,6 @@ package server
 
 import (
 	"context"
-	"crypto/ecdh"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
@@ -77,8 +76,7 @@ type Server struct {
 
 	luaRT          *ui.LuaRuntime
 	lanSrv         *pigeon.LANServer // LAN server for direct connections
-	serverKP       *ecdh.PrivateKey
-	pubKeyBase64   string
+	creds          *CredentialStore
 	openAIKey      string
 	voiceBridge    *VoiceBridge
 	lastScreenshot string
@@ -88,7 +86,8 @@ type Server struct {
 	chatListeners  []chan string
 }
 
-func (s *Server) PubKeyBase64() string { return s.pubKeyBase64 }
+// Credentials returns the server-side pairing credential store.
+func (s *Server) Credentials() *CredentialStore { return s.creds }
 
 // New creates a Server with the given Jevon instance, manager, database, version string,
 // and Lua runtime. The Lua runtime may be nil if script distribution is not yet active.
@@ -100,7 +99,14 @@ func New(jev *jevons.Jevon, mgr *manager.Manager, database *db.DB, version strin
 		version:       version,
 		remotes:       make(map[int]remoteConn),
 		luaRT:         luaRT,
+		creds:         NewCredentialStore(filepath.Join(os.Getenv("HOME"), ".jevons", "credential.json")),
 		chatListeners: make([]chan string, 0),
+	}
+
+	if rec, err := s.creds.Load(); err != nil {
+		slog.Warn("failed to load credential", "path", s.creds.Path(), "err", err)
+	} else if rec != nil {
+		slog.Info("loaded pairing credential", "peer", rec.PeerInstanceID)
 	}
 
 	// Load persisted transcript.

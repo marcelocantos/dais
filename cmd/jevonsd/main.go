@@ -31,6 +31,8 @@ import (
 	"github.com/marcelocantos/jevons/internal/server"
 	"github.com/marcelocantos/jevons/internal/transcript"
 	"github.com/marcelocantos/jevons/internal/ui"
+	"github.com/marcelocantos/pigeon"
+	"github.com/marcelocantos/pigeon/crypto"
 	"github.com/marcelocantos/pigeon/qr"
 )
 
@@ -145,6 +147,8 @@ func main() {
 	enableTLS := flag.Bool("tls", false, "enable mTLS on the HTTP listener (requires client certs after provisioning)")
 	setOpenAIKey := flag.Bool("set-openai-key", false, "prompt for OpenAI API key, store in macOS Keychain, and exit")
 	setXAIKey := flag.Bool("set-xai-key", false, "prompt for xAI API key, store in macOS Keychain, and exit")
+	pairInstance := flag.String("pair", "", "mint a PairingArtifact for the given peer instance ID (requires --relay), print QR + artifact on stdout, and exit")
+	addCredential := flag.String("add-credential", "", "load a server-side PairingRecord from the given JSON file into the credential store, then exit")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	helpAgent := flag.Bool("help-agent", false, "print agent guide and exit")
 	flag.Parse()
@@ -164,6 +168,11 @@ func main() {
 		flag.PrintDefaults()
 		fmt.Println()
 		fmt.Print(cli.AgentGuide)
+		os.Exit(0)
+	}
+
+	if *pairInstance != "" || *addCredential != "" {
+		runOneShot(*pairInstance, *addCredential, *relayURL)
 		os.Exit(0)
 	}
 
@@ -259,11 +268,6 @@ func main() {
 
 	srv := server.New(jev, mgr, database, cli.Version, luaRT)
 	srv.SetCA(ca)
-
-	if err := srv.LoadOrGenerateKeyPair(); err != nil {
-		slog.Error("failed to load key pair", "err", err)
-		os.Exit(1)
-	}
 
 	// Load OpenAI API key from Keychain (fall back to env var).
 	if key, err := loadKeychainKey("openai-api-key"); err == nil && key != "" {
@@ -680,7 +684,7 @@ func main() {
 	slog.Info("jevonsd starting", "addr", listenAddr, "version", cli.Version,
 		"jevons_model", jevsModel, "worker_model", *model)
 
-	// Connect to relay if specified, otherwise print direct QR code.
+	// Connect to relay if specified.
 	if *relayURL != "" {
 		token := *relayToken
 		if token == "" {
@@ -691,40 +695,72 @@ func main() {
 			slog.Error("relay connection failed", "err", err)
 			os.Exit(1)
 		}
-		// Replace localhost with LAN IP so the QR code works for devices.
-		relayWSURL := *relayURL + "/ws/" + instanceID
-		relayWSURL = strings.Replace(relayWSURL, "localhost", qr.LanIP(), 1)
-		relayWSURL = strings.Replace(relayWSURL, "127.0.0.1", qr.LanIP(), 1)
-
-		// Print QR code with new JSON format
-		qrData := map[string]interface{}{
-			"relay": *relayURL,
-			"id":    instanceID,
-			"pub":   srv.PubKeyBase64(),
-		}
-		data, _ := json.Marshal(qrData)
-		qr.Print(os.Stderr, string(data))
-
-		// Write relay URL to a well-known file for programmatic access.
-		relayFile := filepath.Join(os.TempDir(), ".tern-relay")
-		if err := os.WriteFile(relayFile, []byte(relayWSURL+"\n"), 0o644); err != nil {
-			slog.Warn("failed to write relay URL file", "path", relayFile, "err", err)
-		} else {
-			slog.Info("relay URL written", "path", relayFile)
-		}
-	} else {
-		// Print QR code with new JSON format for direct mode
-		qrData := map[string]interface{}{
-			"relay": "",
-			"id":    "",
-			"pub":   srv.PubKeyBase64(),
-		}
-		data, _ := json.Marshal(qrData)
-		qr.Print(os.Stderr, string(data))
+		slog.Info("relay registered", "instance_id", instanceID, "credential_loaded", srv.Credentials().Get() != nil)
+	} else if srv.Credentials().Get() == nil {
+		slog.Info("no credential and no relay configured — pair a device with `jevonsd --pair <instance-id> --relay <url>`")
 	}
 
 	// Block until shutdown signal.
 	<-ctx.Done()
+}
+
+// runOneShot handles --pair and --add-credential flags. Both modes
+// load (or create) the credential store and exit; they do not start
+// the daemon.
+func runOneShot(pairInstance, addCredential, relayURL string) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "cannot determine home directory:", err)
+		os.Exit(1)
+	}
+	store := server.NewCredentialStore(filepath.Join(homeDir, ".jevons", "credential.json"))
+	if _, err := store.Load(); err != nil {
+		fmt.Fprintln(os.Stderr, "load credential:", err)
+		os.Exit(1)
+	}
+
+	if addCredential != "" {
+		data, err := os.ReadFile(addCredential)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "read server record:", err)
+			os.Exit(1)
+		}
+		var rec crypto.PairingRecord
+		if err := json.Unmarshal(data, &rec); err != nil {
+			fmt.Fprintln(os.Stderr, "parse server record:", err)
+			os.Exit(1)
+		}
+		if err := store.Save(&rec); err != nil {
+			fmt.Fprintln(os.Stderr, "save credential:", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "credential saved for peer %s\n", rec.PeerInstanceID)
+		return
+	}
+
+	// --pair mode.
+	if relayURL == "" {
+		fmt.Fprintln(os.Stderr, "--pair requires --relay")
+		os.Exit(2)
+	}
+	host := pigeon.NewPairingHost(relayURL)
+	artifact, serverRec, err := host.Mint(pairInstance)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "mint:", err)
+		os.Exit(1)
+	}
+	if err := store.Save(serverRec); err != nil {
+		fmt.Fprintln(os.Stderr, "save server record:", err)
+		os.Exit(1)
+	}
+	text, err := artifact.MarshalText()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "marshal artifact:", err)
+		os.Exit(1)
+	}
+	qr.Print(os.Stderr, string(text))
+	fmt.Println(string(text))
+	fmt.Fprintf(os.Stderr, "artifact for %s expires %s\n", pairInstance, artifact.ExpiresAt.Format(time.RFC3339))
 }
 
 // keyInstructions maps service names to instructions for obtaining the key.
