@@ -13,7 +13,7 @@ settings:
 packages:
   Pigeon:
     url: https://github.com/marcelocantos/pigeon
-    from: 0.18.0
+    from: 0.19.0
 
 targets:
   Jevon:

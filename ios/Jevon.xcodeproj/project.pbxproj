@@ -641,7 +641,7 @@
 			repositoryURL = "https://github.com/marcelocantos/pigeon";
 			requirement = {
 				kind = upToNextMajorVersion;
-				minimumVersion = 0.18.0;
+				minimumVersion = 0.19.0;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */

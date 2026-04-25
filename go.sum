@@ -83,8 +83,8 @@ github.com/mailru/easyjson v0.7.7 h1:UGYAvKxe3sBsEDzO8ZeWOSlIQfWFlxbzLZe7hwFURr0
 github.com/mailru/easyjson v0.7.7/go.mod h1:xzfreul335JAWq5oZzymOObrkdz5UnU4kGfJJLY9Nlc=
 github.com/marcelocantos/claudia v0.2.0 h1:Fs/hz9AXdm8GJorUzhe+0CaMrmPEQ0iu0a+3AIRzWLU=
 github.com/marcelocantos/claudia v0.2.0/go.mod h1:iDXl9XnI/KHjVvQOUGNE4PDA9ADZGgJb2fo9DE4TrtY=
-github.com/marcelocantos/pigeon v0.18.0 h1:6WDmlBqFlYpNeeW2lVohg6OOVE7FB6NxqQTDrNX/6o0=
-github.com/marcelocantos/pigeon v0.18.0/go.mod h1:qcNuZm+Ub9UwEsKsxvJzH0Dh3VcZ+OuPH4d98lUDDXc=
+github.com/marcelocantos/pigeon v0.19.0 h1:1b2nPeZ7phQYmSeUrrFlqoNc4pnEtSh72Dq2KrVfgiU=
+github.com/marcelocantos/pigeon v0.19.0/go.mod h1:qcNuZm+Ub9UwEsKsxvJzH0Dh3VcZ+OuPH4d98lUDDXc=
 github.com/mark3labs/mcp-go v0.44.1 h1:2PKppYlT9X2fXnE8SNYQLAX4hNjfPB0oNLqQVcN6mE8=
 github.com/mark3labs/mcp-go v0.44.1/go.mod h1:YnJfOL382MIWDx1kMY+2zsRHU/q78dBg9aFb8W6Thdw=
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=
