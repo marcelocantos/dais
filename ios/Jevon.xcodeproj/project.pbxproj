@@ -33,6 +33,7 @@
 		50B56EC5F694529C3756EC8D /* ldo.c in Sources */ = {isa = PBXBuildFile; fileRef = C7EE4F9478910C938DAE8B2B /* ldo.c */; settings = {COMPILER_FLAGS = "-w"; }; };
 		5CF79B8276B8D6F63B5A5F31 /* JevonsBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A15B93E667A3238AF376EBF /* JevonsBridge.swift */; };
 		62E14B425C2079E55B66D620 /* print.c in Sources */ = {isa = PBXBuildFile; fileRef = 773C7AFFDA4FAE963EAAF3C0 /* print.c */; settings = {COMPILER_FLAGS = "-w"; }; };
+		6FB2ADDCB892F65D306F66E6 /* web in Resources */ = {isa = PBXBuildFile; fileRef = FAC75B4CE2DC8D7052A1586E /* web */; };
 		6FEC97BE201D87CE3B850311 /* SessionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF0EF488FC1D2806F1FEFB8B /* SessionListView.swift */; };
 		71916510B2BDB7A1D72BF877 /* SessionSummary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 76A7C913DA907C26DFCB07BE /* SessionSummary.swift */; };
 		786E8DE692F4B5EEACF73105 /* ViewNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9A55D0E81BA40F9048296D3 /* ViewNode.swift */; };
@@ -149,6 +150,7 @@
 		F3AF724780252079F6BBE88F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		F417EA250EEAAEED2FE83616 /* ltablib.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = ltablib.c; sourceTree = "<group>"; };
 		F6ED5B263DF70636623BB458 /* luaconf.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = luaconf.h; sourceTree = "<group>"; };
+		FAC75B4CE2DC8D7052A1586E /* web */ = {isa = PBXFileReference; lastKnownFileType = folder; name = web; path = ../web; sourceTree = SOURCE_ROOT; };
 		FF9E0C501414AAB40986DE5D /* lstate.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = lstate.c; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -278,6 +280,7 @@
 		8E2DFFCDFDF916DA7D983DEE = {
 			isa = PBXGroup;
 			children = (
+				FAC75B4CE2DC8D7052A1586E /* web */,
 				5E92299C332E01DCAB866298 /* dist */,
 				E14BD9EAAD8D2848F9D649F4 /* dist */,
 				65C710033D8677DCAFF86B59 /* Jevon */,
@@ -386,6 +389,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				06C7D59A52416E5EEF9BAE79 /* Assets.xcassets in Resources */,
+				6FB2ADDCB892F65D306F66E6 /* web in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

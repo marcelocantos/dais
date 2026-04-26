@@ -39,6 +39,10 @@ targets:
         compilerFlags: "-w -std=c++23 -DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_PREUPDATE_HOOK"
       - path: Vendor/sqldeep/dist/sqldeep.cpp
         compilerFlags: "-w -std=c++20"
+      - path: ../web
+        name: web
+        type: folder
+        buildPhase: resources
     settings:
       base:
         INFOPLIST_FILE: Jevon/Info.plist
