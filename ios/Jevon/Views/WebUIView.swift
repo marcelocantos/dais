@@ -35,6 +35,12 @@ struct WebUIView: UIViewRepresentable {
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
 
+        // NOTE: programmatic input.focus() in JS does NOT bring up the
+        // iOS keyboard without a prior user gesture. The private
+        // WKPreferences key `keyboardDisplayRequiresUserAction` was
+        // removed in iOS 26 (NSUnknownKeyException on setValue). User
+        // must tap the input to surface the keyboard.
+
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.isOpaque = false
         webView.backgroundColor = .clear
