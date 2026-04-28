@@ -13,27 +13,31 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root, [data-theme="dark"] {
-  --bg: #0c0c0f;
-  --surface: #14141a;
-  --surface-raised: #1c1c24;
-  --surface-high: #24242e;
-  --border: rgba(255,255,255,0.06);
-  --border-focus: rgba(255,255,255,0.15);
-  --text: #d4d4dc;
-  --text-dim: #6e6e7a;
-  --text-muted: #44444e;
-  --accent: #8b7cf6;
-  --accent-dim: rgba(139,124,246,0.15);
-  --user-bg: rgba(139,124,246,0.12);
-  --user-border: rgba(139,124,246,0.25);
-  --green: #34d399;
-  --red: #f87171;
+  /* Red theme — tuned for in-car visibility. Backgrounds are lifted
+     from near-black so panels are distinguishable; text is brighter
+     for contrast at arm's length in daylight. Accent is a saturated
+     red, with red-tinted surfaces and borders to carry the theme. */
+  --bg: #1a0e0e;
+  --surface: #261515;
+  --surface-raised: #311c1c;
+  --surface-high: #3d2424;
+  --border: rgba(255,180,180,0.12);
+  --border-focus: rgba(248,113,113,0.45);
+  --text: #f0e8e8;
+  --text-dim: #b4a0a0;
+  --text-muted: #806868;
+  --accent: #ef4444;
+  --accent-dim: rgba(239,68,68,0.18);
+  --user-bg: rgba(239,68,68,0.16);
+  --user-border: rgba(239,68,68,0.4);
+  --green: #4ade80;
+  --red: #ef4444;
   --amber: #fbbf24;
-  --heading: #fff;
-  --strong: #fff;
-  --dot-on-glow: rgba(52,211,153,0.4);
-  --dot-off-glow: rgba(248,113,113,0.3);
-  --agent-dot-glow: rgba(52,211,153,0.3);
+  --heading: #fff5f5;
+  --strong: #ffffff;
+  --dot-on-glow: rgba(74,222,128,0.5);
+  --dot-off-glow: rgba(239,68,68,0.5);
+  --agent-dot-glow: rgba(74,222,128,0.4);
   --mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
   --sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   --radius: 10px;
