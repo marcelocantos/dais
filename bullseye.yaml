@@ -446,6 +446,33 @@ targets:
     context: Marcelo is migrating existing workloads (e.g. an active crosshair session 4c9ee9f1-25f9-458a-8bb9-44b253df3f4d) into Jevons. Currently jevons_agent_start only spawns fresh processes, so adopting an in-flight session means losing its context. This blocks low-friction migration of existing Claude Code work into the overseer.
     origin: manual
     discovered: 2026-05-14
+  T21:
+    name: Wispr Flow dictation into the Jevons UI produces full sentences
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - Dictating into the empty Jevons UI input via Wispr Flow produces capitalised, punctuated sentences matching its behaviour in the Claude CLI
+    - Behaviour is consistent regardless of whether the field is empty or has draft text
+    context: "Wispr Flow currently outputs lowercase, unpunctuated fragments when dictating into the empty Jevons UI input (\"are you able to track jevons po progress\") but produces full sentences in the Claude CLI (\"Are you able to track Jevons PO progress?\"). \n\nDiagnostic finding: if the Jevons UI input contains ANY sentence-shaped text (even a single full stop), Wispr Flow flips to document mode and produces proper sentences. Empty field → chat-casual; non-empty sentence-shaped field → document. So Wispr Flow reads the focused field's accessibility context and matches its existing style.\n\nThis explains the CLI: terminal scrollback is one text buffer where prior turns (full sentences) form the visible context. The Jevons UI input is a DOM element separated from the message history, so empty-field dictation has no anchor.\n\nLikely fix shapes:\n1. Bridge the accessibility context — `aria-describedby` on the input pointing at the history, or render the input inside the same scrolling region. Native chat-UI pattern.\n2. Pre-seed the input with an invisible/zero-width sentence-shaped string Wispr Flow reads as continuation context. Hacky but trivial.\n\nEarlier hypothesis (single-line input vs. textarea) is NOT the dominant cause; can be evaluated separately for UX reasons but won't fix the dictation issue on its own."
+    origin: manual
+    discovered: 2026-05-14
+  T22:
+    name: Voice traffic flows browser-to-Grok directly, bypassing jevonsd
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - Browser opens its own WebSocket to wss://api.x.ai/v1/realtime
+    - xAI auth works without exposing a long-lived key — either ephemeral-token endpoint on jevonsd that mints short-lived keys, or the subprotocol scheme acceptable for the personal-device deployment
+    - Grok event loop (audio in/out, transcripts, response.done, function calls) handled in JS
+    - send_to_jevons tool calls received by the browser are routed to jevonsd over the existing /ws chat connection
+    - Claude/jevon responses arriving from jevonsd over the chat connection are injected into the browser's Grok session via conversation.item.create + response.create
+    - On the iPad-in-car deployment, voice audio does not transit the home ngrok tunnel — verified by inspecting bandwidth on the home uplink during a voice exchange
+    - Server-side VoiceBridge can be deleted (or kept only as a debug-relay opt-in)
+    context: 'Currently /ws/voice is proxied through jevonsd: browser to jevonsd to Grok via two WebSockets. For the laptop dev path that''s fine — jevonsd is on localhost and the only WAN hop is jevonsd-to-Grok. For the iPad-in-car deployment (the primary target, exposed via ngrok), audio bounces through the home Mac: phone to ngrok to home jevonsd to Grok and back, doubling residential uplink consumption (~64 KB/s × 2 = ~128 KB/s through home ISP per active voice session). Direct path lets the iPad talk to Grok over its own cellular/wifi; home ISP only carries small Claude/jevon control messages. Also reduces latency by avoiding the home network as an intermediate stop and makes voice resilient to home Wi-Fi flakiness. Approach: reimplement claudia/grok in JS (~200 lines: WS open, session config, audio framing, JSON event switch). Add ephemeral-token endpoint on jevonsd (or accept subprotocol-baked key for personal devices). Move send_to_jevons round-tripping to the browser, with the chat WS as the jevon/browser link. Not urgent — laptop dev path works fine via the proxy. Raise once iPad becomes the primary deployment again.'
+    origin: manual
+    discovered: 2026-05-14
   T3:
     name: Test coverage exists for core packages
     status: achieved
