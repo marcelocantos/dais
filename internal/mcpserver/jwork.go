@@ -105,7 +105,7 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		})
 	}
 
-	events, err := task.RunTask(ctx, prompt)
+	events, err := task.Run(ctx, prompt)
 	if err != nil {
 		slog.Error("jwork: dispatch failed", "worker", workerID, "err", err)
 		return mcp.NewToolResultError(fmt.Sprintf("worker dispatch failed: %v", err)), nil

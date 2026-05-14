@@ -96,7 +96,7 @@ func (m *Manager) Create(cfg CreateConfig) (*claudia.Task, error) {
 	})
 	s.SetRawLog(m.rawLogFunc(tmpID))
 
-	events, err := s.RunTask(context.Background(), "Ready.")
+	events, err := s.Run(context.Background(), "Ready.")
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
 	}
@@ -190,7 +190,7 @@ func (m *Manager) List(all bool) []SessionSummary {
 		seen[d.UUID] = true
 		status := claudia.TaskStatusIdle
 		if s, ok := m.sessions[d.UUID]; ok {
-			status = s.TaskStatus()
+			status = s.Status()
 		}
 		score := sessionScore(d.Size, now.Sub(d.ModTime))
 		result = append(result, SessionSummary{
@@ -211,8 +211,8 @@ func (m *Manager) List(all bool) []SessionSummary {
 		}
 		result = append(result, SessionSummary{
 			ID:     id,
-			Name:   s.TaskName(),
-			Status: s.TaskStatus(),
+			Name:   s.Name(),
+			Status: s.Status(),
 			Score:  math.MaxFloat64, // just-created, pin high
 		})
 	}
@@ -253,7 +253,7 @@ func (m *Manager) rawLogFunc(sessionID string) claudia.RawLogFunc {
 func (m *Manager) IsExternallyActive(id string) bool {
 	// If we're managing this session and it's running, it's us — not external.
 	m.mu.RLock()
-	if s, ok := m.sessions[id]; ok && s.TaskStatus() == claudia.TaskStatusRunning {
+	if s, ok := m.sessions[id]; ok && s.Status() == claudia.TaskStatusRunning {
 		m.mu.RUnlock()
 		return false
 	}
@@ -274,7 +274,7 @@ func (m *Manager) Kill(id string) error {
 	delete(m.sessions, id)
 	m.mu.Unlock()
 
-	s.StopTask()
+	s.Stop()
 	slog.Info("session killed", "id", id)
 	return nil
 }

@@ -14,7 +14,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -30,7 +29,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/mcpserver"
 	"github.com/marcelocantos/jevons/internal/server"
 	"github.com/marcelocantos/jevons/internal/transcript"
-	"github.com/marcelocantos/jevons/internal/ui"
+	
 	"github.com/marcelocantos/pigeon"
 	"github.com/marcelocantos/pigeon/crypto"
 	"github.com/marcelocantos/pigeon/qr"
@@ -253,20 +252,7 @@ func main() {
 		}
 	})
 
-	// Set up Lua view runtime.
-	luaViewsDir := filepath.Join(jevDir, "..", "lua", "views")
-	if err := os.MkdirAll(luaViewsDir, 0o755); err != nil {
-		slog.Error("cannot create lua views dir", "err", err)
-		os.Exit(1)
-	}
-	luaRT, err := ui.NewLuaRuntime(luaViewsDir)
-	if err != nil {
-		slog.Error("cannot create lua runtime", "err", err)
-		os.Exit(1)
-	}
-	defer luaRT.Close()
-
-	srv := server.New(jev, mgr, database, cli.Version, luaRT)
+	srv := server.New(jev, mgr, database, cli.Version)
 	srv.SetCA(ca)
 
 	// Load OpenAI API key from Keychain (fall back to env var).
@@ -295,229 +281,6 @@ func main() {
 		slog.Info("no xAI API key — voice bridge disabled (set XAI_API_KEY or store via: security add-generic-password -a jevons -s xai-api-key -w YOUR_KEY)")
 	}
 
-	// Transcript reader for Lua access to Claude session transcripts.
-	transcriptReader := transcript.NewReader(filepath.Join(homeDir, ".claude", "projects"))
-
-	// Timer state — named timers that fire actions through the Lua runtime.
-	var (
-		timersMu sync.Mutex
-		timers   = make(map[string]func()) // name → cancel func
-	)
-	cancelTimer := func(name string) {
-		timersMu.Lock()
-		defer timersMu.Unlock()
-		if cancel, ok := timers[name]; ok {
-			cancel()
-			delete(timers, name)
-		}
-	}
-
-	// File I/O sandbox root.
-	sandboxRoot := filepath.Join(homeDir, ".jevons")
-
-	// validateSandbox ensures a path is under ~/.jevons/.
-	validateSandbox := func(path string) (string, error) {
-		abs, err := filepath.Abs(path)
-		if err != nil {
-			return "", fmt.Errorf("invalid path: %w", err)
-		}
-		// Resolve symlinks to prevent escaping via symlink.
-		real, err := filepath.EvalSymlinks(filepath.Dir(abs))
-		if err != nil {
-			// Dir doesn't exist yet — check the parent chain.
-			real = abs
-		} else {
-			real = filepath.Join(real, filepath.Base(abs))
-		}
-		if !strings.HasPrefix(real, sandboxRoot) {
-			return "", fmt.Errorf("path %q is outside sandbox %q", path, sandboxRoot)
-		}
-		return abs, nil
-	}
-
-	// Register Lua capabilities — Go functions callable from Lua action handlers.
-	luaRT.RegisterCapabilities(ui.Capabilities{
-		JevonsEnqueue: func(text string) {
-			srv.HandleUserMessage(text)
-		},
-		JevonsReset: func() {
-			if err := database.Set("jevons_claude_id", ""); err != nil {
-				slog.Error("failed to reset jevons claude ID", "err", err)
-			}
-		},
-		SessionList: func(all bool) []map[string]any {
-			summaries := mgr.List(all)
-			result := make([]map[string]any, len(summaries))
-			for i, s := range summaries {
-				result[i] = map[string]any{
-					"id":      s.ID,
-					"name":    s.Name,
-					"status":  string(s.Status),
-					"workdir": s.WorkDir,
-					"active":  s.Active,
-				}
-			}
-			return result
-		},
-		SessionKill: func(id string) error {
-			return mgr.Kill(id)
-		},
-		SessionCreate: func(name, workdir, model string) (string, error) {
-			s, err := mgr.Create(manager.CreateConfig{
-				Name:    name,
-				WorkDir: workdir,
-				Model:   model,
-			})
-			if err != nil {
-				return "", err
-			}
-			return s.TaskID(), nil
-		},
-		SessionSend: func(id, text string, wait bool) (string, error) {
-			s := mgr.Get(id)
-			if s == nil {
-				return "", fmt.Errorf("session %q not found", id)
-			}
-			events, err := s.RunTask(context.Background(), text)
-			if err != nil {
-				return "", err
-			}
-			if !wait {
-				go func() {
-					for range events {
-					}
-				}()
-				return "command sent", nil
-			}
-			var result string
-			for ev := range events {
-				if ev.Type == claudia.TaskEventText {
-					result += ev.Content
-				}
-			}
-			if r := s.LastResult(); r != "" {
-				result = r
-			}
-			return result, nil
-		},
-		DBGet: func(key string) string {
-			return database.Get(key)
-		},
-		DBSet: func(key, value string) error {
-			return database.Set(key, value)
-		},
-		PushSessions: func() {
-			srv.PushSessions()
-		},
-		PushScripts: func() {
-			srv.PushScripts()
-		},
-		Broadcast: func(msg map[string]any) {
-			srv.Broadcast(msg)
-		},
-
-		// Transcript access.
-		TranscriptRead: func(sessionID string) ([]map[string]any, error) {
-			return transcriptReader.Read(sessionID)
-		},
-		TranscriptTruncate: func(sessionID string, keepTurns int) error {
-			return transcriptReader.Truncate(sessionID, keepTurns)
-		},
-		TranscriptFork: func(sessionID string, keepTurns int) (string, error) {
-			return transcriptReader.Fork(sessionID, keepTurns)
-		},
-
-		// File I/O (sandboxed to ~/.jevons/).
-		FileRead: func(path string) (string, error) {
-			abs, err := validateSandbox(path)
-			if err != nil {
-				return "", err
-			}
-			data, err := os.ReadFile(abs)
-			if err != nil {
-				return "", err
-			}
-			return string(data), nil
-		},
-		FileWrite: func(path, content string) error {
-			abs, err := validateSandbox(path)
-			if err != nil {
-				return err
-			}
-			if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-				return err
-			}
-			return os.WriteFile(abs, []byte(content), 0o644)
-		},
-		FileList: func(dir string) ([]string, error) {
-			abs, err := validateSandbox(dir)
-			if err != nil {
-				return nil, err
-			}
-			entries, err := os.ReadDir(abs)
-			if err != nil {
-				return nil, err
-			}
-			names := make([]string, len(entries))
-			for i, e := range entries {
-				names[i] = e.Name()
-			}
-			return names, nil
-		},
-
-		// Timers.
-		SetTimeout: func(name string, delayMs int, action string) {
-			cancelTimer(name)
-			timer := time.AfterFunc(time.Duration(delayMs)*time.Millisecond, func() {
-				slog.Debug("timer fired", "name", name, "action", action)
-				timersMu.Lock()
-				delete(timers, name)
-				timersMu.Unlock()
-				srv.HandleAction(action, "")
-			})
-			timersMu.Lock()
-			timers[name] = func() { timer.Stop() }
-			timersMu.Unlock()
-		},
-		SetInterval: func(name string, intervalMs int, action string) {
-			cancelTimer(name)
-			ticker := time.NewTicker(time.Duration(intervalMs) * time.Millisecond)
-			done := make(chan struct{})
-			go func() {
-				for {
-					select {
-					case <-ticker.C:
-						slog.Debug("interval fired", "name", name, "action", action)
-						srv.HandleAction(action, "")
-					case <-done:
-						ticker.Stop()
-						return
-					}
-				}
-			}()
-			timersMu.Lock()
-			timers[name] = func() { close(done) }
-			timersMu.Unlock()
-		},
-		CancelTimer: cancelTimer,
-
-		// Notifications.
-		Notify: func(title, body string) {
-			srv.Broadcast(map[string]any{
-				"type":  "notification",
-				"title": title,
-				"body":  body,
-			})
-		},
-	})
-
-	// pushScripts reloads the Lua runtime and broadcasts scripts (including any draft)
-	// to all connected clients.
-	pushScripts := func() error {
-		srv.PushScripts()
-		return nil
-	}
-
 	// Wire MCP server with Jevons event callback.
 	mcpSrv := mcpserver.New(mgr, *workDir, database, func(workerID, workerName, result string, failed bool) {
 		kind := jevons.EventWorkerCompleted
@@ -529,18 +292,6 @@ func main() {
 			WorkerID:   workerID,
 			WorkerName: workerName,
 			Detail:     result,
-		})
-	}, func() error {
-		if err := luaRT.Reload(); err != nil {
-			return err
-		}
-		srv.PushScripts()
-		return nil
-	}, luaRT, pushScripts, func(code string) {
-		srv.Broadcast(map[string]any{
-			"type":   "control",
-			"action": "exec_lua",
-			"code":   code,
 		})
 	}, func() (string, error) {
 		return srv.RequestScreenshot(10 * time.Second)
@@ -612,7 +363,7 @@ func main() {
 		os.Exit(1)
 	}
 	// Overseer must not use local tools — it delegates everything via MCP.
-	jevonDef.DisallowTools = "Bash,Read,Write,Edit,Glob,Grep,NotebookEdit"
+	jevonDef.DisallowTools = []string{"Bash", "Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit"}
 	registry.Register(*jevonDef)
 	slog.Info("jevon agent", "session", jevonDef.SessionID)
 
@@ -661,7 +412,7 @@ func main() {
 
 	if jevonProc := registry.Get("jevons"); jevonProc != nil {
 		srv.SetProcess(jevonProc)
-		jevonProc.OnEvent(func(ev claudia.Event) {
+		jevonProc.SubscribeEvents(func(ev claudia.Event) {
 			srv.BroadcastChat(string(ev.Raw))
 		})
 

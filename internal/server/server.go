@@ -27,7 +27,7 @@ import (
 	"github.com/marcelocantos/jevons/internal/db"
 	"github.com/marcelocantos/jevons/internal/jevons"
 	"github.com/marcelocantos/jevons/internal/manager"
-	"github.com/marcelocantos/jevons/internal/ui"
+	
 )
 
 // TranscriptEntry is a single turn in the conversation log.
@@ -74,7 +74,6 @@ type Server struct {
 	transcript []TranscriptEntry
 	turnBuf    string // accumulates Jevon text for current turn
 
-	luaRT          *ui.LuaRuntime
 	lanSrv         *pigeon.LANServer // LAN server for direct connections
 	creds          *CredentialStore
 	openAIKey      string
@@ -89,16 +88,14 @@ type Server struct {
 // Credentials returns the server-side pairing credential store.
 func (s *Server) Credentials() *CredentialStore { return s.creds }
 
-// New creates a Server with the given Jevon instance, manager, database, version string,
-// and Lua runtime. The Lua runtime may be nil if script distribution is not yet active.
-func New(jev *jevons.Jevon, mgr *manager.Manager, database *db.DB, version string, luaRT *ui.LuaRuntime) *Server {
+// New creates a Server with the given Jevon instance, manager, database, and version string.
+func New(jev *jevons.Jevon, mgr *manager.Manager, database *db.DB, version string) *Server {
 	s := &Server{
 		jevon:         jev,
 		mgr:           mgr,
 		db:            database,
 		version:       version,
 		remotes:       make(map[int]remoteConn),
-		luaRT:         luaRT,
 		creds:         NewCredentialStore(filepath.Join(os.Getenv("HOME"), ".jevons", "credential.json")),
 		chatListeners: make([]chan string, 0),
 	}
@@ -505,10 +502,10 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"id":          sess.TaskID(),
-		"name":        sess.TaskName(),
-		"status":      sess.TaskStatus(),
-		"workdir":     sess.TaskWorkDir(),
+		"id":          sess.ID(),
+		"name":        sess.Name(),
+		"status":      sess.Status(),
+		"workdir":     sess.WorkDir(),
 		"last_result": sess.LastResult(),
 	})
 }
@@ -565,20 +562,6 @@ func (s *Server) HandleAction(action, value string) {
 
 	// send_message always goes through HandleUserMessage for persistence
 	// and broadcast, regardless of Lua handling.
-	if action == "send_message" {
-		s.HandleUserMessage(value)
-		return
-	}
-
-	// Try Lua handler first.
-	if s.luaRT != nil {
-		if err := s.luaRT.CallAction(action, value); err == nil {
-			return
-		}
-		// If Lua doesn't have handle_action or it errors, fall through to Go.
-	}
-
-	// Go fallback.
 	switch {
 	case action == "send_message":
 		s.HandleUserMessage(value)
@@ -598,15 +581,6 @@ func (s *Server) HandleAction(action, value string) {
 			slog.Warn("kill session failed", "id", sessionID, "err", err)
 		} else {
 			s.PushSessions()
-		}
-
-	case action == "reload_views":
-		if s.luaRT != nil {
-			if err := s.luaRT.Reload(); err != nil {
-				slog.Error("lua reload failed", "err", err)
-			} else {
-				s.PushScripts()
-			}
 		}
 
 	default:
@@ -642,18 +616,6 @@ func (s *Server) handleControl(conn *websocket.Conn, ctx context.Context, action
 			"error":  "sync not available",
 		})
 
-	case "exec_lua":
-		// Forward Lua code to all connected clients for execution.
-		s.Broadcast(map[string]any{
-			"type":   "control",
-			"action": "exec_lua",
-			"code":   value,
-		})
-		respond(map[string]any{
-			"type":   "control",
-			"action": "exec_lua",
-			"status": "sent",
-		})
 
 	case "screenshot":
 		// Forward screenshot request to all connected clients.
@@ -727,25 +689,6 @@ func (s *Server) RequestScreenshot(timeout time.Duration) (string, error) {
 	case <-time.After(timeout):
 		return "", fmt.Errorf("screenshot timeout")
 	}
-}
-
-// PushScripts broadcasts the Lua source to all connected clients for client-side rendering.
-func (s *Server) PushScripts() {
-	if s.luaRT == nil {
-		return
-	}
-	source, err := s.luaRT.Scripts()
-	if err != nil {
-		slog.Error("failed to read lua scripts", "err", err)
-		return
-	}
-	if source == "" {
-		return
-	}
-	s.Broadcast(map[string]any{
-		"type":   "scripts",
-		"source": source,
-	})
 }
 
 // PushSessions fetches the current session list and broadcasts it to all clients.

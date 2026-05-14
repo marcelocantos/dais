@@ -59,7 +59,6 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		agents[i] = agentInfo{
 			Name:    d.Name,
 			WorkDir: d.WorkDir,
-			Parent:  d.Parent,
 			Status:  status,
 		}
 	}
@@ -139,6 +138,15 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 		msg := strings.TrimSpace(string(data))
 		if msg == "" {
+			continue
+		}
+		// Heartbeat ping from the resilient browser transport. Echo
+		// a pong so the watchdog stays quiet; do NOT forward to
+		// Claude (it would be parsed as a chat turn).
+		if msg == `{"type":"ping"}` {
+			writeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			_ = conn.Write(writeCtx, websocket.MessageText, []byte(`{"type":"pong"}`))
+			cancel()
 			continue
 		}
 		if strings.EqualFold(msg, "stop") {

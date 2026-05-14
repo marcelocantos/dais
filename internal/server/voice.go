@@ -115,6 +115,17 @@ func (vb *VoiceBridge) HandleVoiceWS(w http.ResponseWriter, r *http.Request) {
 
 			switch msg.Type {
 			case "stop":
+				// Force Grok to transcribe whatever audio is buffered before
+				// tearing down — trailing silence from push-to-talk releases
+				// is often shorter than server VAD's commit window (🎯T13 PTT).
+				vb.mu.Lock()
+				client := vb.client
+				vb.mu.Unlock()
+				if client != nil {
+					if err := client.Commit(ctx); err != nil {
+						slog.Debug("voice: commit failed", "err", err)
+					}
+				}
 				vb.stopGrokSession()
 			case "inject":
 				vb.mu.Lock()

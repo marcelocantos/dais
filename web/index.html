@@ -179,7 +179,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
     <div id="input-bar">
       <input id="input" placeholder="Talk to Jevons..." autocomplete="off">
       <button id="send" disabled>Send</button>
-      <button id="voice-btn" title="Hold to talk (or click to toggle)">&#127908;</button>
+      <button id="voice-btn" title="Click to toggle. Hold Ctrl to push-to-talk.">&#127908;</button>
     </div>
   </div>
   <div id="activity-pane">
@@ -210,8 +210,8 @@ transport.onOpen = () => {
   input.value = v;
 };
 transport.onClose = () => {
+  // Transport handles reconnect (backoff + version check) internally.
   dot.className = 'dot off'; sTxt.textContent = 'reconnecting'; sendBtn.disabled = true;
-  setTimeout(() => transport.connect(), 2000);
 };
 transport.onMessage = m => handle(m);
 transport.onError = msg => console.error('transport error:', msg);
@@ -547,6 +547,31 @@ voiceBtn.addEventListener('click', () => {
   if (voiceActive) stopVoice(); else startVoice();
 });
 
+// Push-to-talk via Ctrl. Hold Control to engage voice, release to stop.
+// If any other key is pressed while Ctrl is down, treat it as a Ctrl+X
+// shortcut and cancel voice (so Ctrl+C / Ctrl+R / etc. still work).
+let pttActive = false;
+window.addEventListener('keydown', e => {
+  if (e.repeat) return;
+  if (e.key === 'Control') {
+    if (!voiceActive) { startVoice(); pttActive = true; }
+  } else if (pttActive && (e.ctrlKey || e.metaKey)) {
+    // User started a Ctrl-chord — back out of voice.
+    if (voiceActive) stopVoice();
+    pttActive = false;
+  }
+});
+window.addEventListener('keyup', e => {
+  if (e.key === 'Control' && pttActive) {
+    stopVoice();
+    pttActive = false;
+  }
+});
+// Tab-switch / focus loss while holding: drop voice to avoid orphaning.
+window.addEventListener('blur', () => {
+  if (pttActive) { stopVoice(); pttActive = false; }
+});
+
 function startVoice() {
   voiceBtn.classList.add('connecting');
   voiceActive = true;
@@ -654,12 +679,38 @@ transport.onVoiceEvent = msg => {
   }
 };
 
-// Hot reload.
+// Hot reload + server-restart detection. The /ws/reload socket
+// signals dev-time file changes ("reload" message). If the socket
+// drops and a reconnect succeeds, the server was restarted —
+// reload the page so fresh bundled assets are fetched.
 (function hotReload() {
-  const rh = location.hostname === 'localhost' ? '127.0.0.1:'+location.port : location.host;
-  const rws = new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+rh+'/ws/reload');
-  rws.onmessage = () => { sessionStorage.setItem('jevons-input', input.value); location.reload(); };
-  rws.onclose = () => setTimeout(hotReload, 2000);
+  const delays = [50, 100, 200, 400, 800, 1600, 3200, 5000];
+  let attempt = 0;
+  let wasOpen = false;
+  const open = () => {
+    const rh = location.hostname === 'localhost' ? '127.0.0.1:'+location.port : location.host;
+    const rws = new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+rh+'/ws/reload');
+    rws.onopen = () => {
+      if (wasOpen) {
+        // Server came back after going away — page assets may be stale.
+        sessionStorage.setItem('jevons-input', input.value);
+        location.reload();
+        return;
+      }
+      wasOpen = true;
+      attempt = 0;
+    };
+    rws.onmessage = () => {
+      sessionStorage.setItem('jevons-input', input.value);
+      location.reload();
+    };
+    rws.onclose = () => {
+      const delay = delays[Math.min(attempt, delays.length - 1)];
+      attempt++;
+      setTimeout(open, delay);
+    };
+  };
+  open();
 })();
 </script>
 </body>

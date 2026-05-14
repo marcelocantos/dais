@@ -109,7 +109,7 @@ func (j *Jevon) Run(ctx context.Context) {
 	j.mu.Unlock()
 
 	// Handle events from the JSONL.
-	proc.OnEvent(func(ev claudia.Event) {
+	proc.SubscribeEvents(func(ev claudia.Event) {
 		j.mu.Lock()
 		onOutput := j.onOutput
 		onRawLog := j.onRawLog

@@ -95,17 +95,6 @@ func (s *Server) ConnectRelay(ctx context.Context, relayURL, token, instanceID s
 		})
 	}
 
-	if s.luaRT != nil {
-		if source, err := s.luaRT.Scripts(); err != nil {
-			slog.Error("relay: failed to read lua scripts", "err", err)
-		} else if source != "" {
-			s.sendJSON(ctx, conn, map[string]any{
-				"type":   "scripts",
-				"source": source,
-			})
-		}
-	}
-
 	// Read loop: process messages from the relay.
 	go func() {
 		defer func() {

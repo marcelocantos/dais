@@ -38,10 +38,24 @@ func (ds *DevServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ws/reload", ds.handleReload)
 
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		noCache(w)
 		http.ServeFile(w, r, filepath.Join(ds.dir, "index.html"))
 	})
-	// Serve static assets under /scripts/.
-	mux.Handle("GET /scripts/", http.StripPrefix("/scripts/", http.FileServer(http.Dir(filepath.Join(ds.dir, "scripts")))))
+	// Serve static assets under /scripts/. no-cache on every response so a
+	// jevonsd restart with new assets is picked up by the next page load
+	// instead of being served stale from the browser cache.
+	scripts := http.StripPrefix("/scripts/",
+		http.FileServer(http.Dir(filepath.Join(ds.dir, "scripts"))))
+	mux.Handle("GET /scripts/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		noCache(w)
+		scripts.ServeHTTP(w, r)
+	}))
+}
+
+func noCache(w http.ResponseWriter) {
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
 }
 
 // Watch starts watching the directory for changes and triggers reloads.
