@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Jevons</title>
+<title>Jevons — Chat</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F916;</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm/lib/xterm.min.js"></script>
@@ -110,9 +110,15 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg.jevons a { color: var(--accent); text-decoration: none; }
 .msg.jevons a:hover { text-decoration: underline; }
 
+/* Visually hidden but accessible to screen readers and STT tools
+   that read surrounding context to infer dictation style. */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
 /* Input bar */
-#input-bar { display: flex; gap: 10px; padding: 16px 20px calc(16px + env(safe-area-inset-bottom)) 20px; background: var(--surface); border-top: 1px solid var(--border); }
-#input { flex: 1; padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 14px; font-family: var(--sans); outline: none; transition: border-color 0.15s; }
+#input-bar { display: flex; gap: 10px; align-items: flex-end; padding: 16px 20px calc(16px + env(safe-area-inset-bottom)) 20px; background: var(--surface); border-top: 1px solid var(--border); }
+/* Textarea (not <input>) so Wispr Flow and other STT tools detect a
+   document-style input and produce full punctuated sentences. */
+#input { flex: 1; padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 14px; font-family: var(--sans); outline: none; transition: border-color 0.15s; resize: none; line-height: 1.45; min-height: calc(1.45em + 22px); max-height: 40vh; overflow-y: auto; }
 #input::placeholder { color: var(--text-muted); }
 #input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
 #send { padding: 11px 22px; border-radius: 8px; border: none; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; font-family: var(--sans); cursor: pointer; letter-spacing: 0.02em; transition: opacity 0.15s; }
@@ -177,9 +183,18 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   <div id="chat-pane">
     <div id="messages"></div>
     <div id="input-bar">
-      <input id="input" placeholder="Talk to Jevons..." autocomplete="off">
-      <button id="send" disabled>Send</button>
-      <button id="voice-btn" title="Click to toggle. Hold Ctrl to push-to-talk.">&#127908;</button>
+      <label for="input" class="sr-only">Compose a message for Jevons.</label>
+      <textarea id="input" name="prompt" rows="1"
+                placeholder="Write a message to Jevons. Enter to send, Shift-Enter for a new line."
+                aria-label="Compose a message for Jevons"
+                aria-multiline="true"
+                aria-describedby="input-hint"
+                autocomplete="off"
+                spellcheck="true"
+                autocapitalize="sentences"></textarea>
+      <span id="input-hint" class="sr-only">Type a prompt for the Jevons assistant. Use full sentences with punctuation.</span>
+      <button id="send" disabled aria-label="Send message">Send</button>
+      <button id="voice-btn" aria-label="Voice input" title="Click to toggle. Hold Ctrl to push-to-talk.">&#127908;</button>
     </div>
   </div>
   <div id="activity-pane">
@@ -406,10 +421,22 @@ function send() {
   if (!t) return;
   transport.send(t);
   input.value = '';
+  autoGrow();
 }
 
-input.addEventListener('keydown', e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();} });
+// Auto-grow the textarea: reset to one row, then expand to fit content
+// (capped by CSS max-height with internal scroll once that's reached).
+function autoGrow() {
+  input.style.height = 'auto';
+  input.style.height = input.scrollHeight + 'px';
+}
+
+// Enter submits, Shift-Enter inserts a newline.
+input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+input.addEventListener('input', autoGrow);
 sendBtn.addEventListener('click', send);
+
+autoGrow();
 input.focus();
 connect();
 
