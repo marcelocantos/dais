@@ -22,9 +22,8 @@ import (
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/auth"
 	"github.com/marcelocantos/jevons/internal/cli"
-	"github.com/marcelocantos/jevons/internal/db"
+	
 	"github.com/marcelocantos/jevons/internal/discovery"
-	"github.com/marcelocantos/jevons/internal/jevons"
 	"github.com/marcelocantos/jevons/internal/manager"
 	"github.com/marcelocantos/jevons/internal/mcpserver"
 	"github.com/marcelocantos/jevons/internal/server"
@@ -141,7 +140,6 @@ func main() {
 	relayInstanceID := flag.String("instance-id", "", "persistent relay instance ID (enables reconnect without re-pairing)")
 	workDir := flag.String("workdir", ".", "default working directory for worker sessions")
 	model := flag.String("model", "", "default model for worker sessions")
-	jevonsModel := flag.String("jevons-model", "", "model for Jevonss (default: same as --model)")
 	debug := flag.Bool("debug", false, "enable debug logging")
 	enableTLS := flag.Bool("tls", false, "enable mTLS on the HTTP listener (requires client certs after provisioning)")
 	setOpenAIKey := flag.Bool("set-openai-key", false, "prompt for OpenAI API key, store in macOS Keychain, and exit")
@@ -183,12 +181,6 @@ func main() {
 		Level: logLevel,
 	})))
 
-	// Resolve Jevons model.
-	jevsModel := *jevonsModel
-	if jevsModel == "" {
-		jevsModel = *model
-	}
-
 	// Set up Jevons workdir with CLAUDE.md.
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -221,15 +213,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Open database.
-	dbPath := filepath.Join(homeDir, ".jevons", "jevons.db")
-	database, err := db.Open(dbPath)
-	if err != nil {
-		slog.Error("cannot open database", "path", dbPath, "err", err)
-		os.Exit(1)
-	}
-	defer database.Close()
-
 	// Initialize CA for mTLS device provisioning.
 	ca, err := auth.NewCA(filepath.Join(homeDir, ".jevons"))
 	if err != nil {
@@ -239,20 +222,9 @@ func main() {
 
 	// Create components.
 	scanner := discovery.NewScanner(filepath.Join(homeDir, ".claude", "projects"))
-	mgr := manager.New(*model, *workDir, database, scanner)
+	mgr := manager.New(*model, *workDir, scanner)
 
-	jev := jevons.New(jevons.Config{
-		WorkDir:  jevDir,
-		Model:    jevsModel,
-		ClaudeID: database.Get("jevons_claude_id"),
-	})
-	jev.SetClaudeIDCallback(func(id string) {
-		if err := database.Set("jevons_claude_id", id); err != nil {
-			slog.Error("failed to persist jevons claude ID", "err", err)
-		}
-	})
-
-	srv := server.New(jev, mgr, database, cli.Version)
+	srv := server.New(mgr, cli.Version)
 	srv.SetCA(ca)
 
 	// Load OpenAI API key from Keychain (fall back to env var).
@@ -281,18 +253,23 @@ func main() {
 		slog.Info("no xAI API key — voice bridge disabled (set XAI_API_KEY or store via: security add-generic-password -a jevons -s xai-api-key -w YOUR_KEY)")
 	}
 
-	// Wire MCP server with Jevons event callback.
-	mcpSrv := mcpserver.New(mgr, *workDir, database, func(workerID, workerName, result string, failed bool) {
-		kind := jevons.EventWorkerCompleted
-		if failed {
-			kind = jevons.EventWorkerFailed
+	// Worker completion events are delivered to Jevon's persistent
+	// claude process by sending a structured message via the registry
+	// agent's PTY (wired below in SetNotify). The registry itself is
+	// constructed further down once the server's MCP socket exists.
+	var (
+		notifyJevon func(text string)
+		registry    *claudia.Registry
+	)
+	mcpSrv := mcpserver.New(mgr, *workDir, func(workerID, workerName, result string, failed bool) {
+		if notifyJevon == nil {
+			return
 		}
-		jev.Enqueue(jevons.Event{
-			Kind:       kind,
-			WorkerID:   workerID,
-			WorkerName: workerName,
-			Detail:     result,
-		})
+		verb := "completed"
+		if failed {
+			verb = "failed"
+		}
+		notifyJevon(fmt.Sprintf("[worker %s (%s) %s]\n%s", workerName, workerID, verb, result))
 	}, func() (string, error) {
 		return srv.RequestScreenshot(10 * time.Second)
 	}, &mcpserver.TranscriptOps{
@@ -304,11 +281,11 @@ func main() {
 			tr := transcript.NewReader(filepath.Join(homeDir, ".claude", "projects"))
 			return tr.Truncate(sessionID, keepTurns)
 		},
-		ResetID: func() {
-			database.Set("jevons_claude_id", "")
-		},
 		GetID: func() string {
-			return database.Get("jevons_claude_id")
+			if proc := registry.Get("jevons"); proc != nil {
+				return proc.SessionID()
+			}
+			return ""
 		},
 	})
 
@@ -338,15 +315,15 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	// Start Jevons event loop (legacy — manages its own Claude process).
-	go jev.Run(ctx)
-
 	// Agent registry — manages persistent Claude processes.
 	registryPath := filepath.Join(homeDir, ".jevons", "agents.json")
-	registry, err := claudia.NewRegistry(registryPath)
-	if err != nil {
-		slog.Error("agent registry failed", "err", err)
-		os.Exit(1)
+	{
+		r, err := claudia.NewRegistry(registryPath)
+		if err != nil {
+			slog.Error("agent registry failed", "err", err)
+			os.Exit(1)
+		}
+		registry = r
 	}
 
 	// Wire registry and scanner into MCP server.
@@ -412,16 +389,23 @@ func main() {
 
 	if jevonProc := registry.Get("jevons"); jevonProc != nil {
 		srv.SetProcess(jevonProc)
+		// Subscribe to Jevon's event stream:
+		// - forward raw JSONL to chat WS clients;
+		// - accumulate assistant turn text + emit thinking/idle status;
+		// - inject completed turns into the Grok voice bridge for TTS.
 		jevonProc.SubscribeEvents(func(ev claudia.Event) {
 			srv.BroadcastChat(string(ev.Raw))
+			srv.HandleAgentEvent(ev)
 		})
 
-		// Wire agent response notifications back into Jevon's PTY.
-		mcpSrv.SetNotify(func(text string) {
+		// Wire MCP worker-completion + agent-reply notifications into Jevon.
+		send := func(text string) {
 			if err := jevonProc.Send(text); err != nil {
 				slog.Error("notify jevon failed", "err", err)
 			}
-		})
+		}
+		notifyJevon = send
+		mcpSrv.SetNotify(send)
 	}
 
 	// Graceful shutdown on signal.
@@ -433,7 +417,7 @@ func main() {
 	}()
 
 	slog.Info("jevonsd starting", "addr", listenAddr, "version", cli.Version,
-		"jevons_model", jevsModel, "worker_model", *model)
+		"worker_model", *model)
 
 	// Connect to relay if specified.
 	if *relayURL != "" {

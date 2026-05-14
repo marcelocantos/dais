@@ -83,17 +83,8 @@ func (s *Server) ConnectRelay(ctx context.Context, relayURL, token, instanceID s
 		"home":    os.Getenv("HOME"),
 	})
 
-	s.mu.RLock()
-	hist := make([]TranscriptEntry, len(s.transcript))
-	copy(hist, s.transcript)
-	s.mu.RUnlock()
-
-	if len(hist) > 0 {
-		s.sendJSON(ctx, conn, map[string]any{
-			"type":    "history",
-			"entries": hist,
-		})
-	}
+	// History is now served from Claude's JSONL session file by /ws/chat
+	// (sendHistory). The relay path does not replay history.
 
 	// Read loop: process messages from the relay.
 	go func() {

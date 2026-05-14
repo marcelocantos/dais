@@ -13,7 +13,6 @@ require (
 	github.com/marcelocantos/claudia v0.11.0
 	github.com/marcelocantos/pigeon v0.19.0
 	github.com/mark3labs/mcp-go v0.44.1
-	github.com/mattn/go-sqlite3 v1.14.37
 	github.com/peterh/liner v1.2.2
 	golang.org/x/term v0.41.0
 )

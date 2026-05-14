@@ -9,7 +9,6 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/marcelocantos/claudia/grok"
-	"github.com/marcelocantos/jevons/internal/jevons"
 )
 
 // VoiceBridge manages the Grok Realtime session and bridges audio
@@ -269,10 +268,7 @@ conversationally for the user. Be concise and natural.`,
 			// Send to jevon asynchronously. The response will be
 			// injected back into the Grok session when it arrives
 			// (via the OnJevonResponse callback wired in main.go).
-			vb.srv.jevon.Enqueue(jevons.Event{
-				Kind: jevons.EventUserMessage,
-				Text: params.Message,
-			})
+			vb.srv.HandleUserMessage(params.Message)
 
 			return `{"status":"sent","note":"The request has been sent to the agent system. The response will arrive shortly — I'll read it to you when it does."}`, nil
 		},

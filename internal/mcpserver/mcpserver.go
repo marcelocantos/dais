@@ -17,7 +17,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/marcelocantos/claudia"
-	"github.com/marcelocantos/jevons/internal/db"
+	
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/manager"
 	
@@ -33,8 +33,7 @@ type ScreenshotFunc func() (string, error)
 type TranscriptOps struct {
 	Read     func(sessionID string) ([]map[string]any, error)
 	Truncate func(sessionID string, keepTurns int) error
-	ResetID  func()                    // clear the jevon claude session ID
-	GetID    func() string             // get the current jevon claude session ID
+	GetID    func() string // current Jevon claude session ID (from claudia registry)
 }
 
 // Server wraps an MCP server that provides worker management tools.
@@ -46,7 +45,7 @@ type Server struct {
 	onDone       EventCallback
 	screenshot   ScreenshotFunc
 	transcript   *TranscriptOps
-	db           *db.DB
+
 	mcpSrv       *server.MCPServer
 	transport    *server.StreamableHTTPServer
 
@@ -56,11 +55,10 @@ type Server struct {
 
 // New creates an MCP server with jevon tools wired to the given manager.
 // transcript may be nil if transcript ops are not available.
-func New(mgr *manager.Manager, workerWD string, database *db.DB, onDone EventCallback, screenshot ScreenshotFunc, transcript *TranscriptOps) *Server {
+func New(mgr *manager.Manager, workerWD string, onDone EventCallback, screenshot ScreenshotFunc, transcript *TranscriptOps) *Server {
 	s := &Server{
 		mgr:         mgr,
 		workerWD:    workerWD,
-		db:          database,
 		onDone:      onDone,
 		screenshot:  screenshot,
 		transcript:  transcript,
@@ -362,8 +360,7 @@ func (s *Server) handleTranscriptRewind(_ context.Context, req mcp.CallToolReque
 	}
 
 	if keepTurns == 0 {
-		s.transcript.ResetID()
-		return mcp.NewToolResultText("Session reset. Next message will start a fresh conversation."), nil
+		return mcp.NewToolResultText("Truncated session to zero turns. Restart the Jevon agent to begin a fresh conversation."), nil
 	}
 
 	return mcp.NewToolResultText(fmt.Sprintf("Rewound to %d turns. The truncated context will be used on the next message.", keepTurns)), nil

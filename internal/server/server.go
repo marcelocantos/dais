@@ -24,18 +24,10 @@ import (
 	"github.com/coder/websocket"
 	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/jevons/internal/auth"
-	"github.com/marcelocantos/jevons/internal/db"
-	"github.com/marcelocantos/jevons/internal/jevons"
+	
 	"github.com/marcelocantos/jevons/internal/manager"
 	
 )
-
-// TranscriptEntry is a single turn in the conversation log.
-type TranscriptEntry struct {
-	Role      string    `json:"role"` // "user" or "jevons"
-	Text      string    `json:"text"`
-	Timestamp time.Time `json:"timestamp"`
-}
 
 // remoteWriter abstracts over WebSocket and tern relay connections.
 type remoteWriter interface {
@@ -62,17 +54,15 @@ type remoteConn struct {
 
 // Server is the daisd HTTP/WebSocket server.
 type Server struct {
-	jevon   *jevons.Jevon
 	mgr     *manager.Manager
-	db      *db.DB
 	version string
 	ca      *auth.CA
 
-	mu         sync.RWMutex
-	remoteSeq  int
-	remotes    map[int]remoteConn
-	transcript []TranscriptEntry
-	turnBuf    string // accumulates Jevon text for current turn
+	mu        sync.RWMutex
+	remoteSeq int
+	remotes   map[int]remoteConn
+	turnBuf   string // accumulates Jevon text for current turn
+	waiting   bool   // true while awaiting a response from Jevon
 
 	lanSrv         *pigeon.LANServer // LAN server for direct connections
 	creds          *CredentialStore
@@ -88,12 +78,10 @@ type Server struct {
 // Credentials returns the server-side pairing credential store.
 func (s *Server) Credentials() *CredentialStore { return s.creds }
 
-// New creates a Server with the given Jevon instance, manager, database, and version string.
-func New(jev *jevons.Jevon, mgr *manager.Manager, database *db.DB, version string) *Server {
+// New creates a Server with the given manager and version string.
+func New(mgr *manager.Manager, version string) *Server {
 	s := &Server{
-		jevon:         jev,
 		mgr:           mgr,
-		db:            database,
 		version:       version,
 		remotes:       make(map[int]remoteConn),
 		creds:         NewCredentialStore(filepath.Join(os.Getenv("HOME"), ".jevons", "credential.json")),
@@ -106,71 +94,40 @@ func New(jev *jevons.Jevon, mgr *manager.Manager, database *db.DB, version strin
 		slog.Info("loaded pairing credential", "peer", rec.PeerInstanceID)
 	}
 
-	// Load persisted transcript.
-	if entries, err := database.LoadTranscript(); err != nil {
-		slog.Error("failed to load transcript", "err", err)
-	} else {
-		for _, e := range entries {
-			s.transcript = append(s.transcript, TranscriptEntry{
-				Role:      e.Role,
-				Text:      e.Text,
-				Timestamp: e.CreatedAt,
-			})
+	return s
+}
+
+// HandleAgentEvent processes a JSONL event from the Jevon agent —
+// accumulates assistant text into the current turn buffer, emits
+// thinking/idle status to clients, and injects completed turns into
+// the Grok voice bridge for TTS. Wired via Agent.SubscribeEvents in
+// the daemon entry point.
+func (s *Server) HandleAgentEvent(ev claudia.Event) {
+	switch ev.Type {
+	case "assistant":
+		if ev.Text == "" {
+			return
 		}
-		if len(s.transcript) > 0 {
-			slog.Info("loaded transcript from database", "entries", len(s.transcript))
+		s.mu.Lock()
+		s.turnBuf += ev.Text
+		s.mu.Unlock()
+		s.Broadcast(map[string]any{"type": "text", "content": ev.Text})
+
+	case "system":
+		s.mu.Lock()
+		wasWaiting := s.waiting
+		turnText := s.turnBuf
+		s.turnBuf = ""
+		s.waiting = false
+		s.mu.Unlock()
+		if !wasWaiting {
+			return
+		}
+		s.Broadcast(map[string]any{"type": "status", "state": "idle"})
+		if turnText != "" && s.voiceBridge != nil {
+			s.voiceBridge.InjectResponse(turnText)
 		}
 	}
-
-	// Wire Jevon callbacks once — they broadcast to all connected clients.
-	jev.SetRawLog(func(line []byte) {
-		if err := s.db.AppendRawLog("jevons", string(line)); err != nil {
-			slog.Error("failed to persist raw log", "err", err)
-		}
-	})
-	jev.SetOutput(func(text string) {
-		s.mu.Lock()
-		s.turnBuf += text
-		s.mu.Unlock()
-
-		s.Broadcast(map[string]any{
-			"type":    "text",
-			"content": text,
-		})
-	})
-	jev.SetStatus(func(state string) {
-		if state == "idle" {
-			s.mu.Lock()
-			turnText := s.turnBuf
-			if turnText != "" {
-				s.transcript = append(s.transcript, TranscriptEntry{
-					Role:      "jevons",
-					Text:      turnText,
-					Timestamp: time.Now(),
-				})
-				s.turnBuf = ""
-			}
-			s.mu.Unlock()
-
-			if turnText != "" {
-				if err := s.db.AppendTranscript("jevons", turnText); err != nil {
-					slog.Error("failed to persist jevons turn", "err", err)
-				}
-
-				// If voice bridge is active, inject the response for TTS.
-				if s.voiceBridge != nil {
-					s.voiceBridge.InjectResponse(turnText)
-				}
-			}
-		}
-
-		s.Broadcast(map[string]any{
-			"type":  "status",
-			"state": state,
-		})
-	})
-
-	return s
 }
 
 // BroadcastBinary sends a binary WebSocket message to all connected clients.
@@ -401,22 +358,14 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 	}()
 
-	t0 := time.Now()
 	slog.Info("remote connected", "clients", len(s.remotes))
 
-	// Send init + history.
-	s.mu.RLock()
-	hist := make([]TranscriptEntry, len(s.transcript))
-	copy(hist, s.transcript)
-	s.mu.RUnlock()
-	slog.Info("history gathered", "entries", len(hist), "elapsed", time.Since(t0))
-
+	// Send init. History is no longer carried in-memory — Claude's
+	// JSONL session file at proc.JSONLPath() is the canonical record.
 	s.writeJSON(conn, ctx, map[string]any{
 		"type":    "init",
 		"version": s.version,
-		"history": hist,
 	})
-	slog.Info("init sent", "elapsed", time.Since(t0))
 
 	// Read loop: process messages from remote.
 	for {
@@ -528,29 +477,26 @@ func (s *Server) HandleUserMessage(text string) {
 		return
 	}
 
-	s.mu.Lock()
-	now := time.Now()
-	s.transcript = append(s.transcript, TranscriptEntry{
-		Role:      "user",
-		Text:      text,
-		Timestamp: now,
-	})
-	s.mu.Unlock()
-
-	if err := s.db.AppendTranscript("user", text); err != nil {
-		slog.Error("failed to persist user message", "err", err)
-	}
-
 	s.Broadcast(map[string]any{
 		"type":      "user_message",
 		"text":      text,
-		"timestamp": now,
+		"timestamp": time.Now(),
 	})
 
-	s.jevon.Enqueue(jevons.Event{
-		Kind: jevons.EventUserMessage,
-		Text: text,
-	})
+	s.mu.RLock()
+	proc := s.proc
+	s.mu.RUnlock()
+	if proc == nil {
+		slog.Warn("jevons: message received before claude started")
+		return
+	}
+	s.mu.Lock()
+	s.waiting = true
+	s.mu.Unlock()
+	s.Broadcast(map[string]any{"type": "status", "state": "thinking"})
+	if err := proc.Send(text); err != nil {
+		slog.Error("jevons: send failed", "err", err)
+	}
 }
 
 // HandleAction processes a UI action from a remote client or a timer callback.

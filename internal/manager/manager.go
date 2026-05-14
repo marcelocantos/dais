@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
-	"github.com/marcelocantos/jevons/internal/db"
+	
 	"github.com/marcelocantos/jevons/internal/discovery"
 )
 
@@ -51,7 +51,7 @@ type CreateConfig struct {
 type Manager struct {
 	defaultModel string
 	defaultDir   string
-	db           *db.DB
+
 	scanner      *discovery.Scanner
 
 	mu       sync.RWMutex
@@ -59,11 +59,10 @@ type Manager struct {
 }
 
 // New creates a Manager with default configuration.
-func New(defaultModel, defaultDir string, database *db.DB, scanner *discovery.Scanner) *Manager {
+func New(defaultModel, defaultDir string, scanner *discovery.Scanner) *Manager {
 	return &Manager{
 		defaultModel: defaultModel,
 		defaultDir:   defaultDir,
-		db:           database,
 		scanner:      scanner,
 		sessions:     make(map[string]*claudia.Task),
 	}
@@ -240,12 +239,10 @@ func sessionScore(size int64, age time.Duration) float64 {
 	return math.Log(float64(size)) * math.Exp(-decayLambda*age.Seconds())
 }
 
-func (m *Manager) rawLogFunc(sessionID string) claudia.RawLogFunc {
-	return func(line []byte) {
-		if err := m.db.AppendRawLog(sessionID, string(line)); err != nil {
-			slog.Error("failed to persist raw log", "session", sessionID, "err", err)
-		}
-	}
+func (m *Manager) rawLogFunc(_ string) claudia.RawLogFunc {
+	// Raw log persistence to a SQLite table is gone — Claude's JSONL
+	// session file at the task's JSONLPath is the canonical record.
+	return nil
 }
 
 // IsExternallyActive checks whether a session's JSONL file is currently
