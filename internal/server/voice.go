@@ -51,12 +51,45 @@ func (vb *VoiceBridge) HandleVoiceWS(w http.ResponseWriter, r *http.Request) {
 
 	conn.SetReadLimit(1 << 20) // 1 MB
 
+	// The browser's context cancels the moment the request handler returns
+	// (i.e. the WS is closed). Grok needs a longer-lived context so we can
+	// run a final Commit on PTT release before tearing down.
+	grokCtx, grokCancel := context.WithCancel(context.Background())
+	defer grokCancel()
+
 	ctx := r.Context()
 
 	vb.mu.Lock()
+	// Defensive: a previous session may have leaked (Grok died but the
+	// bridge never cleared the pointer). Tear it down before opening a new one.
+	stale := vb.client
+	vb.client = nil
 	vb.voiceWS = conn
 	vb.voiceCtx = ctx
+	vb.audioLogged = false
 	vb.mu.Unlock()
+	if stale != nil {
+		_ = stale.Close()
+	}
+
+	// Per-connection cleanup: best-effort commit so trailing audio gets
+	// transcribed even if the client closed without an explicit stop,
+	// then close the Grok session. Always clears vb.client so the next
+	// client connection starts from a clean slate.
+	defer func() {
+		vb.mu.Lock()
+		if vb.voiceWS == conn {
+			vb.voiceWS = nil
+		}
+		client := vb.client
+		vb.client = nil
+		vb.mu.Unlock()
+		if client != nil {
+			_ = client.Commit(grokCtx)
+			_ = client.Close()
+			slog.Info("voice: Grok session closed")
+		}
+	}()
 
 	slog.Info("voice: client connected")
 
@@ -66,8 +99,8 @@ func (vb *VoiceBridge) HandleVoiceWS(w http.ResponseWriter, r *http.Request) {
 		"status": "connected",
 	})
 
-	// Auto-start the Grok session on connect.
-	if err := vb.ensureGrokSession(ctx); err != nil {
+	// Open a fresh Grok session for this connection.
+	if err := vb.startGrokSession(grokCtx); err != nil {
 		slog.Error("voice: grok session failed", "err", err)
 		vb.sendJSON(conn, ctx, map[string]any{
 			"type":  "error",
@@ -81,9 +114,6 @@ func (vb *VoiceBridge) HandleVoiceWS(w http.ResponseWriter, r *http.Request) {
 		mt, data, err := conn.Read(ctx)
 		if err != nil {
 			slog.Info("voice: client disconnected")
-			vb.mu.Lock()
-			vb.voiceWS = nil
-			vb.mu.Unlock()
 			return
 		}
 
@@ -98,7 +128,7 @@ func (vb *VoiceBridge) HandleVoiceWS(w http.ResponseWriter, r *http.Request) {
 					slog.Info("voice: forwarding audio to grok", "bytes", len(data))
 					vb.audioLogged = true
 				}
-				if err := client.SendAudio(ctx, data); err != nil {
+				if err := client.SendAudio(grokCtx, data); err != nil {
 					slog.Warn("voice: audio forward failed", "err", err)
 				}
 			}
@@ -121,7 +151,7 @@ func (vb *VoiceBridge) HandleVoiceWS(w http.ResponseWriter, r *http.Request) {
 				client := vb.client
 				vb.mu.Unlock()
 				if client != nil {
-					if err := client.Commit(ctx); err != nil {
+					if err := client.Commit(grokCtx); err != nil {
 						slog.Debug("voice: commit failed", "err", err)
 					}
 				}
@@ -131,7 +161,7 @@ func (vb *VoiceBridge) HandleVoiceWS(w http.ResponseWriter, r *http.Request) {
 				client := vb.client
 				vb.mu.Unlock()
 				if client != nil && msg.Text != "" {
-					client.InjectAssistantText(ctx, msg.Text)
+					client.InjectAssistantText(grokCtx, msg.Text)
 				}
 			}
 		}
@@ -155,14 +185,7 @@ func (vb *VoiceBridge) InjectResponse(text string) {
 	}
 }
 
-func (vb *VoiceBridge) ensureGrokSession(ctx context.Context) error {
-	vb.mu.Lock()
-	if vb.client != nil {
-		vb.mu.Unlock()
-		return nil
-	}
-	vb.mu.Unlock()
-
+func (vb *VoiceBridge) startGrokSession(ctx context.Context) error {
 	slog.Info("voice: connecting to Grok Realtime")
 
 	client, err := grok.Connect(ctx, grok.Config{
@@ -289,7 +312,11 @@ conversationally for the user. Be concise and natural.`,
 
 		OnError: func(err error) {
 			slog.Error("voice: grok error", "err", err)
+			// Grok's read loop has terminated; the client is unusable.
+			// Clear it so the audio-forward path stops shipping to a corpse
+			// and the next /ws/voice connection opens a fresh session.
 			vb.mu.Lock()
+			vb.client = nil
 			ws := vb.voiceWS
 			wsCtx := vb.voiceCtx
 			vb.mu.Unlock()
