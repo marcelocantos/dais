@@ -556,20 +556,6 @@ const voiceStatus = document.getElementById('voice-status');
 const voiceStatusText = document.getElementById('voice-status-text');
 let voiceActive = false;
 
-// Adaptive VAD state — operates on {handle, rms} frames from transport.
-const vad = {
-  noiseFloor: 0.01,
-  speaking: false,
-  holdUntil: 0,
-  holdMs: 800,
-  onsetRatio: 3.0,
-  offsetRatio: 1.8,
-  noiseAlpha: 0.02,
-  preBuffer: [],
-  preBufferMax: 7,
-  flushedPre: false,
-};
-
 voiceBtn.addEventListener('click', () => {
   if (voiceActive) stopVoice(); else startVoice();
 });
@@ -577,27 +563,42 @@ voiceBtn.addEventListener('click', () => {
 // Push-to-talk via Ctrl. Hold Control to engage voice, release to stop.
 // If any other key is pressed while Ctrl is down, treat it as a Ctrl+X
 // shortcut and cancel voice (so Ctrl+C / Ctrl+R / etc. still work).
+// PTT model: voiceActive means "the WS to the server is open". pttActive
+// means "Ctrl is currently held — actively recording". The WS persists
+// across press/release cycles so the Grok session can stay alive between
+// utterances (commit on release, response streams back over the same WS).
 let pttActive = false;
 window.addEventListener('keydown', e => {
   if (e.repeat) return;
   if (e.key === 'Control') {
-    if (!voiceActive) { startVoice(); pttActive = true; }
+    if (!voiceActive) startVoice(); // lazy-open on first press
+    pttActive = true;
+    transport.startMic(); // OS-level mic only on while Ctrl held
+    voiceBtn.classList.add('active');
+    voiceBtn.style.boxShadow = '0 0 12px rgba(248,113,113,0.7)';
+    voiceStatusText.textContent = 'recording';
   } else if (pttActive && (e.ctrlKey || e.metaKey)) {
-    // User started a Ctrl-chord — back out of voice.
-    if (voiceActive) stopVoice();
-    pttActive = false;
+    // User started a Ctrl-chord — back out of recording (but keep WS open).
+    pttRelease();
   }
 });
 window.addEventListener('keyup', e => {
-  if (e.key === 'Control' && pttActive) {
-    stopVoice();
-    pttActive = false;
-  }
+  if (e.key === 'Control' && pttActive) pttRelease();
 });
-// Tab-switch / focus loss while holding: drop voice to avoid orphaning.
+// Tab-switch / focus loss while holding: stop recording and commit.
 window.addEventListener('blur', () => {
-  if (pttActive) { stopVoice(); pttActive = false; }
+  if (pttActive) pttRelease();
 });
+
+function pttRelease() {
+  pttActive = false;
+  transport.stopMic(); // kill OS mic indicator immediately on release
+  voiceBtn.style.boxShadow = '';
+  voiceStatusText.textContent = 'processing';
+  // End-of-utterance: commit the audio buffer and wait for Grok's
+  // response. The WS stays open for the next press.
+  transport.commitVoice();
+}
 
 function startVoice() {
   voiceBtn.classList.add('connecting');
@@ -607,47 +608,26 @@ function startVoice() {
 
 function stopVoice() {
   voiceActive = false;
+  pttActive = false;
   voiceBtn.classList.remove('active', 'connecting');
   voiceStatus.classList.remove('on');
   voiceBtn.style.boxShadow = '';
-  vad.speaking = false;
-  vad.preBuffer = [];
   transport.stopVoice();
 }
 
-// Mic frames from transport — run VAD, decide whether to send.
+// Mic frames from transport. In PTT mode the user is the VAD: while
+// Ctrl is held, every frame is forwarded raw so Grok hears the whole
+// utterance (including mid-phrase pauses). Local VAD would chop on
+// silence and Grok's server VAD has been disabled to match. When not
+// recording, frames are dropped on the floor.
 transport.onMicFrame = ({handle, rms}) => {
-  const now = Date.now();
-
-  if (!vad.speaking) {
-    vad.noiseFloor += vad.noiseAlpha * (rms - vad.noiseFloor);
-    vad.preBuffer.push(handle);
-    if (vad.preBuffer.length > vad.preBufferMax) vad.preBuffer.shift();
-
-    if (rms > vad.noiseFloor * vad.onsetRatio && rms > 0.005) {
-      vad.speaking = true;
-      vad.holdUntil = now + vad.holdMs;
-      vad.flushedPre = false;
-      voiceStatusText.textContent = 'hearing you';
-      voiceBtn.style.boxShadow = '0 0 12px rgba(248,113,113,0.7)';
-    }
-  }
-
-  if (vad.speaking) {
-    if (!vad.flushedPre) {
-      for (const h of vad.preBuffer) transport.sendAudio(h);
-      vad.preBuffer = [];
-      vad.flushedPre = true;
-    }
-    transport.sendAudio(handle);
-
-    if (rms > vad.noiseFloor * vad.offsetRatio) {
-      vad.holdUntil = now + vad.holdMs;
-    } else if (now > vad.holdUntil) {
-      vad.speaking = false;
-      voiceStatusText.textContent = 'listening';
-      voiceBtn.style.boxShadow = '';
-    }
+  if (!pttActive) return;
+  transport.sendAudio(handle);
+  // Visual feedback: dim the glow when the user is between phrases.
+  if (rms > 0.005) {
+    voiceBtn.style.boxShadow = '0 0 12px rgba(248,113,113,0.7)';
+  } else {
+    voiceBtn.style.boxShadow = '0 0 4px rgba(248,113,113,0.3)';
   }
 };
 

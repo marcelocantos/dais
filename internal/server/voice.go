@@ -6,10 +6,19 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/marcelocantos/claudia/grok"
 )
+
+// voiceIdleTimeout closes the Grok session after this much wall-clock
+// time with no activity. Activity = audio frame from client, an
+// explicit commit, or response.done from Grok. The window is wide
+// enough to absorb a thinking pause between back-and-forth utterances
+// (~1.2s Grok handshake is too long to pay per turn) but short enough
+// that an abandoned tab doesn't hold a session open indefinitely.
+const voiceIdleTimeout = 30 * time.Second
 
 // VoiceBridge manages the Grok Realtime session and bridges audio
 // between a connected client and Grok. Only one voice session is
@@ -18,11 +27,16 @@ type VoiceBridge struct {
 	srv    *Server
 	apiKey string
 
-	mu     sync.Mutex
-	client *grok.Client
-	voiceWS *websocket.Conn // the connected browser/iOS client
-	voiceCtx context.Context
+	mu          sync.Mutex
+	client      *grok.Client
+	voiceWS     *websocket.Conn // the connected browser/iOS client
+	voiceCtx    context.Context
 	audioLogged bool
+
+	// resetIdle is set per-connection by HandleVoiceWS so the Grok
+	// callbacks (which live longer than a local closure stack) can
+	// poke the idle timer when something interesting happens.
+	resetIdle func()
 }
 
 // NewVoiceBridge creates a voice bridge with the given xAI API key.
@@ -72,6 +86,30 @@ func (vb *VoiceBridge) HandleVoiceWS(w http.ResponseWriter, r *http.Request) {
 		_ = stale.Close()
 	}
 
+	// Idle timer: defensively close the WS after voiceIdleTimeout of no
+	// audio frames, commits, or response.done events. Guards against an
+	// abandoned tab holding a session open.
+	idleMu := sync.Mutex{}
+	idleTimer := time.AfterFunc(voiceIdleTimeout, func() {
+		slog.Info("voice: idle timeout, closing")
+		_ = conn.Close(websocket.StatusNormalClosure, "idle timeout")
+	})
+	defer idleTimer.Stop()
+	resetIdle := func() {
+		idleMu.Lock()
+		idleTimer.Reset(voiceIdleTimeout)
+		idleMu.Unlock()
+	}
+
+	vb.mu.Lock()
+	vb.resetIdle = resetIdle
+	vb.mu.Unlock()
+	defer func() {
+		vb.mu.Lock()
+		vb.resetIdle = nil
+		vb.mu.Unlock()
+	}()
+
 	// Per-connection cleanup: best-effort commit so trailing audio gets
 	// transcribed even if the client closed without an explicit stop,
 	// then close the Grok session. Always clears vb.client so the next
@@ -120,6 +158,7 @@ func (vb *VoiceBridge) HandleVoiceWS(w http.ResponseWriter, r *http.Request) {
 		switch mt {
 		case websocket.MessageBinary:
 			// Raw PCM audio from client — forward to Grok.
+			resetIdle()
 			vb.mu.Lock()
 			client := vb.client
 			vb.mu.Unlock()
@@ -143,10 +182,21 @@ func (vb *VoiceBridge) HandleVoiceWS(w http.ResponseWriter, r *http.Request) {
 			}
 
 			switch msg.Type {
+			case "commit":
+				// End-of-utterance signal from PTT release. Commit the audio
+				// buffer and request a response, keeping the Grok session
+				// alive for the next utterance.
+				resetIdle()
+				vb.mu.Lock()
+				client := vb.client
+				vb.mu.Unlock()
+				if client != nil {
+					if err := client.CommitAndRespond(grokCtx); err != nil {
+						slog.Warn("voice: commit failed", "err", err)
+					}
+				}
 			case "stop":
-				// Force Grok to transcribe whatever audio is buffered before
-				// tearing down — trailing silence from push-to-talk releases
-				// is often shorter than server VAD's commit window (🎯T13 PTT).
+				// Legacy end-of-session signal: commit and tear down.
 				vb.mu.Lock()
 				client := vb.client
 				vb.mu.Unlock()
@@ -191,6 +241,10 @@ func (vb *VoiceBridge) startGrokSession(ctx context.Context) error {
 	client, err := grok.Connect(ctx, grok.Config{
 		APIKey: vb.apiKey,
 		Voice:  "Eve",
+		// Push-to-talk: the user is the VAD. Suppress Grok's server-side
+		// VAD so a mid-phrase pause doesn't auto-commit half the utterance.
+		// The bridge calls CommitAndRespond on the client's "commit" message.
+		ManualCommit: true,
 		SystemPrompt: `You are Jevon, a personal AI assistant. You are the voice
 interface for a multi-agent system. When the user asks you to do
 something that requires code, file operations, research, or any
@@ -302,6 +356,26 @@ conversationally for the user. Be concise and natural.`,
 			ws := vb.voiceWS
 			wsCtx := vb.voiceCtx
 			vb.mu.Unlock()
+			if ws != nil {
+				vb.sendJSON(ws, wsCtx, map[string]any{
+					"type":   "status",
+					"status": "ready",
+				})
+			}
+		},
+
+		OnResponseDone: func() {
+			slog.Debug("voice: Grok response done")
+			vb.mu.Lock()
+			ws := vb.voiceWS
+			wsCtx := vb.voiceCtx
+			reset := vb.resetIdle
+			vb.mu.Unlock()
+			if reset != nil {
+				// Restart the idle window from "ready for next utterance",
+				// not from end-of-user-audio.
+				reset()
+			}
 			if ws != nil {
 				vb.sendJSON(ws, wsCtx, map[string]any{
 					"type":   "status",

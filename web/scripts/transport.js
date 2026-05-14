@@ -13,8 +13,11 @@
 //   connect()
 //   disconnect()
 //   send(json)                  — send JSON text message
-//   startVoice()                — open voice session
+//   startVoice()                — open voice session (WS only; mic stays off)
 //   stopVoice()                 — close voice session
+//   commitVoice()               — PTT end-of-utterance (keep session open)
+//   startMic()                  — begin mic capture (independent of WS)
+//   stopMic()                   — end mic capture immediately
 //   sendAudio(handleOrBytes)    — send audio (ArrayBuffer or native handle)
 //   playAudio(handleOrBytes)    — play audio (ArrayBuffer or native handle)
 //
@@ -206,7 +209,8 @@ class WebSocketTransport {
 
     this.voiceWs.onopen = () => {
       this.onVoiceEvent?.({type: 'status', status: 'connected'});
-      this._startMicCapture();
+      // Mic capture is started independently via startMic() — the WS
+      // can be open without the OS-level mic indicator burning.
     };
     this.voiceWs.onclose = () => {
       this.stopVoice();
@@ -225,8 +229,30 @@ class WebSocketTransport {
   }
 
   stopVoice() {
-    this._stopMicCapture();
+    this.stopMic();
     if (this.voiceWs) { this.voiceWs.close(); this.voiceWs = null; }
+  }
+
+  // End-of-utterance for PTT: ask the server to commit the buffered
+  // audio and request a response, but keep the WS open for the next
+  // press.
+  commitVoice() {
+    if (this.voiceWs?.readyState === 1) {
+      this.voiceWs.send(JSON.stringify({type: 'commit'}));
+    }
+  }
+
+  // Mic capture lifecycle. Public so the UI can gate the mic on the
+  // PTT key, independently of the WS lifetime. Calling startMic() when
+  // already running is a no-op.
+  startMic() {
+    if (this._mediaStream || this._micStarting) return;
+    this._micStarting = true;
+    this._startMicCapture().finally(() => { this._micStarting = false; });
+  }
+
+  stopMic() {
+    this._stopMicCapture();
   }
 
   sendAudio(buffer) {
@@ -353,6 +379,18 @@ class NativeTransport {
 
   stopVoice() {
     this._post({action: 'stopVoice'});
+  }
+
+  commitVoice() {
+    this._post({action: 'commitVoice'});
+  }
+
+  startMic() {
+    this._post({action: 'startMic'});
+  }
+
+  stopMic() {
+    this._post({action: 'stopMic'});
   }
 
   sendAudio(handle) {
