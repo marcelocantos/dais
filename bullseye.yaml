@@ -336,39 +336,26 @@ targets:
     origin: manual
     discovered: 2026-03-29
   T18:
-    name: Grok is a first-class agent
+    name: Grok is the jevons overseer
     status: converging
     value: 13.0
     cost: 8.0
     acceptance:
-    - '`Agent` interface in Go with Claude and Grok implementations'
-    - Grok agent receives all MCP tools as function definitions
-    - Grok agent can be started, sent messages, and emits events in the same format as Claude agents
-    - Registry supports mixed agent types
-    - '`--jevons-model grok` starts Grok as the overseer with native voice'
-    - '`--jevons-model claude` (default) preserves current behavior'
-    - 'Voice works end-to-end when Grok is the overseer: speak → Grok hears → tool calls → spoken response'
-    context: |
-      Desired state: Grok can operate in any role in the agent hierarchy,
-      including as the root jevons overseer. The agent system is
-      model-agnostic — Claude and Grok agents are interchangeable via a
-      common interface. When Grok is the overseer, voice is native (no
-      STT/TTS bridge layer); it hears the user directly and calls MCP tools
-      as Grok functions.
-
-      Architecture:
-      - Agent interface: abstract `Agent` with `Start`, `Send`, `OnEvent`, `Stop`. Claude implementation wraps the existing PTY process. Grok implementation connects via xAI Realtime WebSocket with function calling.
-      - MCP-to-function mapping: jevonsd's MCP tool definitions automatically mapped to Grok function definitions.
-      - Voice collapse: when Grok is overseer, voice bridge collapses into the agent's I/O — no `send_to_jevons` indirection.
-      - Registry supports both Claude and Grok agent types. Agent definitions specify model type. Jevons overseer's model configurable at startup.
-
-      Status: Grok Realtime voice bridge built and working (voice I/O,
-      function calling, `send_to_jevons` tool). Transport abstraction and
-      native iOS bridge in place. Claudia library extraction (v0.2.0) now
-      provides the Agent/Task abstraction foundation — the `Agent` interface
-      this target needs is partially realised. Remaining: unify Grok and
-      Claude under claudia's Agent interface, wire MCP→function mapping,
-      add `--jevons-model grok` path.
+    - The jevons root agent is Grok (xAI Realtime). Voice and text input both route through the same Grok session.
+    - Grok session lifetime is server-owned, not tied to /ws/voice. Lazily opened on first input (voice, text, or upload); 30s idle timeout reset on any activity; survives across PTT presses, page reloads, and text-only periods.
+    - /ws/voice is the audio-I/O sub-protocol on the Grok session (mic frames in, PCM audio out). /ws/chat is the text-I/O sub-protocol on the same session (typed text in; text responses appear in the chat panel by tailing the JSONL).
+    - 'Per-turn response modality follows input modality: voice in → modalities=["text","audio"]; text in → modalities=["text"] (no wasted audio generation, no audio readback when the user typed).'
+    - 'Grok''s tool surface is overseer-shaped: delegate(agent_name, task, attachments?), list_agents(), task_status(task_id), and a small handful of read-only inspection tools as identified during implementation. No code-level MCP tools wired into Grok directly.'
+    - delegate is ASYNCHRONOUS. The tool call returns immediately with {task_id, status:dispatched}. Grok acknowledges to the user ("on it" or similar) and continues the conversation. When the worker eventually completes, jevonsd appends a synthetic system message to the Grok JSONL describing the result and triggers response.create so Grok speaks/writes the summary. Multiple workers can run concurrently.
+    - If a completion notification arrives while Grok is mid-response (response.created without response.done), jevonsd queues it and dispatches after response.done. Multiple queued completions are emitted as separate system messages, one response.create per notification (Grok may batch in its response if it chooses).
+    - 'System prompt makes the async model explicit to Grok: "you supervise a team of workers; dispatched tasks run in the background; you receive completion notifications as system messages; surface them to the user conversationally."'
+    - 'Two classes of agent in the registry. PROJECT agents (jevons, jevons-po, ...) are user-facing and project-scoped; the user can list/manage them; list_agents() exposes them. SYSTEM agents (e.g. vision, ocr) are hidden capability-extension workers Grok dispatches to behind the scenes when a task needs a capability Grok-the-model lacks (image analysis, etc.). System agents do not appear in list_agents() and the user doesn''t see explicit delegations to them — Grok presents the result as its own. Implementation: an `agent_class` field on AgentDef, default project; system agents reachable via the same delegate tool but excluded from the user-visible listing.'
+    - Claude agents in the registry remain unchanged as workers reachable via Grok's delegate tool. Their own JSONLs and MCP servers are untouched.
+    - Grok's conversation is persisted as JSONL at ~/.jevons/grok/<session>.jsonl. Every Realtime event we care about (user item, assistant item, tool call, tool result, async system notification) is appended. The chat panel renders by tailing this file — voice transcripts survive page reloads because the JSONL is the source of truth.
+    - On Realtime reconnect (network blip, dev hot-reload), prior conversation is replayed into the new session via conversation.item.create so context resumes.
+    - 'Image paste / drop in the chat UI uploads bytes to jevonsd, stored at ~/.jevons/images/<id>.<ext>. Server appends a synthetic user turn [image: <id>] <caption> to the Grok JSONL. UI renders the marker as an inline <img>. For project-scoped image work Grok delegates to a project agent (e.g. jevons-po) explicitly. For image questions with no project owner ("what''s in this picture?"), Grok dispatches to the hidden vision system agent and presents the result as its own answer. (Phase 2 — ship after Phase 1 lands.)'
+    - send_to_jevons, InjectAssistantText and VoiceBridge.InjectResponse are removed — Grok IS the agent, no bridge indirection.
+    context: 'Today: Claude is the root agent, Grok is a voice frontend that calls send_to_jevons to delegate user prompts to Claude. This inverts: Grok becomes the root overseer. Claude agents in the registry remain as workers, accessed through an asynchronous delegate tool. Why now: the bridge architecture has tension around voice transcripts not being persisted (Grok''s conversational replies are DOM-only, killed on every page reload). The cleanest fix is to make Grok''s conversation canonical — and once it is, Grok logically IS the agent, not a bridge. Aligns with the previously-noted intent that T13''s full-duplex voice \"collapses into T18 — no send_to_jevons indirection.\" Persistence: Grok-side JSONL, mirroring Claude Code''s shape so mnemo can index it. Justification for not using SQLite documented in conversation 2026-05-14 (recent commit collapsed parallel stores onto JSONL; append-only workload; mnemo compatibility). Text mode design (conversation 2026-05-14): the iPad will be voice-only by deployment context, but on the laptop the user wants to drop to text when entering code (STT mangles syntax). Both modalities route through the same Grok session; response modality matches input modality. Image handling (Phase 2, same conversation): UI-construct rather than Realtime-API-construct — images uploaded to a stable path, referenced by ID in the JSONL as text markers, delegated to Claude workers (whose vision is stronger) via a delegate attachments parameter; UI renders markers as inline images. Async delegation (conversation 2026-05-14): worker invocation is asynchronous all the way down. delegate() returns immediately; completion notifications arrive later via system messages injected into the Grok session, triggering a response.create. Rejected the layered \"sync to first-tier, async beneath\" model — relocates rather than eliminates async complexity and adds a fragile must-respond-fast guarantee on first-tier workers. Implementation order: (1) Grok system prompt + tool surface (async delegate, list_agents, task_status); (2) text chat input routed to Grok; (3) JSONL persistence + replay-on-reconnect; (4) async completion notification path; (5) drop dead bridge code; (6) image upload + render (Phase 2).'
     origin: manual
     discovered: 2026-03-30
   T19:
