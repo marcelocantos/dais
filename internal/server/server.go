@@ -124,9 +124,13 @@ func (s *Server) HandleAgentEvent(ev claudia.Event) {
 			return
 		}
 		s.Broadcast(map[string]any{"type": "status", "state": "idle"})
-		if turnText != "" && s.voiceBridge != nil {
-			s.voiceBridge.InjectResponse(turnText)
-		}
+		// Pre-🎯T18: voiceBridge.InjectResponse(turnText) used to be
+		// called here so Grok would speak Claude's turn aloud. Removed
+		// because Grok is now the overseer: it dispatches to Claude via
+		// the delegate() tool and receives completions through a
+		// goroutine that calls SendSystemNote directly. Re-invoking
+		// InjectResponse here would double-handle every delegated turn.
+		_ = turnText
 	}
 }
 

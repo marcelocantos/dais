@@ -567,32 +567,102 @@ voiceBtn.addEventListener('click', () => {
 // means "Ctrl is currently held — actively recording". The WS persists
 // across press/release cycles so the Grok session can stay alive between
 // utterances (commit on release, response streams back over the same WS).
+//
+// Ctrl is the engagement key, but the user has system hotkeys that
+// include Ctrl as a modifier (screenshots, etc.). To avoid engaging the
+// mic the moment Ctrl goes down during one of those chords, we arm a
+// short timer on Ctrl keydown and only engage when Ctrl has been held
+// ALONE for pttArmDelayMs. Any other key arriving in that window
+// cancels the arm, so Ctrl-Shift-3 etc. never fires the mic.
+// 250ms is long enough to cover most multi-key system hotkeys
+// (Ctrl→Shift→key chord sequences) without feeling sluggish for
+// deliberate PTT presses, where the user is naturally holding the
+// key down for >>250ms.
+const pttArmDelayMs = 250;
 let pttActive = false;
+let pttArmTimer = null;
+
+// Track every non-Ctrl key currently held so we can detect chords where
+// some other key was pressed BEFORE Ctrl (simultaneous chord presses
+// can land in any order; the previous logic only handled Ctrl-first).
+const pttHeldKeys = new Set();
+
+function pttArm() {
+  if (pttArmTimer || pttActive) return;
+  pttArmTimer = setTimeout(() => {
+    pttArmTimer = null;
+    console.debug('[ptt] arm timer fired, engaging');
+    pttEngage();
+  }, pttArmDelayMs);
+}
+
+function pttCancelArm() {
+  if (pttArmTimer) {
+    console.debug('[ptt] arm cancelled');
+    clearTimeout(pttArmTimer);
+    pttArmTimer = null;
+  }
+}
+
+function pttEngage() {
+  if (!voiceActive) startVoice(); // lazy-open on first engage
+  pttActive = true;
+  transport.startMic();
+  voiceBtn.classList.add('active');
+  voiceBtn.style.boxShadow = '0 0 12px rgba(248,113,113,0.7)';
+  voiceStatusText.textContent = 'recording';
+}
+
 window.addEventListener('keydown', e => {
   if (e.repeat) return;
+  if (e.key !== 'Control') pttHeldKeys.add(e.code);
+
   if (e.key === 'Control') {
-    if (!voiceActive) startVoice(); // lazy-open on first press
-    pttActive = true;
-    transport.startMic(); // OS-level mic only on while Ctrl held
-    voiceBtn.classList.add('active');
-    voiceBtn.style.boxShadow = '0 0 12px rgba(248,113,113,0.7)';
-    voiceStatusText.textContent = 'recording';
-  } else if (pttActive && (e.ctrlKey || e.metaKey)) {
-    // User started a Ctrl-chord — back out of recording (but keep WS open).
-    pttRelease();
+    // Refuse to arm if anything else is already held — chord, not PTT.
+    // Covers BOTH orderings: Ctrl-after-X (pttHeldKeys non-empty) and
+    // Ctrl-with-modifier (e.shiftKey/altKey/metaKey already set, which
+    // can happen even if the modifier keydown wasn't observed yet on
+    // this listener — the underlying state is current).
+    if (pttHeldKeys.size > 0 || e.shiftKey || e.altKey || e.metaKey) {
+      console.debug('[ptt] arm suppressed — other key/modifier held');
+      return;
+    }
+    pttArm();
+  } else {
+    // Any other keydown while we are armed or active → chord.
+    pttCancelArm();
+    if (pttActive && (e.ctrlKey || e.metaKey)) pttRelease();
   }
 });
 window.addEventListener('keyup', e => {
-  if (e.key === 'Control' && pttActive) pttRelease();
+  if (e.key !== 'Control') pttHeldKeys.delete(e.code);
+  if (e.key === 'Control') {
+    pttCancelArm(); // brief Ctrl tap (< arm delay) → never engaged
+    if (pttActive) pttRelease();
+  }
 });
-// Tab-switch / focus loss while holding: stop recording and commit.
+// Window-blur, tab-switch, visibility loss: stop recording even if we
+// missed the keyup (focus changes can swallow it). Force-kill the mic
+// regardless of pttActive's state so the OS indicator can never hang
+// stale. Also clear the held-keys Set — a key whose keyup we missed
+// during a focus shift would otherwise stay "held" forever.
 window.addEventListener('blur', () => {
+  pttHeldKeys.clear();
   if (pttActive) pttRelease();
+  transport.stopMic();
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') {
+    pttHeldKeys.clear();
+    if (pttActive) pttRelease();
+    transport.stopMic();
+  }
 });
 
 function pttRelease() {
   pttActive = false;
-  transport.stopMic(); // kill OS mic indicator immediately on release
+  transport.stopMic(); // kill OS mic immediately on release
+  voiceBtn.classList.remove('active'); // ← clear the pulsing-red UI state
   voiceBtn.style.boxShadow = '';
   voiceStatusText.textContent = 'processing';
   // End-of-utterance: commit the audio buffer and wait for Grok's

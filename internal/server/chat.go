@@ -31,6 +31,31 @@ func (s *Server) SetRegistry(reg *claudia.Registry) {
 	s.registry = reg
 }
 
+// GetAgent looks up a worker by name in the registry. Returns nil if
+// no registry is attached or no such name is registered (or the
+// registered agent has not been launched yet).
+func (s *Server) GetAgent(name string) *claudia.Agent {
+	s.mu.RLock()
+	reg := s.registry
+	s.mu.RUnlock()
+	if reg == nil {
+		return nil
+	}
+	return reg.Get(name)
+}
+
+// RegistryAgents returns the registered agent definitions. Used by
+// the voice overseer to enumerate delegation targets.
+func (s *Server) RegistryAgents() []claudia.AgentDef {
+	s.mu.RLock()
+	reg := s.registry
+	s.mu.RUnlock()
+	if reg == nil {
+		return nil
+	}
+	return reg.List()
+}
+
 // handleListAgents returns all registered agents with their status.
 func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()

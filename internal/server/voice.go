@@ -2,15 +2,29 @@ package server
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/marcelocantos/claudia"
 	"github.com/marcelocantos/claudia/grok"
 )
+
+// pendingTask tracks a delegate() call that's in flight against a
+// worker. The Grok session is notified of completion via SendSystemNote
+// once the worker emits its response (or the task times out / errors).
+type pendingTask struct {
+	id        string
+	agent     string
+	task      string
+	startedAt time.Time
+}
 
 // voiceIdleTimeout closes the Grok session after this much wall-clock
 // time with no activity. Activity = audio frame from client, an
@@ -37,6 +51,18 @@ type VoiceBridge struct {
 	// callbacks (which live longer than a local closure stack) can
 	// poke the idle timer when something interesting happens.
 	resetIdle func()
+
+	// tasks tracks dispatched delegate() calls so task_status() can
+	// report on them and so the completion path can find the
+	// originating call metadata.
+	tasksMu sync.Mutex
+	tasks   map[string]*pendingTask
+}
+
+func newTaskID() string {
+	var b [6]byte
+	_, _ = rand.Read(b[:])
+	return "t-" + hex.EncodeToString(b[:])
 }
 
 // NewVoiceBridge creates a voice bridge with the given xAI API key.
@@ -44,6 +70,7 @@ func NewVoiceBridge(srv *Server, apiKey string) *VoiceBridge {
 	return &VoiceBridge{
 		srv:    srv,
 		apiKey: apiKey,
+		tasks:  make(map[string]*pendingTask),
 	}
 }
 
@@ -240,36 +267,89 @@ func (vb *VoiceBridge) startGrokSession(ctx context.Context) error {
 
 	client, err := grok.Connect(ctx, grok.Config{
 		APIKey: vb.apiKey,
-		Voice:  "Eve",
+		// Voice options (xAI Grok Realtime): eve (F, upbeat — default),
+		// ara (F, warm), rex (M, professional), sal (neutral, smooth),
+		// leo (M, authoritative). Picked leo as the closest fit to
+		// "Alfred / dignified butler" — try rex if leo lands too heavy.
+		Voice: "leo",
 		// Push-to-talk: the user is the VAD. Suppress Grok's server-side
 		// VAD so a mid-phrase pause doesn't auto-commit half the utterance.
 		// The bridge calls CommitAndRespond on the client's "commit" message.
 		ManualCommit: true,
-		SystemPrompt: `You are Jevon, a personal AI assistant. You are the voice
-interface for a multi-agent system. When the user asks you to do
-something that requires code, file operations, research, or any
-substantive work, use the send_to_jevons tool to delegate it.
+		SystemPrompt: `You are Jevons, the overseer of a team of AI workers.
+Each worker is an autonomous agent with its own tools and project
+scope. Your job is to converse with the user, dispatch work to the
+right worker, and weave their results back into the conversation.
 
-For simple conversational exchanges (greetings, clarifications,
-opinions), respond directly without delegating.
+Your name is "Jevons" (with an s) — never "Jevon".
 
-When you receive results back from delegated work, summarise them
-conversationally for the user. Be concise and natural.`,
+How to behave:
+
+- DO NOT greet the user when a session starts. Wait silently for
+  the user to speak or type first. No "Hi, I'm Jevons" openers.
+- For chit-chat, greetings, clarifications, opinions, and simple
+  factual questions you can answer yourself, respond directly. Do
+  not delegate trivia.
+- For any substantive work — code, file edits, research, target
+  management, anything that needs a specialised tool or knowledge of
+  a specific project — call the "delegate" tool. Pick the right
+  worker for the job; use "list_agents" if you're unsure who's
+  available.
+- "jevons" is your default project worker for general work on the
+  jevons project itself. "jevons-po" handles target / product-owner
+  questions (bullseye targets, project status, prioritisation).
+  Other workers may be registered for specific projects.
+
+Delegation is ASYNCHRONOUS. When you call delegate, the tool returns
+immediately with a task_id. Acknowledge the dispatch briefly to the
+user ("on it", "looking into that") and continue the conversation
+normally — DO NOT wait silently for the result. When the worker
+finishes, you will receive a system message containing the result.
+At that point, summarise the result conversationally and naturally
+for the user, as if relaying news from a colleague. You may have
+several tasks in flight at once; treat each completion notification
+independently.
+
+Be concise. The user is often hands-free in a car — keep responses
+short and verbal-friendly. Avoid markdown, bullet lists, or anything
+that doesn't read well aloud.`,
 
 		Tools: []grok.Tool{
 			{
 				Type:        "function",
-				Name:        "send_to_jevons",
-				Description: "Send a message to the Jevon agent system for processing. Use this for any request that requires code, file operations, research, or substantive work. The message should be a clear natural language description of what the user wants.",
+				Name:        "delegate",
+				Description: "Dispatch a task to a named worker agent. Returns immediately with a task_id; the worker's result will arrive asynchronously as a system message. Use this for any substantive work that requires code, file access, research, or specialised tools. Acknowledge the dispatch briefly to the user and continue the conversation; do not wait silently.",
 				Parameters: json.RawMessage(`{
 					"type": "object",
 					"properties": {
-						"message": {
+						"agent_name": {
 							"type": "string",
-							"description": "The user's request, rephrased as a clear instruction for the agent system"
+							"description": "Name of the worker agent to dispatch to. Use list_agents if unsure."
+						},
+						"task": {
+							"type": "string",
+							"description": "The task for the worker, phrased as a clear natural-language instruction. Include any context the worker would not have from its own session."
 						}
 					},
-					"required": ["message"]
+					"required": ["agent_name", "task"]
+				}`),
+			},
+			{
+				Type:        "function",
+				Name:        "list_agents",
+				Description: "List the worker agents available for delegation, with their working directories and current status.",
+				Parameters:  json.RawMessage(`{"type":"object","properties":{}}`),
+			},
+			{
+				Type:        "function",
+				Name:        "task_status",
+				Description: "Check the status of a previously-dispatched task by task_id. Useful if the user asks whether something is still running.",
+				Parameters: json.RawMessage(`{
+					"type": "object",
+					"properties": {
+						"task_id": {"type": "string"}
+					},
+					"required": ["task_id"]
 				}`),
 			},
 		},
@@ -328,27 +408,7 @@ conversationally for the user. Be concise and natural.`,
 			}
 		},
 
-		OnFunctionCall: func(name string, args json.RawMessage) (string, error) {
-			if name != "send_to_jevons" {
-				return `{"error":"unknown function"}`, nil
-			}
-
-			var params struct {
-				Message string `json:"message"`
-			}
-			if err := json.Unmarshal(args, &params); err != nil {
-				return "", err
-			}
-
-			slog.Info("voice: delegating to jevon", "message", params.Message)
-
-			// Send to jevon asynchronously. The response will be
-			// injected back into the Grok session when it arrives
-			// (via the OnJevonResponse callback wired in main.go).
-			vb.srv.HandleUserMessage(params.Message)
-
-			return `{"status":"sent","note":"The request has been sent to the agent system. The response will arrive shortly — I'll read it to you when it does."}`, nil
-		},
+		OnFunctionCall: vb.handleFunctionCall,
 
 		OnSessionReady: func() {
 			slog.Info("voice: Grok session ready")
@@ -431,4 +491,167 @@ func (vb *VoiceBridge) sendJSON(conn *websocket.Conn, ctx context.Context, v any
 		return
 	}
 	conn.Write(ctx, websocket.MessageText, data)
+}
+
+// handleFunctionCall dispatches Grok tool calls. All tools return a
+// JSON-encoded result string; on error the second return is non-nil
+// and Grok sees a generic failure (we log the detail).
+func (vb *VoiceBridge) handleFunctionCall(name string, args json.RawMessage) (string, error) {
+	switch name {
+	case "delegate":
+		return vb.toolDelegate(args)
+	case "list_agents":
+		return vb.toolListAgents()
+	case "task_status":
+		return vb.toolTaskStatus(args)
+	default:
+		slog.Warn("voice: unknown function call", "name", name)
+		return `{"error":"unknown function"}`, nil
+	}
+}
+
+func (vb *VoiceBridge) toolDelegate(args json.RawMessage) (string, error) {
+	var p struct {
+		AgentName string `json:"agent_name"`
+		Task      string `json:"task"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "", err
+	}
+	if p.AgentName == "" || p.Task == "" {
+		return `{"error":"agent_name and task are required"}`, nil
+	}
+
+	agent := vb.srv.GetAgent(p.AgentName)
+	if agent == nil {
+		slog.Warn("voice: delegate to unknown agent", "agent", p.AgentName)
+		return fmt.Sprintf(`{"error":"agent %q not registered"}`, p.AgentName), nil
+	}
+
+	id := newTaskID()
+	pt := &pendingTask{
+		id:        id,
+		agent:     p.AgentName,
+		task:      p.Task,
+		startedAt: time.Now(),
+	}
+	vb.tasksMu.Lock()
+	vb.tasks[id] = pt
+	vb.tasksMu.Unlock()
+
+	slog.Info("voice: delegating", "task_id", id, "agent", p.AgentName, "task", p.Task)
+	go vb.runDelegatedTask(pt, agent)
+
+	return fmt.Sprintf(`{"task_id":%q,"agent":%q,"status":"dispatched"}`, id, p.AgentName), nil
+}
+
+func (vb *VoiceBridge) toolListAgents() (string, error) {
+	defs := vb.srv.RegistryAgents()
+	type entry struct {
+		Name    string `json:"name"`
+		WorkDir string `json:"workdir,omitempty"`
+		Status  string `json:"status"`
+	}
+	out := make([]entry, 0, len(defs))
+	for _, d := range defs {
+		status := "stopped"
+		if a := vb.srv.GetAgent(d.Name); a != nil && a.Alive() {
+			status = "running"
+		}
+		out = append(out, entry{Name: d.Name, WorkDir: d.WorkDir, Status: status})
+	}
+	b, err := json.Marshal(map[string]any{"agents": out})
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func (vb *VoiceBridge) toolTaskStatus(args json.RawMessage) (string, error) {
+	var p struct {
+		TaskID string `json:"task_id"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil {
+		return "", err
+	}
+	vb.tasksMu.Lock()
+	pt := vb.tasks[p.TaskID]
+	vb.tasksMu.Unlock()
+	if pt == nil {
+		return fmt.Sprintf(`{"task_id":%q,"status":"unknown"}`, p.TaskID), nil
+	}
+	return fmt.Sprintf(`{"task_id":%q,"agent":%q,"status":"in_flight","started_at":%q}`,
+		pt.id, pt.agent, pt.startedAt.Format(time.RFC3339)), nil
+}
+
+// runDelegatedTask is the goroutine body for one delegated worker
+// invocation. It blocks on the worker's response (or a 10-minute
+// hard timeout), then injects a system-role completion note into the
+// Grok session so the overseer can surface the result conversationally.
+func (vb *VoiceBridge) runDelegatedTask(pt *pendingTask, agent *claudia.Agent) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	if err := agent.Send(pt.task); err != nil {
+		vb.completeTask(pt, "", fmt.Errorf("send to worker failed: %w", err))
+		return
+	}
+
+	result, err := agent.WaitForResponse(ctx)
+	vb.completeTask(pt, result, err)
+}
+
+// completeTask records the outcome of a delegated task and injects
+// a system-role notification into the Grok session.
+func (vb *VoiceBridge) completeTask(pt *pendingTask, result string, taskErr error) {
+	vb.tasksMu.Lock()
+	delete(vb.tasks, pt.id)
+	vb.tasksMu.Unlock()
+
+	var note string
+	if taskErr != nil {
+		slog.Error("voice: delegated task failed", "task_id", pt.id, "agent", pt.agent, "err", taskErr)
+		note = fmt.Sprintf(
+			"Worker %q failed the task you dispatched (task_id %s).\n"+
+				"Original task: %s\n"+
+				"Error: %v\n\n"+
+				"Tell the user the worker hit an error and what it was. Keep it brief and conversational.",
+			pt.agent, pt.id, pt.task, taskErr)
+	} else {
+		slog.Info("voice: delegated task complete", "task_id", pt.id, "agent", pt.agent, "len", len(result))
+		note = fmt.Sprintf(
+			"Worker %q has finished the task you dispatched (task_id %s).\n"+
+				"Original task: %s\n\n"+
+				"Worker's full response follows. Read it, then surface its substance to the user "+
+				"as a brief conversational summary (one or two sentences for voice; a short paragraph "+
+				"if the user typed). Do NOT just acknowledge — actually convey the content. If the "+
+				"user asked for a list, give them the list.\n\n"+
+				"---\n%s\n---",
+			pt.agent, pt.id, pt.task, result)
+	}
+
+	vb.mu.Lock()
+	client := vb.client
+	wsOpen := vb.voiceWS != nil
+	vb.mu.Unlock()
+	if client == nil {
+		// Grok session was torn down (idle timeout, error). The note
+		// is lost for this run; future JSONL persistence (1c) will
+		// replay it on next reconnect.
+		slog.Warn("voice: completion note dropped — no Grok session", "task_id", pt.id)
+		return
+	}
+
+	// Modality: if the voice WS is still attached, the user may want
+	// to hear the response. Otherwise (text-only client, or none),
+	// reply in text only — Grok still produces a transcript that can
+	// land in the chat panel once 1c lands.
+	modalities := grok.ModalitiesText
+	if wsOpen {
+		modalities = grok.ModalitiesTextAudio
+	}
+
+	if err := client.SendSystemNote(context.Background(), note, modalities); err != nil {
+		slog.Error("voice: failed to inject completion note", "task_id", pt.id, "err", err)
+	}
 }
