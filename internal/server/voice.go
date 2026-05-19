@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -39,35 +38,20 @@ const voiceIdleTimeout = 30 * time.Second
 
 // VoiceBridge manages the Grok Realtime session and bridges audio
 // between a connected client and Grok. Only one voice session is
-// active at a time.
+// active at a time. The protocol logic for a connection lives in
+// voiceFSM (docs/voice-fsm.md); VoiceBridge holds process-wide
+// resources (xAI API key, registry handle, task map, JSONL log) and
+// the current FSM pointer so out-of-band events (worker completion,
+// JSONL replay) can find the active connection.
 type VoiceBridge struct {
 	srv    *Server
 	apiKey string
 
-	mu          sync.Mutex
-	client      *grok.Client
-	voiceWS     *websocket.Conn // the connected browser/iOS client
-	voiceCtx    context.Context
-	audioLogged bool
-
-	// grokReady is set in OnSessionReady once session.updated has been
-	// acknowledged by xAI. Audio frames received before this flag is
-	// true would otherwise be processed under the API's default
-	// turn_detection (server VAD), defeating our ManualCommit config
-	// and causing Grok to auto-respond to noise before the user has
-	// even said anything.
-	grokReady bool
-
-	// pendingAudio holds frames that arrive before grokReady — flushed
-	// (in receive order) from OnSessionReady so the first ~1.2s of the
-	// user's first utterance after a fresh session isn't lost to the
-	// handshake window.
-	pendingAudio [][]byte
-
-	// resetIdle is set per-connection by HandleVoiceWS so the Grok
-	// callbacks (which live longer than a local closure stack) can
-	// poke the idle timer when something interesting happens.
-	resetIdle func()
+	mu       sync.Mutex
+	voiceWS  *websocket.Conn // the connected browser/iOS client
+	voiceCtx context.Context
+	fsm      *voiceFSM // active FSM, or nil when no connection
+	conn     *voiceConn // active connection's transport bundle
 
 	// tasks tracks dispatched delegate() calls so task_status() can
 	// report on them and so the completion path can find the
@@ -79,9 +63,28 @@ type VoiceBridge struct {
 	// survives idle timeouts, server restarts, and page reloads. Each
 	// new Grok session replays the recent tail before user audio starts
 	// flowing so the model picks up where the previous session left off.
-	log         *GrokLog
-	assistantMu sync.Mutex
-	assistantBuf strings.Builder // accumulates response.output_audio_transcript.delta
+	log *GrokLog
+}
+
+// voiceConn bundles the per-connection state the FSM's deps adapter
+// needs to reach. Lives in HandleVoiceWS's scope; pointer cached on
+// VoiceBridge for worker-completion lookup.
+type voiceConn struct {
+	conn    *websocket.Conn
+	connCtx context.Context
+	grokCtx context.Context
+	client  *grok.Client
+
+	idleMu    sync.Mutex
+	idleTimer *time.Timer
+}
+
+func (vc *voiceConn) resetIdle() {
+	vc.idleMu.Lock()
+	if vc.idleTimer != nil {
+		vc.idleTimer.Reset(voiceIdleTimeout)
+	}
+	vc.idleMu.Unlock()
 }
 
 // grokReplayTurns is how many recent log entries are replayed into a
@@ -116,12 +119,21 @@ func NewVoiceBridge(srv *Server, apiKey string) *VoiceBridge {
 	}
 }
 
-// HandleVoiceWS handles /ws/voice connections. The protocol:
-//   - Binary frames: raw 24kHz mono PCM16 audio (both directions)
-//   - Text frames: JSON control messages
-//     - {"type":"start"} — begin/resume voice session
-//     - {"type":"stop"} — end voice session
-//     - {"type":"inject","text":"..."} — inject text for Grok to speak
+// HandleVoiceWS handles /ws/voice connections. Protocol enforced by
+// voiceFSM (docs/voice-fsm.md):
+//
+//   Browser → server:
+//     - Binary frames    : raw 24 kHz mono PCM16 audio
+//     - {"type":"commit"}: PTT release, browser VAD detected speech
+//     - {"type":"clear"} : PTT release, browser VAD detected nothing
+//
+//   Server → browser:
+//     - Binary frames                       : Grok's spoken audio
+//     - {"type":"state", "state":...}       : FSM transitions
+//     - {"type":"user_transcript", ...}     : user STT result
+//     - {"type":"assistant_transcript",...} : streaming assistant text
+//     - {"type":"assistant_transcript_done"}
+//     - {"type":"error", "error": ...}
 func (vb *VoiceBridge) HandleVoiceWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
@@ -131,208 +143,179 @@ func (vb *VoiceBridge) HandleVoiceWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.CloseNow()
+	conn.SetReadLimit(1 << 20)
 
-	conn.SetReadLimit(1 << 20) // 1 MB
-
-	// The browser's context cancels the moment the request handler returns
-	// (i.e. the WS is closed). Grok needs a longer-lived context so we can
-	// run a final Commit on PTT release before tearing down.
+	// The HTTP request context cancels when the handler returns. Grok
+	// needs a longer-lived context — the FSM's evClose path drives the
+	// final Commit/Close.
 	grokCtx, grokCancel := context.WithCancel(context.Background())
 	defer grokCancel()
-
 	ctx := r.Context()
 
+	vc := &voiceConn{conn: conn, connCtx: ctx, grokCtx: grokCtx}
+	deps := &bridgeDeps{bridge: vb, vc: vc}
+	fsm := newVoiceFSM(deps)
+
+	// Register the FSM on the bridge so out-of-band events (worker
+	// completions) can find it. Tear down any prior session that
+	// leaked.
 	vb.mu.Lock()
-	// Defensive: a previous session may have leaked (Grok died but the
-	// bridge never cleared the pointer). Tear it down before opening a new one.
-	stale := vb.client
-	vb.client = nil
+	if stale := vb.conn; stale != nil && stale.client != nil {
+		_ = stale.client.Close()
+	}
 	vb.voiceWS = conn
 	vb.voiceCtx = ctx
-	vb.audioLogged = false
-	vb.grokReady = false // re-armed in OnSessionReady once session.updated arrives
-	vb.pendingAudio = nil
-	vb.mu.Unlock()
-	if stale != nil {
-		_ = stale.Close()
-	}
-
-	// Per-connection audio frame counter for periodic logging. Lets us
-	// confirm audio is actually flowing across turn boundaries — the old
-	// "first frame only" log was useless after the first utterance.
-	audioFrameCount := 0
-	_ = audioFrameCount // silence unused before first use in loop below
-
-	// Idle timer: defensively close the WS after voiceIdleTimeout of no
-	// audio frames, commits, or response.done events. Guards against an
-	// abandoned tab holding a session open.
-	idleMu := sync.Mutex{}
-	idleTimer := time.AfterFunc(voiceIdleTimeout, func() {
-		slog.Info("voice: idle timeout, closing")
-		_ = conn.Close(websocket.StatusNormalClosure, "idle timeout")
-	})
-	defer idleTimer.Stop()
-	resetIdle := func() {
-		idleMu.Lock()
-		idleTimer.Reset(voiceIdleTimeout)
-		idleMu.Unlock()
-	}
-
-	vb.mu.Lock()
-	vb.resetIdle = resetIdle
+	vb.fsm = fsm
+	vb.conn = vc
 	vb.mu.Unlock()
 	defer func() {
+		_ = fsm.Handle(voiceEvent{kind: evClose})
 		vb.mu.Lock()
-		vb.resetIdle = nil
-		vb.mu.Unlock()
-	}()
-
-	// Per-connection cleanup: best-effort commit so trailing audio gets
-	// transcribed even if the client closed without an explicit stop,
-	// then close the Grok session. Always clears vb.client so the next
-	// client connection starts from a clean slate.
-	defer func() {
-		vb.mu.Lock()
+		if vb.fsm == fsm {
+			vb.fsm = nil
+		}
+		if vb.conn == vc {
+			vb.conn = nil
+		}
 		if vb.voiceWS == conn {
 			vb.voiceWS = nil
 		}
-		client := vb.client
-		vb.client = nil
+		client := vc.client
+		vc.client = nil
 		vb.mu.Unlock()
 		if client != nil {
-			_ = client.Commit(grokCtx)
 			_ = client.Close()
 			slog.Info("voice: Grok session closed")
 		}
 	}()
 
-	slog.Info("voice: client connected")
-
-	// Send ready status.
-	vb.sendJSON(conn, ctx, map[string]any{
-		"type":   "status",
-		"status": "connected",
+	// Idle timer fires evIdleTimeout. Legal only in stateIdle; other
+	// states' transitions reset it via vc.resetIdle().
+	vc.idleTimer = time.AfterFunc(voiceIdleTimeout, func() {
+		slog.Info("voice: idle timeout")
+		if err := fsm.Handle(voiceEvent{kind: evIdleTimeout}); err != nil {
+			slog.Debug("voice: idle timeout in non-idle state", "err", err)
+		}
+		// Force the WS shut regardless — closing the conn ends the
+		// read loop and triggers full cleanup.
+		_ = conn.Close(websocket.StatusNormalClosure, "idle timeout")
 	})
+	defer vc.idleTimer.Stop()
 
-	// Open a fresh Grok session for this connection.
-	if err := vb.startGrokSession(grokCtx); err != nil {
+	slog.Info("voice: client connected")
+	vb.sendJSON(conn, ctx, map[string]any{"type": "status", "status": "connected"})
+
+	// Open the xAI session. Callbacks are wired to dispatch FSM events.
+	if err := vb.startGrokSession(grokCtx, fsm, vc); err != nil {
 		slog.Error("voice: grok session failed", "err", err)
-		vb.sendJSON(conn, ctx, map[string]any{
-			"type":  "error",
-			"error": err.Error(),
-		})
+		_ = fsm.Handle(voiceEvent{kind: evError, err: err})
+		vb.sendJSON(conn, ctx, map[string]any{"type": "error", "error": err.Error()})
 		return
 	}
 
-	// Read loop.
+	// Read loop. Every event is translated into an FSM event; the FSM
+	// owns all protocol decisions.
 	for {
 		mt, data, err := conn.Read(ctx)
 		if err != nil {
 			slog.Info("voice: client disconnected")
 			return
 		}
+		vc.resetIdle()
 
 		switch mt {
 		case websocket.MessageBinary:
-			// Raw PCM audio from client. If the Grok session isn't
-			// fully configured yet (turn_detection still on xAI's
-			// default), buffer the frame instead of forwarding —
-			// OnSessionReady flushes the backlog so the first second
-			// of the user's first utterance isn't lost to handshake.
-			resetIdle()
-			audioFrameCount++
-			logThisFrame := audioFrameCount == 1 || audioFrameCount%50 == 0
-			vb.mu.Lock()
-			if !vb.grokReady {
-				// Copy because the WS read buffer is reused.
-				vb.pendingAudio = append(vb.pendingAudio, append([]byte(nil), data...))
-				bufLen := len(vb.pendingAudio)
-				vb.mu.Unlock()
-				if logThisFrame {
-					slog.Info("voice: buffering audio — Grok not ready yet",
-						"frame", audioFrameCount, "queued", bufLen)
-				}
-				continue
-			}
-			client := vb.client
-			vb.mu.Unlock()
-			if client != nil {
-				if logThisFrame {
-					slog.Info("voice: forwarding audio to grok",
-						"frame", audioFrameCount, "bytes", len(data))
-				}
-				if err := client.SendAudio(grokCtx, data); err != nil {
-					slog.Warn("voice: audio forward failed", "err", err)
-				}
-			} else if logThisFrame {
-				slog.Warn("voice: dropping audio — no Grok client",
-					"frame", audioFrameCount, "bytes", len(data))
+			audio := append([]byte(nil), data...) // copy: Read buffer is reused
+			if err := fsm.Handle(voiceEvent{kind: evAudioFrame, audio: audio}); err != nil {
+				slog.Warn("voice: audio frame rejected", "err", err)
 			}
 
 		case websocket.MessageText:
-			var msg struct {
-				Type string `json:"type"`
-				Text string `json:"text,omitempty"`
-			}
+			var msg struct{ Type string }
 			if err := json.Unmarshal(data, &msg); err != nil {
 				continue
 			}
-
+			var kind voiceEventKind
 			switch msg.Type {
 			case "commit":
-				// End-of-utterance signal from PTT release. Commit the audio
-				// buffer and request a response, keeping the Grok session
-				// alive for the next utterance.
-				resetIdle()
-				vb.mu.Lock()
-				client := vb.client
-				vb.mu.Unlock()
-				if client != nil {
-					if err := client.CommitAndRespond(grokCtx); err != nil {
-						slog.Warn("voice: commit failed", "err", err)
-					}
-				}
-			case "stop":
-				// Legacy end-of-session signal: commit and tear down.
-				vb.mu.Lock()
-				client := vb.client
-				vb.mu.Unlock()
-				if client != nil {
-					if err := client.Commit(grokCtx); err != nil {
-						slog.Debug("voice: commit failed", "err", err)
-					}
-				}
-				vb.stopGrokSession()
-			case "inject":
-				vb.mu.Lock()
-				client := vb.client
-				vb.mu.Unlock()
-				if client != nil && msg.Text != "" {
-					client.InjectAssistantText(grokCtx, msg.Text)
-				}
+				kind = evPTTUpSpeech
+			case "clear":
+				kind = evPTTUpSilence
+			default:
+				slog.Debug("voice: ignoring unknown message type", "type", msg.Type)
+				continue
+			}
+			if err := fsm.Handle(voiceEvent{kind: kind}); err != nil {
+				slog.Warn("voice: control event rejected", "type", msg.Type, "err", err)
 			}
 		}
 	}
 }
 
-// InjectResponse sends a Claude response into the Grok session to be
-// spoken aloud. Called from the jevon response callback.
-func (vb *VoiceBridge) InjectResponse(text string) {
-	vb.mu.Lock()
-	client := vb.client
-	ctx := vb.voiceCtx
-	vb.mu.Unlock()
-
-	if client == nil || ctx == nil {
-		return
-	}
-
-	if err := client.InjectAssistantText(ctx, text); err != nil {
-		slog.Error("voice: inject response failed", "err", err)
-	}
+// bridgeDeps adapts the bridge's per-connection resources (xAI client,
+// browser WS, JSONL log) to the voiceDeps interface the FSM consumes.
+// All side effects route through one place; the FSM stays pure logic.
+type bridgeDeps struct {
+	bridge *VoiceBridge
+	vc     *voiceConn
 }
 
-func (vb *VoiceBridge) startGrokSession(ctx context.Context) error {
+func (d *bridgeDeps) SendAudioToGrok(pcm []byte) error {
+	if d.vc.client == nil {
+		return nil
+	}
+	return d.vc.client.SendAudio(d.vc.grokCtx, pcm)
+}
+
+func (d *bridgeDeps) CommitGrok() error {
+	if d.vc.client == nil {
+		return nil
+	}
+	return d.vc.client.Commit(d.vc.grokCtx)
+}
+
+func (d *bridgeDeps) ClearGrokBuffer() error {
+	if d.vc.client == nil {
+		return nil
+	}
+	return d.vc.client.ClearBuffer(d.vc.grokCtx)
+}
+
+func (d *bridgeDeps) RequestGrokResponse(m grok.ResponseModalities) error {
+	if d.vc.client == nil {
+		return nil
+	}
+	return d.vc.client.RequestResponse(d.vc.grokCtx, m)
+}
+
+func (d *bridgeDeps) InjectSystemNote(text string, m grok.ResponseModalities) error {
+	if d.vc.client == nil {
+		return nil
+	}
+	return d.vc.client.SendSystemNote(d.vc.grokCtx, text, m)
+}
+
+func (d *bridgeDeps) NotifyBrowser(payload any) {
+	d.bridge.sendJSON(d.vc.conn, d.vc.connCtx, payload)
+}
+
+func (d *bridgeDeps) LogUser(text, modality string) {
+	d.bridge.logAppend(GrokLogEntry{
+		Role:    "user",
+		Content: text,
+		Meta:    map[string]any{"modality": modality},
+	})
+}
+
+func (d *bridgeDeps) LogAssistant(text string) {
+	d.bridge.logAppend(GrokLogEntry{Role: "assistant", Content: text})
+}
+
+func (d *bridgeDeps) LogSystem(text string, meta map[string]any) {
+	d.bridge.logAppend(GrokLogEntry{Role: "system", Content: text, Meta: meta})
+}
+
+func (vb *VoiceBridge) startGrokSession(ctx context.Context, fsm *voiceFSM, vc *voiceConn) error {
 	slog.Info("voice: connecting to Grok Realtime")
 
 	client, err := grok.Connect(ctx, grok.Config{
@@ -425,73 +408,43 @@ that doesn't read well aloud.`,
 		},
 
 		OnAudio: func(pcm []byte) {
-			// Forward Grok's audio to the connected client.
-			vb.mu.Lock()
-			ws := vb.voiceWS
-			wsCtx := vb.voiceCtx
-			vb.mu.Unlock()
-			if ws != nil && wsCtx != nil {
-				if err := ws.Write(wsCtx, websocket.MessageBinary, pcm); err != nil {
-					slog.Debug("voice: client audio write failed", "err", err)
-				}
+			// Grok response audio: forward as a binary frame to the
+			// browser. No FSM event — it's just a side-effect of the
+			// current response stream.
+			if err := vc.conn.Write(vc.connCtx, websocket.MessageBinary, pcm); err != nil {
+				slog.Debug("voice: client audio write failed", "err", err)
 			}
 		},
 
 		OnTranscript: func(text string) {
-			// Accumulate the delta — flushed to the log at OnTranscriptDone
-			// so a single assistant turn becomes one JSONL entry.
-			vb.assistantMu.Lock()
-			vb.assistantBuf.WriteString(text)
-			vb.assistantMu.Unlock()
-
-			vb.mu.Lock()
-			ws := vb.voiceWS
-			wsCtx := vb.voiceCtx
-			vb.mu.Unlock()
-			if ws != nil {
-				vb.sendJSON(ws, wsCtx, map[string]any{
-					"type": "assistant_transcript",
-					"text": text,
-				})
-			}
+			// Streaming assistant text delta. FSM accumulates for the
+			// log; we relay to the browser for live display.
+			fsm.AppendAssistantDelta(text)
+			vb.sendJSON(vc.conn, vc.connCtx, map[string]any{
+				"type": "assistant_transcript",
+				"text": text,
+			})
 		},
 
 		OnTranscriptDone: func() {
-			vb.assistantMu.Lock()
-			turnText := vb.assistantBuf.String()
-			vb.assistantBuf.Reset()
-			vb.assistantMu.Unlock()
-			if turnText != "" {
-				vb.logAppend(GrokLogEntry{Role: "assistant", Content: turnText})
-			}
-
-			vb.mu.Lock()
-			ws := vb.voiceWS
-			wsCtx := vb.voiceCtx
-			vb.mu.Unlock()
-			if ws != nil {
-				vb.sendJSON(ws, wsCtx, map[string]any{
-					"type": "assistant_transcript_done",
-				})
-			}
+			// Streaming text turn finished. Not a state transition;
+			// response.done is the FSM-relevant event.
+			vb.sendJSON(vc.conn, vc.connCtx, map[string]any{
+				"type": "assistant_transcript_done",
+			})
 		},
 
 		OnUserTranscript: func(text string) {
 			slog.Info("voice: user said", "text", text)
-			vb.logAppend(GrokLogEntry{
-				Role:    "user",
-				Content: text,
-				Meta:    map[string]any{"modality": "voice"},
-			})
-			vb.mu.Lock()
-			ws := vb.voiceWS
-			wsCtx := vb.voiceCtx
-			vb.mu.Unlock()
-			if ws != nil {
-				vb.sendJSON(ws, wsCtx, map[string]any{
-					"type": "user_transcript",
-					"text": text,
-				})
+			// This is the FSM's signal to transition COMMITTING →
+			// RESPONDING. The transition action sends response.create
+			// AFTER the user item is in the conversation, eliminating
+			// the commit/response race.
+			if err := fsm.Handle(voiceEvent{
+				kind:       evTranscriptDone,
+				transcript: text,
+			}); err != nil {
+				slog.Warn("voice: transcript event rejected", "err", err)
 			}
 		},
 
@@ -499,106 +452,56 @@ that doesn't read well aloud.`,
 
 		OnSessionReady: func() {
 			slog.Info("voice: Grok session ready")
-			vb.mu.Lock()
-			ws := vb.voiceWS
-			wsCtx := vb.voiceCtx
-			client := vb.client
-			vb.mu.Unlock()
-			// Replay history into the freshly-configured session BEFORE
-			// the user audio buffer is committed, so the conversation
-			// order is: history items → new user audio → response.
-			if client != nil {
-				vb.replayLog(ctx, client)
+			// Replay history INTO THE CONVERSATION (not as a response
+			// trigger) so context survives reconnects. Runs before the
+			// FSM transitions to IDLE, so the conversation has history
+			// in place before any audio commits.
+			if vc.client != nil {
+				vb.replayLog(ctx, vc.client)
 			}
-			// Flush any audio that arrived during the ~1.2s session
-			// handshake. Hold the lock across the flush + grokReady
-			// flip so concurrent read-loop frames can't sneak in
-			// out of order: they'll block on the lock, observe
-			// grokReady=true after the flush, and forward their frame
-			// behind the backlog.
-			vb.mu.Lock()
-			backlog := vb.pendingAudio
-			vb.pendingAudio = nil
-			if len(backlog) > 0 && client != nil {
-				slog.Info("voice: flushing buffered audio", "frames", len(backlog))
-				for _, chunk := range backlog {
-					if err := client.SendAudio(ctx, chunk); err != nil {
-						slog.Warn("voice: backlog forward failed", "err", err)
-						break
-					}
-				}
+			// Drive the FSM out of OPENING. The transition action
+			// flushes the pendingAudio backlog in receive order.
+			if err := fsm.Handle(voiceEvent{kind: evSessionReady}); err != nil {
+				slog.Warn("voice: session_ready event rejected", "err", err)
 			}
-			vb.grokReady = true
-			vb.mu.Unlock()
-			if ws != nil {
-				vb.sendJSON(ws, wsCtx, map[string]any{
-					"type":   "status",
-					"status": "ready",
-				})
-			}
+			// Tell the browser the session is hot.
+			vb.sendJSON(vc.conn, vc.connCtx, map[string]any{
+				"type":   "status",
+				"status": "ready",
+			})
 		},
 
 		OnResponseDone: func() {
 			slog.Debug("voice: Grok response done")
-			vb.mu.Lock()
-			ws := vb.voiceWS
-			wsCtx := vb.voiceCtx
-			reset := vb.resetIdle
-			vb.mu.Unlock()
-			if reset != nil {
-				// Restart the idle window from "ready for next utterance",
-				// not from end-of-user-audio.
-				reset()
+			vc.resetIdle()
+			if err := fsm.Handle(voiceEvent{kind: evResponseDone}); err != nil {
+				slog.Warn("voice: response_done event rejected", "err", err)
 			}
-			if ws != nil {
-				vb.sendJSON(ws, wsCtx, map[string]any{
-					"type":   "status",
-					"status": "ready",
-				})
-			}
+			vb.sendJSON(vc.conn, vc.connCtx, map[string]any{
+				"type":   "status",
+				"status": "ready",
+			})
 		},
 
 		OnError: func(err error) {
 			slog.Error("voice: grok error", "err", err)
-			// Grok's read loop has terminated; the client is unusable.
-			// Clear it so the audio-forward path stops shipping to a corpse
-			// and the next /ws/voice connection opens a fresh session.
-			vb.mu.Lock()
-			vb.client = nil
-			ws := vb.voiceWS
-			wsCtx := vb.voiceCtx
-			vb.mu.Unlock()
-			if ws != nil {
-				vb.sendJSON(ws, wsCtx, map[string]any{
-					"type":  "error",
-					"error": err.Error(),
-				})
-			}
+			// Drive the FSM to CLOSED. The browser is also informed.
+			_ = fsm.Handle(voiceEvent{kind: evError, err: err})
+			vb.sendJSON(vc.conn, vc.connCtx, map[string]any{
+				"type":  "error",
+				"error": err.Error(),
+			})
 		},
 	})
 	if err != nil {
 		return err
 	}
-
-	vb.mu.Lock()
-	vb.client = client
-	vb.mu.Unlock()
-	// Replay happens from OnSessionReady once session.updated has been
-	// acknowledged — until then audio is dropped and any item-create
-	// would race the session config.
+	vc.client = client
+	// Replay + pendingAudio flush happen from OnSessionReady when
+	// session.updated arrives — until then audio frames are buffered
+	// by the FSM (state OPENING) and any item-create would race the
+	// session config.
 	return nil
-}
-
-func (vb *VoiceBridge) stopGrokSession() {
-	vb.mu.Lock()
-	client := vb.client
-	vb.client = nil
-	vb.mu.Unlock()
-
-	if client != nil {
-		client.Close()
-		slog.Info("voice: Grok session closed")
-	}
 }
 
 func (vb *VoiceBridge) sendJSON(conn *websocket.Conn, ctx context.Context, v any) {
@@ -807,27 +710,30 @@ func (vb *VoiceBridge) completeTask(pt *pendingTask, result string, taskErr erro
 	}
 
 	vb.mu.Lock()
-	client := vb.client
+	fsm := vb.fsm
 	wsOpen := vb.voiceWS != nil
 	vb.mu.Unlock()
-	if client == nil {
-		// Grok session was torn down (idle timeout, error). The note
-		// is lost for this run; future JSONL persistence (1c) will
-		// replay it on next reconnect.
-		slog.Warn("voice: completion note dropped — no Grok session", "task_id", pt.id)
+	if fsm == nil {
+		// No active connection — the note is preserved in the JSONL log
+		// (already appended above), so on the next reconnect the
+		// replay path surfaces it to Grok.
+		slog.Warn("voice: completion deferred — no active session", "task_id", pt.id)
 		return
 	}
 
-	// Modality: if the voice WS is still attached, the user may want
-	// to hear the response. Otherwise (text-only client, or none),
-	// reply in text only — Grok still produces a transcript that can
-	// land in the chat panel once 1c lands.
 	modalities := grok.ModalitiesText
 	if wsOpen {
 		modalities = grok.ModalitiesTextAudio
 	}
 
-	if err := client.SendSystemNote(context.Background(), note, modalities); err != nil {
-		slog.Error("voice: failed to inject completion note", "task_id", pt.id, "err", err)
+	// FSM owns the timing: if it's currently busy (RESPONDING /
+	// COMMITTING / RECORDING), the event is queued until it returns
+	// to IDLE. If it's IDLE the system note fires immediately.
+	if err := fsm.Handle(voiceEvent{
+		kind:       evWorkerCompletion,
+		workerNote: note,
+		modalities: modalities,
+	}); err != nil {
+		slog.Warn("voice: worker completion event rejected", "err", err)
 	}
 }

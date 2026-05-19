@@ -242,10 +242,25 @@ class WebSocketTransport {
     }
   }
 
+  // PTT released without speech: discard whatever's in Grok's input
+  // buffer instead of committing, so the model doesn't transcribe
+  // noise and respond to it.
+  clearVoice() {
+    if (this.voiceWs?.readyState === 1) {
+      this.voiceWs.send(JSON.stringify({type: 'clear'}));
+    }
+  }
+
   // Mic capture lifecycle. Public so the UI can gate the mic on the
   // PTT key, independently of the WS lifetime. Calling startMic() when
-  // already running is a no-op.
+  // already running just resumes the AudioContext if it auto-suspended
+  // between turns (typically after Grok's response audio finished
+  // playing) — without that the ScriptProcessor stops firing and no
+  // mic frames are forwarded for subsequent turns.
   startMic() {
+    if (this._audioCtx?.state === 'suspended') {
+      this._audioCtx.resume().catch(() => {});
+    }
     if (this._mediaStream || this._micStarting) return;
     this._micStarting = true;
     this._startMicCapture().finally(() => { this._micStarting = false; });
@@ -383,6 +398,10 @@ class NativeTransport {
 
   commitVoice() {
     this._post({action: 'commitVoice'});
+  }
+
+  clearVoice() {
+    this._post({action: 'clearVoice'});
   }
 
   startMic() {

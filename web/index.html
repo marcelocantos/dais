@@ -204,6 +204,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
     <div id="terminal-container"></div>
   </div>
 </div>
+<script src="scripts/jlog.js"></script>
 <script src="scripts/transport.js"></script>
 <script>
 const msgs = document.getElementById('messages');
@@ -591,14 +592,12 @@ function pttArm() {
   if (pttArmTimer || pttActive) return;
   pttArmTimer = setTimeout(() => {
     pttArmTimer = null;
-    console.debug('[ptt] arm timer fired, engaging');
     pttEngage();
   }, pttArmDelayMs);
 }
 
 function pttCancelArm() {
   if (pttArmTimer) {
-    console.debug('[ptt] arm cancelled');
     clearTimeout(pttArmTimer);
     pttArmTimer = null;
   }
@@ -608,9 +607,16 @@ function pttEngage() {
   if (!voiceActive) startVoice(); // lazy-open on first engage
   pttActive = true;
   transport.startMic();
+  vadReset();
   voiceBtn.classList.add('active');
-  voiceBtn.style.boxShadow = '0 0 12px rgba(248,113,113,0.7)';
-  voiceStatusText.textContent = 'recording';
+  voiceBtn.style.boxShadow = '0 0 4px rgba(248,113,113,0.3)';
+  voiceStatusText.textContent = 'listening';
+  jLog('info', 'ptt engage', {
+    voiceActive,
+    audioCtxState: transport._audioCtx?.state,
+    mediaStreamActive: transport._mediaStream?.active,
+    voiceWsState: transport.voiceWs?.readyState,
+  });
 }
 
 window.addEventListener('keydown', e => {
@@ -661,20 +667,26 @@ document.addEventListener('visibilitychange', () => {
 
 function pttRelease() {
   pttActive = false;
-  // DO NOT stop the mic here. Calling getUserMedia again per turn
-  // creates a fresh MediaStream every time, which (a) burns capture
-  // warm-up latency on every press and (b) in some configurations
-  // causes the same audio to be re-captured each turn (the harness
-  // exposes this: every turn transcribes as "turn one" because the
-  // fake-device replays from the start on each new MediaStream).
-  // The mic stays open for the lifetime of the voice session;
-  // audio frames are gated by `pttActive` in onMicFrame.
-  voiceBtn.classList.remove('active'); // clear the pulsing-red UI state
+  voiceBtn.classList.remove('active');
   voiceBtn.style.boxShadow = '';
-  voiceStatusText.textContent = 'processing';
-  // End-of-utterance: commit the audio buffer and wait for Grok's
-  // response. The WS stays open for the next press.
-  transport.commitVoice();
+  const audioCtxState = transport._audioCtx?.state;
+  const voiceWsState = transport.voiceWs?.readyState;
+  const stats = {
+    framesSeen: vad.framesSeen,
+    framesSent: vad.framesSent,
+    peakRms:    vad.peakRms,
+    noiseFloor: vad.noiseFloor,
+    audioCtxState, voiceWsState,
+  };
+  if (vad.heardSpeech) {
+    voiceStatusText.textContent = 'processing';
+    transport.commitVoice();
+    jLog('info', 'ptt release / commit', stats);
+  } else {
+    voiceStatusText.textContent = 'listening';
+    transport.clearVoice();
+    jLog('info', 'ptt release / clear (no speech)', stats);
+  }
 }
 
 function startVoice() {
@@ -692,19 +704,84 @@ function stopVoice() {
   transport.stopVoice();
 }
 
-// Mic frames from transport. In PTT mode the user is the VAD: while
-// Ctrl is held, every frame is forwarded raw so Grok hears the whole
-// utterance (including mid-phrase pauses). Local VAD would chop on
-// silence and Grok's server VAD has been disabled to match. When not
-// recording, frames are dropped on the floor.
+// Local VAD — gate the audio stream to Grok so silence between turns
+// or mid-pause "I changed my mind" releases don't deliver an empty
+// buffer that Grok dutifully responds to.
+//
+// Design constraints (learned the hard way):
+//   - holdMs must be long enough to span a normal mid-sentence pause
+//     (~2-3 seconds), or VAD chops mid-utterance and Grok hears two
+//     fragments instead of one. We pick 2500ms.
+//   - preBuffer captures the few frames before VAD onset, otherwise
+//     soft openings ("uh, can you...") lose their leading consonants.
+//   - onset/offset use hysteresis (different ratios) so a single
+//     loud blip doesn't briefly start/stop the stream.
+//
+// State is per-engagement: reset in pttEngage so VAD's noise floor
+// learns from the current room rather than yesterday's session.
+const vad = {
+  noiseFloor:   0.005, // running estimate of background level
+  noiseAlpha:   0.02,  // EMA weight for noise-floor adaptation
+  onsetRatio:   2.5,   // RMS > noiseFloor * onsetRatio triggers speech
+  offsetRatio:  1.5,   // RMS < noiseFloor * offsetRatio counts as silence
+  holdMs:       2500,  // continue sending for this long after silence
+  preBufferMax: 8,     // ~340ms of pre-roll at ~43ms/frame
+  speaking:     false,
+  holdUntil:    0,
+  preBuffer:    [],
+  heardSpeech:  false, // any onset during the current PTT cycle?
+  // Per-engagement counters (for jLog diagnostics).
+  framesSeen:   0,
+  framesSent:   0,
+  peakRms:      0,
+};
+
+function vadReset() {
+  vad.speaking = false;
+  vad.holdUntil = 0;
+  vad.preBuffer = [];
+  vad.heardSpeech = false;
+  vad.framesSeen = 0;
+  vad.framesSent = 0;
+  vad.peakRms = 0;
+  // Don't reset noiseFloor — let it stay adapted across PTT cycles.
+}
+
 transport.onMicFrame = ({handle, rms}) => {
-  if (!pttActive) return;
+  if (!pttActive) {
+    return;
+  }
+  vad.framesSeen++;
+  if (rms > vad.peakRms) vad.peakRms = rms;
+
+  const now = Date.now();
+
+  if (!vad.speaking) {
+    vad.noiseFloor += vad.noiseAlpha * (rms - vad.noiseFloor);
+    vad.preBuffer.push(handle);
+    if (vad.preBuffer.length > vad.preBufferMax) vad.preBuffer.shift();
+
+    if (rms > vad.noiseFloor * vad.onsetRatio && rms > 0.005) {
+      vad.speaking = true;
+      vad.heardSpeech = true;
+      vad.holdUntil = now + vad.holdMs;
+      for (const h of vad.preBuffer) { transport.sendAudio(h); vad.framesSent++; }
+      vad.preBuffer = [];
+      voiceBtn.style.boxShadow = '0 0 12px rgba(248,113,113,0.7)';
+      jLog('debug', 'vad onset', {rms, noiseFloor: vad.noiseFloor});
+    }
+    return;
+  }
+
   transport.sendAudio(handle);
-  // Visual feedback: dim the glow when the user is between phrases.
-  if (rms > 0.005) {
-    voiceBtn.style.boxShadow = '0 0 12px rgba(248,113,113,0.7)';
-  } else {
+  vad.framesSent++;
+
+  if (rms > vad.noiseFloor * vad.offsetRatio) {
+    vad.holdUntil = now + vad.holdMs;
+  } else if (now > vad.holdUntil) {
+    vad.speaking = false;
     voiceBtn.style.boxShadow = '0 0 4px rgba(248,113,113,0.3)';
+    jLog('debug', 'vad hold expired', {framesSent: vad.framesSent});
   }
 };
 
