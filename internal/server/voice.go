@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,6 +50,20 @@ type VoiceBridge struct {
 	voiceCtx    context.Context
 	audioLogged bool
 
+	// grokReady is set in OnSessionReady once session.updated has been
+	// acknowledged by xAI. Audio frames received before this flag is
+	// true would otherwise be processed under the API's default
+	// turn_detection (server VAD), defeating our ManualCommit config
+	// and causing Grok to auto-respond to noise before the user has
+	// even said anything.
+	grokReady bool
+
+	// pendingAudio holds frames that arrive before grokReady — flushed
+	// (in receive order) from OnSessionReady so the first ~1.2s of the
+	// user's first utterance after a fresh session isn't lost to the
+	// handshake window.
+	pendingAudio [][]byte
+
 	// resetIdle is set per-connection by HandleVoiceWS so the Grok
 	// callbacks (which live longer than a local closure stack) can
 	// poke the idle timer when something interesting happens.
@@ -57,7 +74,21 @@ type VoiceBridge struct {
 	// originating call metadata.
 	tasksMu sync.Mutex
 	tasks   map[string]*pendingTask
+
+	// log persists the Grok conversation across sessions so context
+	// survives idle timeouts, server restarts, and page reloads. Each
+	// new Grok session replays the recent tail before user audio starts
+	// flowing so the model picks up where the previous session left off.
+	log         *GrokLog
+	assistantMu sync.Mutex
+	assistantBuf strings.Builder // accumulates response.output_audio_transcript.delta
 }
+
+// grokReplayTurns is how many recent log entries are replayed into a
+// fresh Grok session. Keep this bounded — every replayed item is input
+// for the next response.create, so the cost and latency of session
+// start scales linearly with this number.
+const grokReplayTurns = 20
 
 func newTaskID() string {
 	var b [6]byte
@@ -66,11 +97,22 @@ func newTaskID() string {
 }
 
 // NewVoiceBridge creates a voice bridge with the given xAI API key.
+// The Grok conversation log lives at ~/.jevons/grok/conversation.jsonl
+// and persists across server restarts; failure to open it is logged
+// but non-fatal — the bridge still functions, just without persistence.
 func NewVoiceBridge(srv *Server, apiKey string) *VoiceBridge {
+	logPath := filepath.Join(os.Getenv("HOME"), ".jevons", "grok", "conversation.jsonl")
+	log, err := NewGrokLog(logPath)
+	if err != nil {
+		slog.Warn("voice: grok log unavailable — running without persistence", "path", logPath, "err", err)
+	} else {
+		slog.Info("voice: grok log opened", "path", logPath)
+	}
 	return &VoiceBridge{
 		srv:    srv,
 		apiKey: apiKey,
 		tasks:  make(map[string]*pendingTask),
+		log:    log,
 	}
 }
 
@@ -108,10 +150,18 @@ func (vb *VoiceBridge) HandleVoiceWS(w http.ResponseWriter, r *http.Request) {
 	vb.voiceWS = conn
 	vb.voiceCtx = ctx
 	vb.audioLogged = false
+	vb.grokReady = false // re-armed in OnSessionReady once session.updated arrives
+	vb.pendingAudio = nil
 	vb.mu.Unlock()
 	if stale != nil {
 		_ = stale.Close()
 	}
+
+	// Per-connection audio frame counter for periodic logging. Lets us
+	// confirm audio is actually flowing across turn boundaries — the old
+	// "first frame only" log was useless after the first utterance.
+	audioFrameCount := 0
+	_ = audioFrameCount // silence unused before first use in loop below
 
 	// Idle timer: defensively close the WS after voiceIdleTimeout of no
 	// audio frames, commits, or response.done events. Guards against an
@@ -184,19 +234,39 @@ func (vb *VoiceBridge) HandleVoiceWS(w http.ResponseWriter, r *http.Request) {
 
 		switch mt {
 		case websocket.MessageBinary:
-			// Raw PCM audio from client — forward to Grok.
+			// Raw PCM audio from client. If the Grok session isn't
+			// fully configured yet (turn_detection still on xAI's
+			// default), buffer the frame instead of forwarding —
+			// OnSessionReady flushes the backlog so the first second
+			// of the user's first utterance isn't lost to handshake.
 			resetIdle()
+			audioFrameCount++
+			logThisFrame := audioFrameCount == 1 || audioFrameCount%50 == 0
 			vb.mu.Lock()
+			if !vb.grokReady {
+				// Copy because the WS read buffer is reused.
+				vb.pendingAudio = append(vb.pendingAudio, append([]byte(nil), data...))
+				bufLen := len(vb.pendingAudio)
+				vb.mu.Unlock()
+				if logThisFrame {
+					slog.Info("voice: buffering audio — Grok not ready yet",
+						"frame", audioFrameCount, "queued", bufLen)
+				}
+				continue
+			}
 			client := vb.client
 			vb.mu.Unlock()
 			if client != nil {
-				if !vb.audioLogged {
-					slog.Info("voice: forwarding audio to grok", "bytes", len(data))
-					vb.audioLogged = true
+				if logThisFrame {
+					slog.Info("voice: forwarding audio to grok",
+						"frame", audioFrameCount, "bytes", len(data))
 				}
 				if err := client.SendAudio(grokCtx, data); err != nil {
 					slog.Warn("voice: audio forward failed", "err", err)
 				}
+			} else if logThisFrame {
+				slog.Warn("voice: dropping audio — no Grok client",
+					"frame", audioFrameCount, "bytes", len(data))
 			}
 
 		case websocket.MessageText:
@@ -368,6 +438,12 @@ that doesn't read well aloud.`,
 		},
 
 		OnTranscript: func(text string) {
+			// Accumulate the delta — flushed to the log at OnTranscriptDone
+			// so a single assistant turn becomes one JSONL entry.
+			vb.assistantMu.Lock()
+			vb.assistantBuf.WriteString(text)
+			vb.assistantMu.Unlock()
+
 			vb.mu.Lock()
 			ws := vb.voiceWS
 			wsCtx := vb.voiceCtx
@@ -381,6 +457,14 @@ that doesn't read well aloud.`,
 		},
 
 		OnTranscriptDone: func() {
+			vb.assistantMu.Lock()
+			turnText := vb.assistantBuf.String()
+			vb.assistantBuf.Reset()
+			vb.assistantMu.Unlock()
+			if turnText != "" {
+				vb.logAppend(GrokLogEntry{Role: "assistant", Content: turnText})
+			}
+
 			vb.mu.Lock()
 			ws := vb.voiceWS
 			wsCtx := vb.voiceCtx
@@ -394,8 +478,11 @@ that doesn't read well aloud.`,
 
 		OnUserTranscript: func(text string) {
 			slog.Info("voice: user said", "text", text)
-			// Broadcast user transcript to web UI for display only.
-			// Don't send to Claude — only send_to_jevons tool calls go there.
+			vb.logAppend(GrokLogEntry{
+				Role:    "user",
+				Content: text,
+				Meta:    map[string]any{"modality": "voice"},
+			})
 			vb.mu.Lock()
 			ws := vb.voiceWS
 			wsCtx := vb.voiceCtx
@@ -415,6 +502,33 @@ that doesn't read well aloud.`,
 			vb.mu.Lock()
 			ws := vb.voiceWS
 			wsCtx := vb.voiceCtx
+			client := vb.client
+			vb.mu.Unlock()
+			// Replay history into the freshly-configured session BEFORE
+			// the user audio buffer is committed, so the conversation
+			// order is: history items → new user audio → response.
+			if client != nil {
+				vb.replayLog(ctx, client)
+			}
+			// Flush any audio that arrived during the ~1.2s session
+			// handshake. Hold the lock across the flush + grokReady
+			// flip so concurrent read-loop frames can't sneak in
+			// out of order: they'll block on the lock, observe
+			// grokReady=true after the flush, and forward their frame
+			// behind the backlog.
+			vb.mu.Lock()
+			backlog := vb.pendingAudio
+			vb.pendingAudio = nil
+			if len(backlog) > 0 && client != nil {
+				slog.Info("voice: flushing buffered audio", "frames", len(backlog))
+				for _, chunk := range backlog {
+					if err := client.SendAudio(ctx, chunk); err != nil {
+						slog.Warn("voice: backlog forward failed", "err", err)
+						break
+					}
+				}
+			}
+			vb.grokReady = true
 			vb.mu.Unlock()
 			if ws != nil {
 				vb.sendJSON(ws, wsCtx, map[string]any{
@@ -469,7 +583,9 @@ that doesn't read well aloud.`,
 	vb.mu.Lock()
 	vb.client = client
 	vb.mu.Unlock()
-
+	// Replay happens from OnSessionReady once session.updated has been
+	// acknowledged — until then audio is dropped and any item-create
+	// would race the session config.
 	return nil
 }
 
@@ -491,6 +607,44 @@ func (vb *VoiceBridge) sendJSON(conn *websocket.Conn, ctx context.Context, v any
 		return
 	}
 	conn.Write(ctx, websocket.MessageText, data)
+}
+
+// logAppend writes an entry to the persistent Grok conversation log.
+// Failures are logged but never propagated — losing log persistence
+// must not break the live voice flow.
+func (vb *VoiceBridge) logAppend(e GrokLogEntry) {
+	if vb.log == nil {
+		return
+	}
+	if err := vb.log.Append(e); err != nil {
+		slog.Warn("voice: grok log append failed", "err", err)
+	}
+}
+
+// replayLog injects the last grokReplayTurns of conversation history
+// into the freshly-opened Grok session so context survives session
+// boundaries. Items are inserted via conversation.item.create with no
+// response.create — Grok absorbs the history silently and is ready
+// for the user's next input.
+func (vb *VoiceBridge) replayLog(ctx context.Context, client *grok.Client) {
+	if vb.log == nil {
+		return
+	}
+	entries, err := vb.log.Tail(grokReplayTurns)
+	if err != nil {
+		slog.Warn("voice: grok log tail failed", "err", err)
+		return
+	}
+	if len(entries) == 0 {
+		return
+	}
+	slog.Info("voice: replaying conversation history", "turns", len(entries))
+	for _, e := range entries {
+		if err := client.InjectConversationItem(ctx, e.Role, e.Content); err != nil {
+			slog.Warn("voice: replay inject failed", "role", e.Role, "err", err)
+			return
+		}
+	}
 }
 
 // handleFunctionCall dispatches Grok tool calls. All tools return a
@@ -607,6 +761,28 @@ func (vb *VoiceBridge) completeTask(pt *pendingTask, result string, taskErr erro
 	vb.tasksMu.Lock()
 	delete(vb.tasks, pt.id)
 	vb.tasksMu.Unlock()
+
+	// Persist the worker's full output to the log as a system entry.
+	// The chat panel renders this collapsed-by-default with the worker
+	// name as a header (UI work lands in 1d); Grok sees it as part of
+	// its conversation context on replay.
+	logRole := "system"
+	logKind := "task_complete"
+	logContent := result
+	if taskErr != nil {
+		logKind = "task_failed"
+		logContent = fmt.Sprintf("error: %v", taskErr)
+	}
+	vb.logAppend(GrokLogEntry{
+		Role:    logRole,
+		Content: logContent,
+		Meta: map[string]any{
+			"kind":     logKind,
+			"agent":    pt.agent,
+			"task_id":  pt.id,
+			"task":     pt.task,
+		},
+	})
 
 	var note string
 	if taskErr != nil {

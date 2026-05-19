@@ -661,8 +661,15 @@ document.addEventListener('visibilitychange', () => {
 
 function pttRelease() {
   pttActive = false;
-  transport.stopMic(); // kill OS mic immediately on release
-  voiceBtn.classList.remove('active'); // ← clear the pulsing-red UI state
+  // DO NOT stop the mic here. Calling getUserMedia again per turn
+  // creates a fresh MediaStream every time, which (a) burns capture
+  // warm-up latency on every press and (b) in some configurations
+  // causes the same audio to be re-captured each turn (the harness
+  // exposes this: every turn transcribes as "turn one" because the
+  // fake-device replays from the start on each new MediaStream).
+  // The mic stays open for the lifetime of the voice session;
+  // audio frames are gated by `pttActive` in onMicFrame.
+  voiceBtn.classList.remove('active'); // clear the pulsing-red UI state
   voiceBtn.style.boxShadow = '';
   voiceStatusText.textContent = 'processing';
   // End-of-utterance: commit the audio buffer and wait for Grok's
