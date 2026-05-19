@@ -28,6 +28,7 @@
 //   onMicFrame({handle, rms})   — mic audio frame available for VAD
 //   onAudio(handleOrBytes)      — incoming audio from Grok
 //   onVoiceEvent(json)          — voice status/transcript events
+//   onVoiceClose()              — voice WS closed (server side or network)
 //   onError(string)             — error message
 
 // --- Detect environment ---
@@ -214,9 +215,15 @@ class WebSocketTransport {
     };
     this.voiceWs.onclose = () => {
       this.stopVoice();
+      // Notify the UI layer so it can reset its own state flags
+      // (voiceActive, button classes) — otherwise the next PTT press
+      // sees voiceActive=true, skips startVoice(), and tries to
+      // forward audio over a dead WS that silently drops everything.
+      this.onVoiceClose?.();
     };
     this.voiceWs.onerror = () => {
       this.stopVoice();
+      this.onVoiceClose?.();
     };
     this.voiceWs.onmessage = e => {
       if (e.data instanceof ArrayBuffer) {

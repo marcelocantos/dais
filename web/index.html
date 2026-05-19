@@ -704,6 +704,25 @@ function stopVoice() {
   transport.stopVoice();
 }
 
+// Transport's voice WS closed unexpectedly (most commonly: server-side
+// 30 s idle timeout). Reset the page-level state so the next PTT press
+// triggers a fresh startVoice() — without this, voiceActive stays true,
+// startVoice is skipped, and the next utterance's audio + commit are
+// silently dropped over a dead WS.
+transport.onVoiceClose = () => {
+  jLog?.('info', 'voice WS closed — resetting page state');
+  // Don't call pttRelease — its commitVoice() would no-op against a
+  // dead WS and the UI state would land in 'processing' instead of
+  // back at 'idle'. Just inline the cleanup.
+  pttCancelArm();
+  pttActive = false;
+  voiceActive = false;
+  voiceBtn.classList.remove('active', 'connecting');
+  voiceBtn.style.boxShadow = '';
+  voiceStatus.classList.remove('on');
+  voiceStatusText.textContent = 'listening';
+};
+
 // Local VAD — gate the audio stream to Grok so silence between turns
 // or mid-pause "I changed my mind" releases don't deliver an empty
 // buffer that Grok dutifully responds to.
