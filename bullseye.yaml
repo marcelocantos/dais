@@ -1,4 +1,4 @@
-schema_version: 4
+schema_version: 5
 last_evaluated: afe8751
 targets:
   T1:
@@ -460,6 +460,34 @@ targets:
     context: 'Currently /ws/voice is proxied through jevonsd: browser to jevonsd to Grok via two WebSockets. For the laptop dev path that''s fine — jevonsd is on localhost and the only WAN hop is jevonsd-to-Grok. For the iPad-in-car deployment (the primary target, exposed via ngrok), audio bounces through the home Mac: phone to ngrok to home jevonsd to Grok and back, doubling residential uplink consumption (~64 KB/s × 2 = ~128 KB/s through home ISP per active voice session). Direct path lets the iPad talk to Grok over its own cellular/wifi; home ISP only carries small Claude/jevon control messages. Also reduces latency by avoiding the home network as an intermediate stop and makes voice resilient to home Wi-Fi flakiness. Approach: reimplement claudia/grok in JS (~200 lines: WS open, session config, audio framing, JSON event switch). Add ephemeral-token endpoint on jevonsd (or accept subprotocol-baked key for personal devices). Move send_to_jevons round-tripping to the browser, with the chat WS as the jevon/browser link. Not urgent — laptop dev path works fine via the proxy. Raise once iPad becomes the primary deployment again.'
     origin: manual
     discovered: 2026-05-14
+  T23:
+    name: Chat panel visually differentiates user / assistant / worker (system) messages
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - 'The chat panel renders entries from the Grok JSONL with three visually distinct styles: user (right-aligned, accent bubble — current style), assistant (left-aligned, primary text — current style), and worker / system (centred or indented, dim, with a small worker-name header or badge).'
+    - Worker (role=system) entries carry a header showing the originating agent (Meta.agent) and task id (Meta.task_id) so the user can correlate. For task-failure entries, the failure cause is rendered as a quieter sub-line.
+    - Long worker results are collapsed by default with an expand affordance, since Grok will summarise them conversationally in a following assistant turn — the raw content is for power-user inspection.
+    - After this lands, the user cannot mistake a worker note for an extra assistant response (the 'double response' observation in the 2026-05-19 transcript at 08:31).
+    context: 'From the 2026-05-19/2026-05-20 voice transcript analysis: the JSONL persistence layer correctly tags entries with role (user / assistant / system) and Meta (agent, task_id, kind, modality) but the chat panel renders all three roles identically. The user''s own observation in the transcript: "you treat any input as user chat, but some of your input comes from me and other input comes from the sub-agents. This is a UX gap" (08:29). Following the existing UX paper-napkin design (08:30:49) — colour-code agent results centred + distinct hue, vs left-aligned assistant relays vs right-aligned user inputs, possibly with subtle icons or badges. Reading the JSONL is the source of truth (the persistence is already correctly typed); this target is purely the rendering side. Blocks Phase 2 image rendering (image markers in role=user content) which will need similar role-aware rendering.'
+    tags:
+    - visual
+    origin: manual
+    discovered: 2026-05-20
+  T24:
+    name: Worker agents survive Claude Code's stale-session resume prompt
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - When claudia.Registry.Launch resumes a long-lived session that Claude Code wants to summarise first, the launch path automatically selects the safe default (option 1 / Enter) rather than wedging at the menu.
+    - The readiness pattern in claudia.Agent.WaitReady recognises this menu and either advances through it or surfaces a distinct, actionable error instead of the generic 'ready pattern did not match within 30s'.
+    - Delegate-tool calls in jevonsd no longer fail with 'claude not ready' for worker agents whose sessions have aged out, as observed for jevons-po on 2026-05-19/20.
+    - 'Regression test (manual or scripted): create an agent with a synthetically-aged session id, launch it, and confirm Send + WaitForResponse succeeds without operator intervention.'
+    context: 'Observed 2026-05-19/20 in the Grok JSONL transcript: jevons-po dispatches failed twice with ''send to worker failed: claude not ready: ready pattern did not match within 30s''. Manual investigation of the agent''s tmux window revealed the Claude Code TUI parked at a resume-session prompt for a 5-day, 105k-token session, offering Resume from summary / Resume full session / Don''t ask me again. Pressing Enter (default option 1) unsticks it but every long-running registered agent eventually hits the same wall. The bug is in claudia''s agent-launch handshake, not jevonsd''s voice path. Fix lives in claudia.Agent.WaitReady (recognise the prompt as a transient menu, not as not-ready) and/or in Registry.Launch (auto-confirm the default option). May also want a jevonsd-side recovery: if Send returns not-ready, inspect the agent''s terminal output for known menu patterns and either retry with auto-confirmation or surface a clearer error.'
+    origin: manual
+    discovered: 2026-05-20
   T3:
     name: Test coverage exists for core packages
     status: achieved
