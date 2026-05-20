@@ -1,6 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
+import Pigeon
 import SwiftUI
 
 struct ContentView: View {
@@ -8,10 +9,17 @@ struct ContentView: View {
     @Environment(VoiceManager.self) private var voiceManager
     @State private var showSheet = false
     @State private var showNotification = false
+    @State private var pairingArtifact: PairingArtifact? = PigeonAccount.shared.load()
 
     var body: some View {
         Group {
-            if let mainView = connection.mainView {
+            if let artifact = pairingArtifact, !artifact.isExpired() {
+                // Production path: bundled web UI talking to jevonsd
+                // through pigeon, authenticated by the persisted
+                // PairingArtifact.
+                WebUIView(artifact: artifact)
+                    .ignoresSafeArea()
+            } else if let mainView = connection.mainView {
                 // Server-driven UI — render the view tree from jevond.
                 ServerView(node: mainView) { action, value in
                     handleAction(action, value: value)

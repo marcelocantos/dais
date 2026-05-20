@@ -51,6 +51,24 @@ func (s *Server) ConnectRelay(ctx context.Context, relayURL, token, instanceID s
 	instanceID = conn.InstanceID()
 	slog.Info("registered with relay", "instance_id", instanceID)
 
+	// If we have a paired credential, derive the server-side channel
+	// from its PairingRecord. The client side derives the matching
+	// channel from its PairingArtifact in pigeon.ConnectWithArtifact;
+	// info strings are swapped (the client's send is the server's
+	// recv and vice versa).
+	if rec := s.creds.Get(); rec != nil {
+		ch, err := rec.DeriveChannel([]byte("server-to-client"), []byte("client-to-server"))
+		if err != nil {
+			conn.Close()
+			return "", fmt.Errorf("derive channel from credential: %w", err)
+		}
+		conn.SetChannel(ch)
+		conn.SetPairingRecord(rec)
+		slog.Info("relay channel encrypted", "peer", rec.PeerInstanceID)
+	} else {
+		slog.Warn("relay running without credential — traffic will be unencrypted; pair a device with `jevonsd --pair`")
+	}
+
 	// Register as a virtual remote client.
 	s.mu.Lock()
 	s.remoteSeq++
@@ -65,28 +83,8 @@ func (s *Server) ConnectRelay(ctx context.Context, relayURL, token, instanceID s
 		"home":    os.Getenv("HOME"),
 	})
 
-	s.mu.RLock()
-	hist := make([]TranscriptEntry, len(s.transcript))
-	copy(hist, s.transcript)
-	s.mu.RUnlock()
-
-	if len(hist) > 0 {
-		s.sendJSON(ctx, conn, map[string]any{
-			"type":    "history",
-			"entries": hist,
-		})
-	}
-
-	if s.luaRT != nil {
-		if source, err := s.luaRT.Scripts(); err != nil {
-			slog.Error("relay: failed to read lua scripts", "err", err)
-		} else if source != "" {
-			s.sendJSON(ctx, conn, map[string]any{
-				"type":   "scripts",
-				"source": source,
-			})
-		}
-	}
+	// History is now served from Claude's JSONL session file by /ws/chat
+	// (sendHistory). The relay path does not replay history.
 
 	// Read loop: process messages from the relay.
 	go func() {

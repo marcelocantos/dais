@@ -11,16 +11,16 @@ settings:
     DEVELOPMENT_TEAM: WG8QTTL954
 
 packages:
-  Tern:
-    url: https://github.com/marcelocantos/tern
-    from: 0.11.0
+  Pigeon:
+    url: https://github.com/marcelocantos/pigeon
+    from: 0.19.0
 
 targets:
   Jevon:
     type: application
     platform: iOS
     dependencies:
-      - package: Tern
+      - package: Pigeon
     sources:
       - path: Jevon
         excludes: ["Models/E2ECrypto.swift", "Protocol/PairingCeremonyMachine.swift"]
@@ -39,6 +39,10 @@ targets:
         compilerFlags: "-w -std=c++23 -DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_PREUPDATE_HOOK"
       - path: Vendor/sqldeep/dist/sqldeep.cpp
         compilerFlags: "-w -std=c++20"
+      - path: ../web
+        name: web
+        type: folder
+        buildPhase: resources
     settings:
       base:
         INFOPLIST_FILE: Jevon/Info.plist

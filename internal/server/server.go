@@ -6,7 +6,7 @@ package server
 
 import (
 	"context"
-	"crypto/ecdh"
+	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -23,18 +23,11 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/marcelocantos/claudia"
-	"github.com/marcelocantos/jevons/internal/db"
-	"github.com/marcelocantos/jevons/internal/jevons"
+	"github.com/marcelocantos/jevons/internal/auth"
+	
 	"github.com/marcelocantos/jevons/internal/manager"
-	"github.com/marcelocantos/jevons/internal/ui"
+	
 )
-
-// TranscriptEntry is a single turn in the conversation log.
-type TranscriptEntry struct {
-	Role      string    `json:"role"` // "user" or "jevons"
-	Text      string    `json:"text"`
-	Timestamp time.Time `json:"timestamp"`
-}
 
 // remoteWriter abstracts over WebSocket and tern relay connections.
 type remoteWriter interface {
@@ -61,22 +54,18 @@ type remoteConn struct {
 
 // Server is the daisd HTTP/WebSocket server.
 type Server struct {
-	jevon   *jevons.Jevon
 	mgr     *manager.Manager
-	db      *db.DB
 	version string
+	ca      *auth.CA
 
-	mu         sync.RWMutex
-	remoteSeq  int
-	remotes    map[int]remoteConn
-	transcript []TranscriptEntry
-	turnBuf    string // accumulates Jevon text for current turn
+	mu        sync.RWMutex
+	remoteSeq int
+	remotes   map[int]remoteConn
+	turnBuf   string // accumulates Jevon text for current turn
+	waiting   bool   // true while awaiting a response from Jevon
 
-	luaRT          *ui.LuaRuntime
-	viewState      *ui.ViewState
 	lanSrv         *pigeon.LANServer // LAN server for direct connections
-	serverKP       *ecdh.PrivateKey
-	pubKeyBase64   string
+	creds          *CredentialStore
 	openAIKey      string
 	voiceBridge    *VoiceBridge
 	lastScreenshot string
@@ -86,110 +75,63 @@ type Server struct {
 	chatListeners  []chan string
 }
 
-func (s *Server) PubKeyBase64() string { return s.pubKeyBase64 }
+// Credentials returns the server-side pairing credential store.
+func (s *Server) Credentials() *CredentialStore { return s.creds }
 
-// New creates a Server with the given Jevon instance, manager, database, version string,
-// Lua runtime, and view state. The Lua runtime and view state may be nil if the
-// server-driven UI is not yet active.
-func New(jev *jevons.Jevon, mgr *manager.Manager, database *db.DB, version string, luaRT *ui.LuaRuntime, vs *ui.ViewState) *Server {
+// New creates a Server with the given manager and version string.
+func New(mgr *manager.Manager, version string) *Server {
 	s := &Server{
-		jevon:         jev,
 		mgr:           mgr,
-		db:            database,
 		version:       version,
 		remotes:       make(map[int]remoteConn),
-		luaRT:         luaRT,
-		viewState:     vs,
+		creds:         NewCredentialStore(filepath.Join(os.Getenv("HOME"), ".jevons", "credential.json")),
 		chatListeners: make([]chan string, 0),
 	}
 
-	// Load persisted transcript.
-	if entries, err := database.LoadTranscript(); err != nil {
-		slog.Error("failed to load transcript", "err", err)
-	} else {
-		for _, e := range entries {
-			s.transcript = append(s.transcript, TranscriptEntry{
-				Role:      e.Role,
-				Text:      e.Text,
-				Timestamp: e.CreatedAt,
-			})
-		}
-		if len(s.transcript) > 0 {
-			slog.Info("loaded transcript from database", "entries", len(s.transcript))
-		}
-
-		// Populate view state with persisted transcript.
-		if vs != nil {
-			for _, e := range entries {
-				vs.AddMessage(e.Role, e.Text)
-			}
-			vs.SetConnected(version, os.Getenv("HOME"))
-		}
+	if rec, err := s.creds.Load(); err != nil {
+		slog.Warn("failed to load credential", "path", s.creds.Path(), "err", err)
+	} else if rec != nil {
+		slog.Info("loaded pairing credential", "peer", rec.PeerInstanceID)
 	}
 
-	// Wire Jevon callbacks once — they broadcast to all connected clients.
-	jev.SetRawLog(func(line []byte) {
-		if err := s.db.AppendRawLog("jevons", string(line)); err != nil {
-			slog.Error("failed to persist raw log", "err", err)
-		}
-	})
-	jev.SetOutput(func(text string) {
-		s.mu.Lock()
-		s.turnBuf += text
-		s.mu.Unlock()
-
-		s.Broadcast(map[string]any{
-			"type":    "text",
-			"content": text,
-		})
-
-		if s.viewState != nil {
-			s.viewState.UpdateStreamingText(text)
-			s.PushView()
-		}
-	})
-	jev.SetStatus(func(state string) {
-		if state == "idle" {
-			s.mu.Lock()
-			turnText := s.turnBuf
-			if turnText != "" {
-				s.transcript = append(s.transcript, TranscriptEntry{
-					Role:      "jevons",
-					Text:      turnText,
-					Timestamp: time.Now(),
-				})
-				s.turnBuf = ""
-			}
-			s.mu.Unlock()
-
-			if turnText != "" {
-				if err := s.db.AppendTranscript("jevons", turnText); err != nil {
-					slog.Error("failed to persist jevons turn", "err", err)
-				}
-
-				// If voice bridge is active, inject the response for TTS.
-				if s.voiceBridge != nil {
-					s.voiceBridge.InjectResponse(turnText)
-				}
-			}
-
-			if s.viewState != nil {
-				s.viewState.FlushStreaming()
-			}
-		}
-
-		s.Broadcast(map[string]any{
-			"type":  "status",
-			"state": state,
-		})
-
-		if s.viewState != nil {
-			s.viewState.SetStatus(state)
-			s.PushView()
-		}
-	})
-
 	return s
+}
+
+// HandleAgentEvent processes a JSONL event from the Jevon agent —
+// accumulates assistant text into the current turn buffer, emits
+// thinking/idle status to clients, and injects completed turns into
+// the Grok voice bridge for TTS. Wired via Agent.SubscribeEvents in
+// the daemon entry point.
+func (s *Server) HandleAgentEvent(ev claudia.Event) {
+	switch ev.Type {
+	case "assistant":
+		if ev.Text == "" {
+			return
+		}
+		s.mu.Lock()
+		s.turnBuf += ev.Text
+		s.mu.Unlock()
+		s.Broadcast(map[string]any{"type": "text", "content": ev.Text})
+
+	case "system":
+		s.mu.Lock()
+		wasWaiting := s.waiting
+		turnText := s.turnBuf
+		s.turnBuf = ""
+		s.waiting = false
+		s.mu.Unlock()
+		if !wasWaiting {
+			return
+		}
+		s.Broadcast(map[string]any{"type": "status", "state": "idle"})
+		// Pre-🎯T18: voiceBridge.InjectResponse(turnText) used to be
+		// called here so Grok would speak Claude's turn aloud. Removed
+		// because Grok is now the overseer: it dispatches to Claude via
+		// the delegate() tool and receives completions through a
+		// goroutine that calls SendSystemNote directly. Re-invoking
+		// InjectResponse here would double-handle every delegated turn.
+		_ = turnText
+	}
 }
 
 // BroadcastBinary sends a binary WebSocket message to all connected clients.
@@ -219,9 +161,11 @@ func (s *Server) BroadcastBinary(data []byte) {
 // Static file serving is handled by DevServer.
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("POST /api/provision", s.handleProvision)
 	mux.HandleFunc("/ws/chat", s.handleChat)
 	mux.HandleFunc("/ws/remote", s.handleRemote)
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
+	mux.HandleFunc("POST /api/log", s.handleBrowserLog)
 	mux.HandleFunc("/ws/agent-terminal", s.handleAgentTerminal)
 	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
 	mux.HandleFunc("GET /api/sessions/{id}", s.handleGetSession)
@@ -300,6 +244,90 @@ func (s *Server) SetVoiceBridge(vb *VoiceBridge) {
 // VoiceBridgeRef returns the voice bridge, if configured.
 func (s *Server) VoiceBridgeRef() *VoiceBridge { return s.voiceBridge }
 
+// SetCA attaches a CA for mTLS device provisioning.
+func (s *Server) SetCA(ca *auth.CA) { s.ca = ca }
+
+// provisionRequest is the JSON body for POST /api/provision.
+type provisionRequest struct {
+	DeviceID  string `json:"device_id"`
+	PublicKey string `json:"public_key"` // base64-encoded Ed25519 public key
+}
+
+// provisionResponse is the JSON body returned by POST /api/provision.
+type provisionResponse struct {
+	Certificate   string `json:"certificate"`    // PEM-encoded client cert
+	CACertificate string `json:"ca_certificate"` // PEM-encoded CA cert
+}
+
+// handleProvision issues a client certificate for a new device.
+// This endpoint is intentionally accessible without a client certificate —
+// it is the bootstrap step for provisioning new devices.
+func (s *Server) handleProvision(w http.ResponseWriter, r *http.Request) {
+	if s.ca == nil {
+		http.Error(w, `{"error":"CA not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	var req provisionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	if req.DeviceID == "" {
+		http.Error(w, `{"error":"device_id is required"}`, http.StatusBadRequest)
+		return
+	}
+	if req.PublicKey == "" {
+		http.Error(w, `{"error":"public_key is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	keyBytes, err := base64.StdEncoding.DecodeString(req.PublicKey)
+	if err != nil {
+		http.Error(w, `{"error":"public_key must be base64-encoded"}`, http.StatusBadRequest)
+		return
+	}
+	if len(keyBytes) != ed25519.PublicKeySize {
+		http.Error(w, `{"error":"public_key must be a 32-byte Ed25519 public key"}`, http.StatusBadRequest)
+		return
+	}
+	pubKey := ed25519.PublicKey(keyBytes)
+
+	certPEM, err := s.ca.IssueCert(pubKey, req.DeviceID)
+	if err != nil {
+		slog.Error("provision: IssueCert failed", "device_id", req.DeviceID, "err", err)
+		http.Error(w, `{"error":"certificate issuance failed"}`, http.StatusInternalServerError)
+		return
+	}
+
+	slog.Info("device provisioned", "device_id", req.DeviceID)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(provisionResponse{
+		Certificate:   string(certPEM),
+		CACertificate: string(s.ca.CertPEM()),
+	})
+}
+
+// ClientCertMiddleware wraps an http.Handler and enforces that the client
+// presented a valid certificate on all routes except those in exemptPaths.
+// Use this when the TLS config has ClientAuth: VerifyClientCertIfGiven so
+// that provisioning endpoints remain reachable before a cert is issued.
+func ClientCertMiddleware(next http.Handler, exemptPaths ...string) http.Handler {
+	exempt := make(map[string]bool, len(exemptPaths))
+	for _, p := range exemptPaths {
+		exempt[p] = true
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !exempt[r.URL.Path] {
+			if r.TLS == nil || len(r.TLS.VerifiedChains) == 0 {
+				http.Error(w, `{"error":"client certificate required"}`, http.StatusUnauthorized)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
@@ -335,22 +363,14 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 	}()
 
-	t0 := time.Now()
 	slog.Info("remote connected", "clients", len(s.remotes))
 
-	// Send init + history.
-	s.mu.RLock()
-	hist := make([]TranscriptEntry, len(s.transcript))
-	copy(hist, s.transcript)
-	s.mu.RUnlock()
-	slog.Info("history gathered", "entries", len(hist), "elapsed", time.Since(t0))
-
+	// Send init. History is no longer carried in-memory — Claude's
+	// JSONL session file at proc.JSONLPath() is the canonical record.
 	s.writeJSON(conn, ctx, map[string]any{
 		"type":    "init",
 		"version": s.version,
-		"history": hist,
 	})
-	slog.Info("init sent", "elapsed", time.Since(t0))
 
 	// Read loop: process messages from remote.
 	for {
@@ -436,10 +456,10 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"id":          sess.TaskID(),
-		"name":        sess.TaskName(),
-		"status":      sess.TaskStatus(),
-		"workdir":     sess.TaskWorkDir(),
+		"id":          sess.ID(),
+		"name":        sess.Name(),
+		"status":      sess.Status(),
+		"workdir":     sess.WorkDir(),
 		"last_result": sess.LastResult(),
 	})
 }
@@ -462,34 +482,26 @@ func (s *Server) HandleUserMessage(text string) {
 		return
 	}
 
-	s.mu.Lock()
-	now := time.Now()
-	s.transcript = append(s.transcript, TranscriptEntry{
-		Role:      "user",
-		Text:      text,
-		Timestamp: now,
-	})
-	s.mu.Unlock()
-
-	if err := s.db.AppendTranscript("user", text); err != nil {
-		slog.Error("failed to persist user message", "err", err)
-	}
-
 	s.Broadcast(map[string]any{
 		"type":      "user_message",
 		"text":      text,
-		"timestamp": now,
+		"timestamp": time.Now(),
 	})
 
-	if s.viewState != nil {
-		s.viewState.AddMessage("user", text)
-		s.PushView()
+	s.mu.RLock()
+	proc := s.proc
+	s.mu.RUnlock()
+	if proc == nil {
+		slog.Warn("jevons: message received before claude started")
+		return
 	}
-
-	s.jevon.Enqueue(jevons.Event{
-		Kind: jevons.EventUserMessage,
-		Text: text,
-	})
+	s.mu.Lock()
+	s.waiting = true
+	s.mu.Unlock()
+	s.Broadcast(map[string]any{"type": "status", "state": "thinking"})
+	if err := proc.Send(text); err != nil {
+		slog.Error("jevons: send failed", "err", err)
+	}
 }
 
 // HandleAction processes a UI action from a remote client or a timer callback.
@@ -501,20 +513,6 @@ func (s *Server) HandleAction(action, value string) {
 
 	// send_message always goes through HandleUserMessage for persistence
 	// and broadcast, regardless of Lua handling.
-	if action == "send_message" {
-		s.HandleUserMessage(value)
-		return
-	}
-
-	// Try Lua handler first.
-	if s.luaRT != nil {
-		if err := s.luaRT.CallAction(action, value); err == nil {
-			return
-		}
-		// If Lua doesn't have handle_action or it errors, fall through to Go.
-	}
-
-	// Go fallback.
 	switch {
 	case action == "send_message":
 		s.HandleUserMessage(value)
@@ -523,12 +521,7 @@ func (s *Server) HandleAction(action, value string) {
 		s.PushSessions()
 
 	case action == "dismiss_sheet":
-		// Client handles dismiss locally when using client-side Lua.
-		// Still support server-side fallback.
-		if s.viewState != nil {
-			s.viewState.SetSheet("")
-			s.broadcastDismiss("sheet")
-		}
+		// Client handles dismiss locally.
 
 	case action == "disconnect":
 		slog.Info("disconnect requested via action")
@@ -539,15 +532,6 @@ func (s *Server) HandleAction(action, value string) {
 			slog.Warn("kill session failed", "id", sessionID, "err", err)
 		} else {
 			s.PushSessions()
-		}
-
-	case action == "reload_views":
-		if s.luaRT != nil {
-			if err := s.luaRT.Reload(); err != nil {
-				slog.Error("lua reload failed", "err", err)
-			} else {
-				s.PushScripts()
-			}
 		}
 
 	default:
@@ -583,18 +567,6 @@ func (s *Server) handleControl(conn *websocket.Conn, ctx context.Context, action
 			"error":  "sync not available",
 		})
 
-	case "exec_lua":
-		// Forward Lua code to all connected clients for execution.
-		s.Broadcast(map[string]any{
-			"type":   "control",
-			"action": "exec_lua",
-			"code":   value,
-		})
-		respond(map[string]any{
-			"type":   "control",
-			"action": "exec_lua",
-			"status": "sent",
-		})
 
 	case "screenshot":
 		// Forward screenshot request to all connected clients.
@@ -670,43 +642,6 @@ func (s *Server) RequestScreenshot(timeout time.Duration) (string, error) {
 	}
 }
 
-// PushView renders the current view state via Lua and broadcasts to all clients.
-func (s *Server) PushView() {
-	if s.luaRT == nil || s.viewState == nil {
-		return
-	}
-
-	msgs, err := s.viewState.Render(s.luaRT)
-	if err != nil {
-		slog.Error("view render failed", "err", err)
-		return
-	}
-
-	slog.Debug("pushView", "messages", len(msgs), "clients", len(s.remotes))
-	for _, msg := range msgs {
-		s.Broadcast(msg)
-	}
-}
-
-// PushScripts broadcasts the Lua source to all connected clients for client-side rendering.
-func (s *Server) PushScripts() {
-	if s.luaRT == nil {
-		return
-	}
-	source, err := s.luaRT.Scripts()
-	if err != nil {
-		slog.Error("failed to read lua scripts", "err", err)
-		return
-	}
-	if source == "" {
-		return
-	}
-	s.Broadcast(map[string]any{
-		"type":   "scripts",
-		"source": source,
-	})
-}
-
 // PushSessions fetches the current session list and broadcasts it to all clients.
 func (s *Server) PushSessions() {
 	summaries := s.mgr.List(false)
@@ -730,33 +665,6 @@ func (s *Server) PushSessions() {
 	s.Broadcast(map[string]any{
 		"type":     "sessions",
 		"sessions": entries,
-	})
-}
-
-// refreshSessions fetches the current session list and updates the view state.
-func (s *Server) refreshSessions() {
-	if s.viewState == nil {
-		return
-	}
-	summaries := s.mgr.List(false)
-	entries := make([]ui.SessionEntry, len(summaries))
-	for i, sum := range summaries {
-		entries[i] = ui.SessionEntry{
-			ID:      sum.ID,
-			Name:    sum.Name,
-			Status:  string(sum.Status),
-			WorkDir: sum.WorkDir,
-			Active:  sum.Active,
-		}
-	}
-	s.viewState.SetSessions(entries)
-}
-
-// broadcastDismiss sends a dismiss message for the given slot.
-func (s *Server) broadcastDismiss(slot string) {
-	s.Broadcast(ui.DismissMessage{
-		Type: "dismiss",
-		Slot: slot,
 	})
 }
 

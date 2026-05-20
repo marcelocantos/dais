@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/marcelocantos/claudia"
-	"github.com/marcelocantos/jevons/internal/db"
+	
 	"github.com/marcelocantos/jevons/internal/discovery"
 )
 
@@ -51,7 +51,7 @@ type CreateConfig struct {
 type Manager struct {
 	defaultModel string
 	defaultDir   string
-	db           *db.DB
+
 	scanner      *discovery.Scanner
 
 	mu       sync.RWMutex
@@ -59,11 +59,10 @@ type Manager struct {
 }
 
 // New creates a Manager with default configuration.
-func New(defaultModel, defaultDir string, database *db.DB, scanner *discovery.Scanner) *Manager {
+func New(defaultModel, defaultDir string, scanner *discovery.Scanner) *Manager {
 	return &Manager{
 		defaultModel: defaultModel,
 		defaultDir:   defaultDir,
-		db:           database,
 		scanner:      scanner,
 		sessions:     make(map[string]*claudia.Task),
 	}
@@ -96,7 +95,7 @@ func (m *Manager) Create(cfg CreateConfig) (*claudia.Task, error) {
 	})
 	s.SetRawLog(m.rawLogFunc(tmpID))
 
-	events, err := s.RunTask(context.Background(), "Ready.")
+	events, err := s.Run(context.Background(), "Ready.")
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
 	}
@@ -190,7 +189,7 @@ func (m *Manager) List(all bool) []SessionSummary {
 		seen[d.UUID] = true
 		status := claudia.TaskStatusIdle
 		if s, ok := m.sessions[d.UUID]; ok {
-			status = s.TaskStatus()
+			status = s.Status()
 		}
 		score := sessionScore(d.Size, now.Sub(d.ModTime))
 		result = append(result, SessionSummary{
@@ -211,8 +210,8 @@ func (m *Manager) List(all bool) []SessionSummary {
 		}
 		result = append(result, SessionSummary{
 			ID:     id,
-			Name:   s.TaskName(),
-			Status: s.TaskStatus(),
+			Name:   s.Name(),
+			Status: s.Status(),
 			Score:  math.MaxFloat64, // just-created, pin high
 		})
 	}
@@ -240,12 +239,10 @@ func sessionScore(size int64, age time.Duration) float64 {
 	return math.Log(float64(size)) * math.Exp(-decayLambda*age.Seconds())
 }
 
-func (m *Manager) rawLogFunc(sessionID string) claudia.RawLogFunc {
-	return func(line []byte) {
-		if err := m.db.AppendRawLog(sessionID, string(line)); err != nil {
-			slog.Error("failed to persist raw log", "session", sessionID, "err", err)
-		}
-	}
+func (m *Manager) rawLogFunc(_ string) claudia.RawLogFunc {
+	// Raw log persistence to a SQLite table is gone — Claude's JSONL
+	// session file at the task's JSONLPath is the canonical record.
+	return nil
 }
 
 // IsExternallyActive checks whether a session's JSONL file is currently
@@ -253,7 +250,7 @@ func (m *Manager) rawLogFunc(sessionID string) claudia.RawLogFunc {
 func (m *Manager) IsExternallyActive(id string) bool {
 	// If we're managing this session and it's running, it's us — not external.
 	m.mu.RLock()
-	if s, ok := m.sessions[id]; ok && s.TaskStatus() == claudia.TaskStatusRunning {
+	if s, ok := m.sessions[id]; ok && s.Status() == claudia.TaskStatusRunning {
 		m.mu.RUnlock()
 		return false
 	}
@@ -274,7 +271,7 @@ func (m *Manager) Kill(id string) error {
 	delete(m.sessions, id)
 	m.mu.Unlock()
 
-	s.StopTask()
+	s.Stop()
 	slog.Info("session killed", "id", id)
 	return nil
 }

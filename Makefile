@@ -46,11 +46,6 @@ player: $(ge/PLAYER)
 # ── Go binaries ─────────────────────────────────────
 VERSION  ?= dev
 LDFLAGS  := -ldflags "-X github.com/marcelocantos/jevons/internal/cli.Version=$(VERSION)"
-# mattn/go-sqlite3 needs these defines for sqlpipe session extension support.
-export CGO_CFLAGS += -DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_PREUPDATE_HOOK -DSQLITE_ENABLE_FTS5
-# Suppress macOS linker warning about duplicate -lm from go-sqlite3 opt files.
-export CGO_LDFLAGS += -Wl,-no_warn_duplicate_libraries
-GO_TAGS  := -tags "sqlite_preupdate_hook sqlite_fts5"
 GO_SRC   := $(shell find cmd internal -name '*.go' 2>/dev/null)
 EMBED_GUIDE := internal/cli/help_agent.md
 
@@ -62,14 +57,14 @@ jevonsd: bin/jevonsd
 
 bin/jevonsd: $(GO_SRC) $(EMBED_GUIDE)
 	@mkdir -p bin
-	go build $(GO_TAGS) $(LDFLAGS) -o bin/jevonsd ./cmd/jevonsd
+	go build $(LDFLAGS) -o bin/jevonsd ./cmd/jevonsd
 
 .PHONY: remote
 remote: bin/remote
 
 bin/remote: $(GO_SRC) $(EMBED_GUIDE)
 	@mkdir -p bin
-	go build $(GO_TAGS) $(LDFLAGS) -o bin/remote ./cmd/remote
+	go build $(LDFLAGS) -o bin/remote ./cmd/remote
 
 # ── Run ──────────────────────────────────────────────
 .PHONY: run run-app run-jevonsd run-remote
@@ -113,8 +108,8 @@ test: test-go
 # ── Standing invariants (bullseye) ──────────────────
 .PHONY: bullseye
 bullseye:
-	@go build $(GO_TAGS) ./... && echo "✓ build"
-	@go test $(GO_TAGS) ./... && echo "✓ tests"
-	@go vet $(GO_TAGS) ./... && echo "✓ vet"
+	@go build ./... && echo "✓ build"
+	@go test ./... && echo "✓ tests"
+	@go vet ./... && echo "✓ vet"
 	@test -z "$$(git status --porcelain)" && echo "✓ clean" || \
 	 (echo "✗ dirty tree"; git status --short; exit 1)

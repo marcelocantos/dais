@@ -2,18 +2,22 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import AVFoundation
+import Pigeon
 import SwiftUI
 import UIKit
 import Vision
 
-/// A camera-based scanner that detects connection URLs via QR code or
-/// live text recognition (OCR fallback).
+/// A camera-based scanner that detects pigeon PairingArtifacts (QR or
+/// text via OCR fallback). Legacy host/port and ws:// callbacks remain
+/// for the simulator/dev path until the WebSocket fallback is removed.
 struct QRScannerView: UIViewControllerRepresentable {
-    let onScan: (_ host: String, _ port: Int) -> Void
+    var onScanArtifact: ((PairingArtifact) -> Void)?
+    var onScan: ((_ host: String, _ port: Int) -> Void)?
     var onScanURL: ((_ url: URL) -> Void)?
 
     func makeUIViewController(context: Context) -> QRScannerViewController {
         let vc = QRScannerViewController()
+        vc.onScanArtifact = onScanArtifact
         vc.onScan = onScan
         vc.onScanURL = onScanURL
         return vc
@@ -23,6 +27,7 @@ struct QRScannerView: UIViewControllerRepresentable {
 }
 
 final class QRScannerViewController: UIViewController {
+    var onScanArtifact: ((PairingArtifact) -> Void)?
     var onScan: ((_ host: String, _ port: Int) -> Void)?
     var onScanURL: ((_ url: URL) -> Void)?
 
@@ -129,15 +134,12 @@ final class QRScannerViewController: UIViewController {
         generator.notificationOccurred(.success)
 
         switch result {
+        case .artifact(let artifact):
+            onScanArtifact?(artifact)
         case .hostPort(let host, let port):
             onScan?(host, port)
         case .url(let url):
             onScanURL?(url)
-        case .relayConfig(let config):
-            // TODO: Pass relay config to Connection for BridgeMode.relay + key exchange
-            if let relay = config["relay"] as? String, let id = config["id"] as? String {
-                onScanURL?(URL(string: "ws://\(relay)/\(id)") ?? URL(string: "about:blank")!)
-            }
         }
     }
 }
@@ -145,9 +147,9 @@ final class QRScannerViewController: UIViewController {
 // MARK: - Scan Result
 
 private enum ScanResult {
+    case artifact(PairingArtifact)
     case hostPort(String, Int)
     case url(URL)
-    case relayConfig([String: Any])
 }
 
 // MARK: - QR Metadata Delegate
@@ -222,23 +224,27 @@ private final class OCRVideoDelegate: NSObject, AVCaptureVideoDataOutputSampleBu
 // MARK: - URL Parsing
 
 private func parseURL(_ string: String) -> ScanResult? {
-    // Try JSON QR (new format with relay, id, pub).
-    if let data = string.data(using: .utf8),
-       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-       json["pub"] != nil {
-        return .relayConfig(json)
+    let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+
+    // Pigeon PairingArtifact (canonical base64url text encoding from
+    // `pigeon pair --format=text` or jevonsd's --pair flag). Matches
+    // a long alphanumeric token; let the decoder validate.
+    if trimmed.count >= 64,
+       trimmed.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }),
+       let artifact = try? PairingArtifact.fromText(trimmed) {
+        return .artifact(artifact)
     }
 
-    // Try jevon:// scheme (direct connection).
-    if let url = URLComponents(string: string),
+    // Legacy jevon:// scheme (kept until simulator/dev path is migrated).
+    if let url = URLComponents(string: trimmed),
        url.scheme == "jevons",
        let host = url.host, !host.isEmpty,
        let port = url.port {
         return .hostPort(host, port)
     }
 
-    // Try ws:// or wss:// relay URL.
-    if let url = URL(string: string),
+    // Legacy ws:// or wss:// relay URL.
+    if let url = URL(string: trimmed),
        (url.scheme == "ws" || url.scheme == "wss") {
         return .url(url)
     }

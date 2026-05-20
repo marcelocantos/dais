@@ -13,8 +13,12 @@ private let logger = Logger(subsystem: "com.marcelocantos.jevons", category: "Je
 enum BridgeMode {
     /// Direct LAN connection via WebSocket (http://host:port).
     case direct(URL)
-    /// Relay connection via tern QUIC (relay host:port + instance ID).
+    /// Relay connection via pigeon QUIC (legacy raw host/port form).
     case relay(host: String, port: UInt16, instanceID: String)
+    /// Artifact-driven relay connection (the production pigeon flow):
+    /// PigeonConn.connect(artifact:) extracts host/port/instance from
+    /// the artifact and derives the matching E2E channel.
+    case relayArtifact(PairingArtifact)
 }
 
 /// Bridges the web UI running in WKWebView to jevond.
@@ -142,6 +146,34 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
             connectChatWebSocket(serverURL)
         case .relay(let host, let port, let instanceID):
             connectChatTern(host: host, port: port, instanceID: instanceID)
+        case .relayArtifact(let artifact):
+            connectChatArtifact(artifact)
+        }
+    }
+
+    /// Connect via a persisted PairingArtifact. Pigeon's
+    /// PigeonConn.connect(artifact:) handles relay dial + channel
+    /// derivation in one call; the returned channel becomes our
+    /// e2eChannel for encrypted send/recv.
+    private func connectChatArtifact(_ artifact: PairingArtifact) {
+        Task {
+            do {
+                let (conn, channel) = try await PigeonConn.connect(artifact: artifact)
+                self.pigeonConn = conn
+                self.e2eChannel = channel
+                logger.info("Chat connected via artifact (peer: \(artifact.record.peerInstanceID))")
+                injectJS("window._jevonsTransport._onOpen()")
+                await ternReceiveLoop(conn)
+            } catch let error as PairingError {
+                logger.error("Pairing error: \(error.localizedDescription)")
+                if case .expired = error {
+                    PigeonAccount.shared.reset()
+                }
+                injectError("Pairing artifact rejected: \(error.localizedDescription)")
+            } catch {
+                logger.error("Artifact connect failed: \(error.localizedDescription)")
+                injectError("Relay connection failed: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -163,7 +195,7 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
         chatWS = ws
         ws.resume()
 
-        injectJS("window._jevonTransport._onOpen()")
+        injectJS("window._jevonsTransport._onOpen()")
         logger.info("Chat WebSocket connected (direct)")
 
         Task { await chatWSReceiveLoop(ws) }
@@ -178,7 +210,7 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
                 if !Task.isCancelled {
                     logger.info("Chat WebSocket closed: \(error.localizedDescription)")
                     await MainActor.run {
-                        injectJS("window._jevonTransport._onClose()")
+                        injectJS("window._jevonsTransport._onClose()")
                     }
                 }
                 return
@@ -204,7 +236,7 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
                 )
                 self.pigeonConn = conn
                 logger.info("Chat connected via tern relay (instance: \(instanceID))")
-                injectJS("window._jevonTransport._onOpen()")
+                injectJS("window._jevonsTransport._onOpen()")
                 await ternReceiveLoop(conn)
             } catch {
                 logger.error("Tern connect failed: \(error.localizedDescription)")
@@ -222,7 +254,7 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
                 if !Task.isCancelled {
                     logger.info("Tern connection closed: \(error.localizedDescription)")
                     await MainActor.run {
-                        injectJS("window._jevonTransport._onClose()")
+                        injectJS("window._jevonsTransport._onClose()")
                     }
                 }
                 return
@@ -267,7 +299,7 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
                     logger.error("Chat send failed: \(error.localizedDescription)")
                 }
             }
-        case .relay:
+        case .relay, .relayArtifact:
             guard let conn = pigeonConn else { return }
             Task {
                 do {
@@ -277,7 +309,7 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
                     }
                     try await conn.send(payload)
                 } catch {
-                    logger.error("Tern send failed: \(error.localizedDescription)")
+                    logger.error("Pigeon send failed: \(error.localizedDescription)")
                 }
             }
         }
@@ -286,7 +318,7 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
     private func injectMessage(_ json: Any) {
         guard let data = try? JSONSerialization.data(withJSONObject: json),
               let str = String(data: data, encoding: .utf8) else { return }
-        injectJS("window._jevonTransport._onMessage(\(str))")
+        injectJS("window._jevonsTransport._onMessage(\(str))")
     }
 
     // MARK: - Voice
@@ -297,8 +329,8 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
         switch mode {
         case .direct(let serverURL):
             startVoiceWebSocket(serverURL)
-        case .relay:
-            // TODO: Route voice through tern StreamChannel.
+        case .relay, .relayArtifact:
+            // TODO: Route voice through pigeon StreamChannel.
             // For now, voice only works in direct mode.
             injectVoiceEvent(["type": "error", "error": "Voice over relay not yet supported. Connect directly to use voice."])
         }
@@ -355,7 +387,7 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
                 case .data(let data):
                     // Binary audio from Grok — store and send handle to JS.
                     let handle = storeInBuffer(data)
-                    injectJS("window._jevonTransport._onAudio('\(handle)')")
+                    injectJS("window._jevonsTransport._onAudio('\(handle)')")
 
                 case .string(let text):
                     // JSON voice event — forward to JS.
@@ -444,7 +476,7 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
 
         // Store buffer, send handle + RMS to JS.
         let handle = storeOutBuffer(pcmData)
-        injectJS("window._jevonTransport._onMicFrame('\(handle)', \(rms))")
+        injectJS("window._jevonsTransport._onMicFrame('\(handle)', \(rms))")
     }
 
     // MARK: - Audio handle management
@@ -552,16 +584,16 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
 
     private func injectError(_ msg: String) {
         let escaped = msg.replacingOccurrences(of: "'", with: "\\'")
-        injectJS("window._jevonTransport._onError('\(escaped)')")
+        injectJS("window._jevonsTransport._onError('\(escaped)')")
     }
 
     private func injectVoiceEvent(_ event: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: event),
               let str = String(data: data, encoding: .utf8) else { return }
-        injectJS("window._jevonTransport._onVoiceEvent(\(str))")
+        injectJS("window._jevonsTransport._onVoiceEvent(\(str))")
     }
 
     private func injectVoiceEventRaw(_ json: String) {
-        injectJS("window._jevonTransport._onVoiceEvent(\(json))")
+        injectJS("window._jevonsTransport._onVoiceEvent(\(json))")
     }
 }

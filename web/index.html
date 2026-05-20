@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Jevons</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Jevons — Chat</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F916;</text></svg>">
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm/lib/xterm.min.js"></script>
@@ -13,27 +13,31 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root, [data-theme="dark"] {
-  --bg: #0c0c0f;
-  --surface: #14141a;
-  --surface-raised: #1c1c24;
-  --surface-high: #24242e;
-  --border: rgba(255,255,255,0.06);
-  --border-focus: rgba(255,255,255,0.15);
-  --text: #d4d4dc;
-  --text-dim: #6e6e7a;
-  --text-muted: #44444e;
-  --accent: #8b7cf6;
-  --accent-dim: rgba(139,124,246,0.15);
-  --user-bg: rgba(139,124,246,0.12);
-  --user-border: rgba(139,124,246,0.25);
-  --green: #34d399;
-  --red: #f87171;
+  /* Red theme — tuned for in-car visibility. Backgrounds are lifted
+     from near-black so panels are distinguishable; text is brighter
+     for contrast at arm's length in daylight. Accent is a saturated
+     red, with red-tinted surfaces and borders to carry the theme. */
+  --bg: #1a0e0e;
+  --surface: #261515;
+  --surface-raised: #311c1c;
+  --surface-high: #3d2424;
+  --border: rgba(255,180,180,0.12);
+  --border-focus: rgba(248,113,113,0.45);
+  --text: #f0e8e8;
+  --text-dim: #b4a0a0;
+  --text-muted: #806868;
+  --accent: #ef4444;
+  --accent-dim: rgba(239,68,68,0.18);
+  --user-bg: rgba(239,68,68,0.16);
+  --user-border: rgba(239,68,68,0.4);
+  --green: #4ade80;
+  --red: #ef4444;
   --amber: #fbbf24;
-  --heading: #fff;
-  --strong: #fff;
-  --dot-on-glow: rgba(52,211,153,0.4);
-  --dot-off-glow: rgba(248,113,113,0.3);
-  --agent-dot-glow: rgba(52,211,153,0.3);
+  --heading: #fff5f5;
+  --strong: #ffffff;
+  --dot-on-glow: rgba(74,222,128,0.5);
+  --dot-off-glow: rgba(239,68,68,0.5);
+  --agent-dot-glow: rgba(74,222,128,0.4);
   --mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
   --sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   --radius: 10px;
@@ -106,9 +110,15 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg.jevons a { color: var(--accent); text-decoration: none; }
 .msg.jevons a:hover { text-decoration: underline; }
 
+/* Visually hidden but accessible to screen readers and STT tools
+   that read surrounding context to infer dictation style. */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
 /* Input bar */
-#input-bar { display: flex; gap: 10px; padding: 16px 20px; background: var(--surface); border-top: 1px solid var(--border); }
-#input { flex: 1; padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 14px; font-family: var(--sans); outline: none; transition: border-color 0.15s; }
+#input-bar { display: flex; gap: 10px; align-items: flex-end; padding: 16px 20px calc(16px + env(safe-area-inset-bottom)) 20px; background: var(--surface); border-top: 1px solid var(--border); }
+/* Textarea (not <input>) so Wispr Flow and other STT tools detect a
+   document-style input and produce full punctuated sentences. */
+#input { flex: 1; padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 14px; font-family: var(--sans); outline: none; transition: border-color 0.15s; resize: none; line-height: 1.45; min-height: calc(1.45em + 22px); max-height: 40vh; overflow-y: auto; }
 #input::placeholder { color: var(--text-muted); }
 #input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
 #send { padding: 11px 22px; border-radius: 8px; border: none; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; font-family: var(--sans); cursor: pointer; letter-spacing: 0.02em; transition: opacity 0.15s; }
@@ -173,9 +183,18 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   <div id="chat-pane">
     <div id="messages"></div>
     <div id="input-bar">
-      <input id="input" placeholder="Talk to Jevons..." autocomplete="off">
-      <button id="send" disabled>Send</button>
-      <button id="voice-btn" title="Hold to talk (or click to toggle)">&#127908;</button>
+      <label for="input" class="sr-only">Compose a message for Jevons.</label>
+      <textarea id="input" name="prompt" rows="1"
+                placeholder="Write a message to Jevons. Enter to send, Shift-Enter for a new line."
+                aria-label="Compose a message for Jevons"
+                aria-multiline="true"
+                aria-describedby="input-hint"
+                autocomplete="off"
+                spellcheck="true"
+                autocapitalize="sentences"></textarea>
+      <span id="input-hint" class="sr-only">Type a prompt for the Jevons assistant. Use full sentences with punctuation.</span>
+      <button id="send" disabled aria-label="Send message">Send</button>
+      <button id="voice-btn" aria-label="Voice input" title="Click to toggle. Hold Ctrl to push-to-talk.">&#127908;</button>
     </div>
   </div>
   <div id="activity-pane">
@@ -185,6 +204,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
     <div id="terminal-container"></div>
   </div>
 </div>
+<script src="scripts/jlog.js"></script>
 <script src="scripts/transport.js"></script>
 <script>
 const msgs = document.getElementById('messages');
@@ -206,8 +226,8 @@ transport.onOpen = () => {
   input.value = v;
 };
 transport.onClose = () => {
+  // Transport handles reconnect (backoff + version check) internally.
   dot.className = 'dot off'; sTxt.textContent = 'reconnecting'; sendBtn.disabled = true;
-  setTimeout(() => transport.connect(), 2000);
 };
 transport.onMessage = m => handle(m);
 transport.onError = msg => console.error('transport error:', msg);
@@ -402,10 +422,22 @@ function send() {
   if (!t) return;
   transport.send(t);
   input.value = '';
+  autoGrow();
 }
 
-input.addEventListener('keydown', e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();} });
+// Auto-grow the textarea: reset to one row, then expand to fit content
+// (capped by CSS max-height with internal scroll once that's reached).
+function autoGrow() {
+  input.style.height = 'auto';
+  input.style.height = input.scrollHeight + 'px';
+}
+
+// Enter submits, Shift-Enter inserts a newline.
+input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+input.addEventListener('input', autoGrow);
 sendBtn.addEventListener('click', send);
+
+autoGrow();
 input.focus();
 connect();
 
@@ -525,23 +557,137 @@ const voiceStatus = document.getElementById('voice-status');
 const voiceStatusText = document.getElementById('voice-status-text');
 let voiceActive = false;
 
-// Adaptive VAD state — operates on {handle, rms} frames from transport.
-const vad = {
-  noiseFloor: 0.01,
-  speaking: false,
-  holdUntil: 0,
-  holdMs: 800,
-  onsetRatio: 3.0,
-  offsetRatio: 1.8,
-  noiseAlpha: 0.02,
-  preBuffer: [],
-  preBufferMax: 7,
-  flushedPre: false,
-};
-
 voiceBtn.addEventListener('click', () => {
   if (voiceActive) stopVoice(); else startVoice();
 });
+
+// Push-to-talk via Ctrl. Hold Control to engage voice, release to stop.
+// If any other key is pressed while Ctrl is down, treat it as a Ctrl+X
+// shortcut and cancel voice (so Ctrl+C / Ctrl+R / etc. still work).
+// PTT model: voiceActive means "the WS to the server is open". pttActive
+// means "Ctrl is currently held — actively recording". The WS persists
+// across press/release cycles so the Grok session can stay alive between
+// utterances (commit on release, response streams back over the same WS).
+//
+// Ctrl is the engagement key, but the user has system hotkeys that
+// include Ctrl as a modifier (screenshots, etc.). To avoid engaging the
+// mic the moment Ctrl goes down during one of those chords, we arm a
+// short timer on Ctrl keydown and only engage when Ctrl has been held
+// ALONE for pttArmDelayMs. Any other key arriving in that window
+// cancels the arm, so Ctrl-Shift-3 etc. never fires the mic.
+// 250ms is long enough to cover most multi-key system hotkeys
+// (Ctrl→Shift→key chord sequences) without feeling sluggish for
+// deliberate PTT presses, where the user is naturally holding the
+// key down for >>250ms.
+const pttArmDelayMs = 250;
+let pttActive = false;
+let pttArmTimer = null;
+
+// Track every non-Ctrl key currently held so we can detect chords where
+// some other key was pressed BEFORE Ctrl (simultaneous chord presses
+// can land in any order; the previous logic only handled Ctrl-first).
+const pttHeldKeys = new Set();
+
+function pttArm() {
+  if (pttArmTimer || pttActive) return;
+  pttArmTimer = setTimeout(() => {
+    pttArmTimer = null;
+    pttEngage();
+  }, pttArmDelayMs);
+}
+
+function pttCancelArm() {
+  if (pttArmTimer) {
+    clearTimeout(pttArmTimer);
+    pttArmTimer = null;
+  }
+}
+
+function pttEngage() {
+  if (!voiceActive) startVoice(); // lazy-open on first engage
+  pttActive = true;
+  transport.startMic();
+  vadReset();
+  voiceBtn.classList.add('active');
+  voiceBtn.style.boxShadow = '0 0 4px rgba(248,113,113,0.3)';
+  voiceStatusText.textContent = 'listening';
+  jLog('info', 'ptt engage', {
+    voiceActive,
+    audioCtxState: transport._audioCtx?.state,
+    mediaStreamActive: transport._mediaStream?.active,
+    voiceWsState: transport.voiceWs?.readyState,
+  });
+}
+
+window.addEventListener('keydown', e => {
+  if (e.repeat) return;
+  if (e.key !== 'Control') pttHeldKeys.add(e.code);
+
+  if (e.key === 'Control') {
+    // Refuse to arm if anything else is already held — chord, not PTT.
+    // Covers BOTH orderings: Ctrl-after-X (pttHeldKeys non-empty) and
+    // Ctrl-with-modifier (e.shiftKey/altKey/metaKey already set, which
+    // can happen even if the modifier keydown wasn't observed yet on
+    // this listener — the underlying state is current).
+    if (pttHeldKeys.size > 0 || e.shiftKey || e.altKey || e.metaKey) {
+      console.debug('[ptt] arm suppressed — other key/modifier held');
+      return;
+    }
+    pttArm();
+  } else {
+    // Any other keydown while we are armed or active → chord.
+    pttCancelArm();
+    if (pttActive && (e.ctrlKey || e.metaKey)) pttRelease();
+  }
+});
+window.addEventListener('keyup', e => {
+  if (e.key !== 'Control') pttHeldKeys.delete(e.code);
+  if (e.key === 'Control') {
+    pttCancelArm(); // brief Ctrl tap (< arm delay) → never engaged
+    if (pttActive) pttRelease();
+  }
+});
+// Window-blur, tab-switch, visibility loss: stop recording even if we
+// missed the keyup (focus changes can swallow it). Force-kill the mic
+// regardless of pttActive's state so the OS indicator can never hang
+// stale. Also clear the held-keys Set — a key whose keyup we missed
+// during a focus shift would otherwise stay "held" forever.
+window.addEventListener('blur', () => {
+  pttHeldKeys.clear();
+  if (pttActive) pttRelease();
+  transport.stopMic();
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') {
+    pttHeldKeys.clear();
+    if (pttActive) pttRelease();
+    transport.stopMic();
+  }
+});
+
+function pttRelease() {
+  pttActive = false;
+  voiceBtn.classList.remove('active');
+  voiceBtn.style.boxShadow = '';
+  const audioCtxState = transport._audioCtx?.state;
+  const voiceWsState = transport.voiceWs?.readyState;
+  const stats = {
+    framesSeen: vad.framesSeen,
+    framesSent: vad.framesSent,
+    peakRms:    vad.peakRms,
+    noiseFloor: vad.noiseFloor,
+    audioCtxState, voiceWsState,
+  };
+  if (vad.heardSpeech) {
+    voiceStatusText.textContent = 'processing';
+    transport.commitVoice();
+    jLog('info', 'ptt release / commit', stats);
+  } else {
+    voiceStatusText.textContent = 'listening';
+    transport.clearVoice();
+    jLog('info', 'ptt release / clear (no speech)', stats);
+  }
+}
 
 function startVoice() {
   voiceBtn.classList.add('connecting');
@@ -551,16 +697,82 @@ function startVoice() {
 
 function stopVoice() {
   voiceActive = false;
+  pttActive = false;
   voiceBtn.classList.remove('active', 'connecting');
   voiceStatus.classList.remove('on');
   voiceBtn.style.boxShadow = '';
-  vad.speaking = false;
-  vad.preBuffer = [];
   transport.stopVoice();
 }
 
-// Mic frames from transport — run VAD, decide whether to send.
+// Transport's voice WS closed unexpectedly (most commonly: server-side
+// 30 s idle timeout). Reset the page-level state so the next PTT press
+// triggers a fresh startVoice() — without this, voiceActive stays true,
+// startVoice is skipped, and the next utterance's audio + commit are
+// silently dropped over a dead WS.
+transport.onVoiceClose = () => {
+  jLog?.('info', 'voice WS closed — resetting page state');
+  // Don't call pttRelease — its commitVoice() would no-op against a
+  // dead WS and the UI state would land in 'processing' instead of
+  // back at 'idle'. Just inline the cleanup.
+  pttCancelArm();
+  pttActive = false;
+  voiceActive = false;
+  voiceBtn.classList.remove('active', 'connecting');
+  voiceBtn.style.boxShadow = '';
+  voiceStatus.classList.remove('on');
+  voiceStatusText.textContent = 'listening';
+};
+
+// Local VAD — gate the audio stream to Grok so silence between turns
+// or mid-pause "I changed my mind" releases don't deliver an empty
+// buffer that Grok dutifully responds to.
+//
+// Design constraints (learned the hard way):
+//   - holdMs must be long enough to span a normal mid-sentence pause
+//     (~2-3 seconds), or VAD chops mid-utterance and Grok hears two
+//     fragments instead of one. We pick 2500ms.
+//   - preBuffer captures the few frames before VAD onset, otherwise
+//     soft openings ("uh, can you...") lose their leading consonants.
+//   - onset/offset use hysteresis (different ratios) so a single
+//     loud blip doesn't briefly start/stop the stream.
+//
+// State is per-engagement: reset in pttEngage so VAD's noise floor
+// learns from the current room rather than yesterday's session.
+const vad = {
+  noiseFloor:   0.005, // running estimate of background level
+  noiseAlpha:   0.02,  // EMA weight for noise-floor adaptation
+  onsetRatio:   2.5,   // RMS > noiseFloor * onsetRatio triggers speech
+  offsetRatio:  1.5,   // RMS < noiseFloor * offsetRatio counts as silence
+  holdMs:       2500,  // continue sending for this long after silence
+  preBufferMax: 8,     // ~340ms of pre-roll at ~43ms/frame
+  speaking:     false,
+  holdUntil:    0,
+  preBuffer:    [],
+  heardSpeech:  false, // any onset during the current PTT cycle?
+  // Per-engagement counters (for jLog diagnostics).
+  framesSeen:   0,
+  framesSent:   0,
+  peakRms:      0,
+};
+
+function vadReset() {
+  vad.speaking = false;
+  vad.holdUntil = 0;
+  vad.preBuffer = [];
+  vad.heardSpeech = false;
+  vad.framesSeen = 0;
+  vad.framesSent = 0;
+  vad.peakRms = 0;
+  // Don't reset noiseFloor — let it stay adapted across PTT cycles.
+}
+
 transport.onMicFrame = ({handle, rms}) => {
+  if (!pttActive) {
+    return;
+  }
+  vad.framesSeen++;
+  if (rms > vad.peakRms) vad.peakRms = rms;
+
   const now = Date.now();
 
   if (!vad.speaking) {
@@ -570,28 +782,25 @@ transport.onMicFrame = ({handle, rms}) => {
 
     if (rms > vad.noiseFloor * vad.onsetRatio && rms > 0.005) {
       vad.speaking = true;
+      vad.heardSpeech = true;
       vad.holdUntil = now + vad.holdMs;
-      vad.flushedPre = false;
-      voiceStatusText.textContent = 'hearing you';
+      for (const h of vad.preBuffer) { transport.sendAudio(h); vad.framesSent++; }
+      vad.preBuffer = [];
       voiceBtn.style.boxShadow = '0 0 12px rgba(248,113,113,0.7)';
+      jLog('debug', 'vad onset', {rms, noiseFloor: vad.noiseFloor});
     }
+    return;
   }
 
-  if (vad.speaking) {
-    if (!vad.flushedPre) {
-      for (const h of vad.preBuffer) transport.sendAudio(h);
-      vad.preBuffer = [];
-      vad.flushedPre = true;
-    }
-    transport.sendAudio(handle);
+  transport.sendAudio(handle);
+  vad.framesSent++;
 
-    if (rms > vad.noiseFloor * vad.offsetRatio) {
-      vad.holdUntil = now + vad.holdMs;
-    } else if (now > vad.holdUntil) {
-      vad.speaking = false;
-      voiceStatusText.textContent = 'listening';
-      voiceBtn.style.boxShadow = '';
-    }
+  if (rms > vad.noiseFloor * vad.offsetRatio) {
+    vad.holdUntil = now + vad.holdMs;
+  } else if (now > vad.holdUntil) {
+    vad.speaking = false;
+    voiceBtn.style.boxShadow = '0 0 4px rgba(248,113,113,0.3)';
+    jLog('debug', 'vad hold expired', {framesSent: vad.framesSent});
   }
 };
 
@@ -650,12 +859,38 @@ transport.onVoiceEvent = msg => {
   }
 };
 
-// Hot reload.
+// Hot reload + server-restart detection. The /ws/reload socket
+// signals dev-time file changes ("reload" message). If the socket
+// drops and a reconnect succeeds, the server was restarted —
+// reload the page so fresh bundled assets are fetched.
 (function hotReload() {
-  const rh = location.hostname === 'localhost' ? '127.0.0.1:'+location.port : location.host;
-  const rws = new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+rh+'/ws/reload');
-  rws.onmessage = () => { sessionStorage.setItem('jevons-input', input.value); location.reload(); };
-  rws.onclose = () => setTimeout(hotReload, 2000);
+  const delays = [50, 100, 200, 400, 800, 1600, 3200, 5000];
+  let attempt = 0;
+  let wasOpen = false;
+  const open = () => {
+    const rh = location.hostname === 'localhost' ? '127.0.0.1:'+location.port : location.host;
+    const rws = new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+rh+'/ws/reload');
+    rws.onopen = () => {
+      if (wasOpen) {
+        // Server came back after going away — page assets may be stale.
+        sessionStorage.setItem('jevons-input', input.value);
+        location.reload();
+        return;
+      }
+      wasOpen = true;
+      attempt = 0;
+    };
+    rws.onmessage = () => {
+      sessionStorage.setItem('jevons-input', input.value);
+      location.reload();
+    };
+    rws.onclose = () => {
+      const delay = delays[Math.min(attempt, delays.length - 1)];
+      attempt++;
+      setTimeout(open, delay);
+    };
+  };
+  open();
 })();
 </script>
 </body>

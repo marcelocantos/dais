@@ -97,15 +97,10 @@ func (s *Server) handleJwork(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		WorkDir: cwd,
 		Model:   model,
 	})
-	if s.db != nil {
-		task.SetRawLog(func(line []byte) {
-			if err := s.db.AppendRawLog(workerID, string(line)); err != nil {
-				slog.Error("jwork: failed to persist raw log", "worker", workerID, "err", err)
-			}
-		})
-	}
+	// Raw log persistence to SQLite is gone — Claude's JSONL session
+	// file at task.JSONLPath() is the canonical record.
 
-	events, err := task.RunTask(ctx, prompt)
+	events, err := task.Run(ctx, prompt)
 	if err != nil {
 		slog.Error("jwork: dispatch failed", "worker", workerID, "err", err)
 		return mcp.NewToolResultError(fmt.Sprintf("worker dispatch failed: %v", err)), nil

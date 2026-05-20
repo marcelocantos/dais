@@ -107,7 +107,7 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 		return mcp.NewToolResultError(fmt.Sprintf("register failed: %v", err)), nil
 	}
 
-	proc, err := s.registry.Start(name)
+	proc, err := s.registry.Launch(name)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("start failed: %v", err)), nil
 	}
@@ -157,7 +157,7 @@ func (s *Server) wireAgentEvents(name string, proc *claudia.Agent) {
 	var mu sync.Mutex
 	var responseText strings.Builder
 
-	proc.OnEvent(func(ev claudia.Event) {
+	proc.SubscribeEvents(func(ev claudia.Event) {
 		// Broadcast raw event to web UI activity feed.
 		s.broadcastAgentEvent(name, ev)
 

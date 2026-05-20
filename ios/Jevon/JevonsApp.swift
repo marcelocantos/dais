@@ -9,6 +9,13 @@ struct JevonsApp: App {
     @State private var voiceManager = VoiceManager()
     @State private var showSafeMode = false
 
+    init() {
+        // Developer-flow xcrun deploy passes a freshly minted
+        // PairingArtifact in the launch environment. Persist it before
+        // the UI starts so subsequent connect paths can use it.
+        PigeonAccount.shared.ingestEnvArtifactIfPresent()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -28,6 +35,7 @@ struct JevonsApp: App {
                     }
                 }
                 .onAppear {
+                    UIApplication.shared.isIdleTimerDisabled = true
                     installChevronGesture()
                 }
                 .sheet(isPresented: $showSafeMode) {

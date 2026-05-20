@@ -13,8 +13,11 @@
 //   connect()
 //   disconnect()
 //   send(json)                  — send JSON text message
-//   startVoice()                — open voice session
+//   startVoice()                — open voice session (WS only; mic stays off)
 //   stopVoice()                 — close voice session
+//   commitVoice()               — PTT end-of-utterance (keep session open)
+//   startMic()                  — begin mic capture (independent of WS)
+//   stopMic()                   — end mic capture immediately
 //   sendAudio(handleOrBytes)    — send audio (ArrayBuffer or native handle)
 //   playAudio(handleOrBytes)    — play audio (ArrayBuffer or native handle)
 //
@@ -25,6 +28,7 @@
 //   onMicFrame({handle, rms})   — mic audio frame available for VAD
 //   onAudio(handleOrBytes)      — incoming audio from Grok
 //   onVoiceEvent(json)          — voice status/transcript events
+//   onVoiceClose()              — voice WS closed (server side or network)
 //   onError(string)             — error message
 
 // --- Detect environment ---
@@ -49,23 +53,146 @@ class WebSocketTransport {
     this._audioCtx = null;
     this._mediaStream = null;
     this._scriptNode = null;
+
+    // Resilience state.
+    this._desiredOpen = false;       // user intent: stay connected
+    this._reconnectAttempt = 0;      // for backoff
+    this._reconnectTimer = null;
+    this._baseVersion = null;        // jevonsd version at first connect
+    this._heartbeatTimer = null;     // periodic ping send
+    this._watchdogTimer = null;      // fires if no traffic in time
+    this._installedGlobalListeners = false;
   }
 
-  connect() {
+  // Exponential backoff schedule (ms). Starts tight, caps at 5s.
+  static _BACKOFF = [50, 100, 200, 400, 800, 1600, 3200, 5000];
+  // Send a ping every N ms; close socket if no traffic for N ms.
+  static _HEARTBEAT_MS = 15000;
+  static _WATCHDOG_MS = 25000;
+
+  async connect() {
+    this._desiredOpen = true;
+    this._installGlobalListeners();
+    // Capture baseline server version on the very first connect so
+    // later reconnects can detect a server restart with new assets.
+    if (this._baseVersion === null) {
+      this._baseVersion = await this._fetchVersion();
+    }
+    this._open();
+  }
+
+  _open() {
+    clearTimeout(this._reconnectTimer); this._reconnectTimer = null;
     const h = location.hostname === 'localhost'
       ? '127.0.0.1:' + location.port : location.host;
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    this.ws = new WebSocket(proto + '//' + h + '/ws/chat');
-    this.ws.onopen = () => this.onOpen?.();
-    this.ws.onclose = () => this.onClose?.();
-    this.ws.onmessage = e => {
+    let ws;
+    try {
+      ws = new WebSocket(proto + '//' + h + '/ws/chat');
+    } catch (e) {
+      this._scheduleReconnect();
+      return;
+    }
+    this.ws = ws;
+    ws.onopen = () => {
+      this._reconnectAttempt = 0;
+      this._startHeartbeat();
+      this._kickWatchdog();
+      this.onOpen?.();
+    };
+    ws.onclose = () => {
+      this._stopHeartbeat();
+      this.onClose?.();
+      if (this._desiredOpen) this._scheduleReconnect();
+    };
+    ws.onerror = () => { /* onclose will follow */ };
+    ws.onmessage = e => {
+      this._kickWatchdog();
+      // Filter out heartbeat pong frames before user code sees them.
+      if (typeof e.data === 'string' && e.data === '{"type":"pong"}') return;
       try { this.onMessage?.(JSON.parse(e.data)); }
       catch (x) { console.error('transport: parse error', x); }
     };
   }
 
+  async _scheduleReconnect() {
+    if (this._reconnectTimer) return;
+    // If the server has restarted with a different version, the
+    // bundled web/* assets in the browser are potentially stale —
+    // do a full reload so the user gets the new index.html + JS.
+    const v = await this._fetchVersion();
+    if (v && this._baseVersion && v !== this._baseVersion) {
+      location.reload();
+      return;
+    }
+    const delays = WebSocketTransport._BACKOFF;
+    const delay = delays[Math.min(this._reconnectAttempt, delays.length - 1)];
+    this._reconnectAttempt++;
+    this._reconnectTimer = setTimeout(() => {
+      this._reconnectTimer = null;
+      if (this._desiredOpen) this._open();
+    }, delay);
+  }
+
+  async _fetchVersion() {
+    try {
+      const r = await fetch('/health', {cache: 'no-store'});
+      if (!r.ok) return null;
+      const j = await r.json();
+      return j.version || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  _startHeartbeat() {
+    this._stopHeartbeat();
+    this._heartbeatTimer = setInterval(() => {
+      if (this.ws?.readyState !== 1) return;
+      try { this.ws.send('{"type":"ping"}'); } catch (_) {}
+    }, WebSocketTransport._HEARTBEAT_MS);
+  }
+
+  _stopHeartbeat() {
+    if (this._heartbeatTimer) { clearInterval(this._heartbeatTimer); this._heartbeatTimer = null; }
+    if (this._watchdogTimer) { clearTimeout(this._watchdogTimer); this._watchdogTimer = null; }
+  }
+
+  // Reset the no-traffic watchdog on every incoming message. If
+  // nothing arrives in WATCHDOG_MS, force-close the socket so onclose
+  // fires and triggers reconnect — covers "TCP died but onclose
+  // never fired" cases (sleep/wake, NAT timeout, captive portal).
+  _kickWatchdog() {
+    if (this._watchdogTimer) clearTimeout(this._watchdogTimer);
+    this._watchdogTimer = setTimeout(() => {
+      try { this.ws?.close(); } catch (_) {}
+    }, WebSocketTransport._WATCHDOG_MS);
+  }
+
+  _installGlobalListeners() {
+    if (this._installedGlobalListeners) return;
+    this._installedGlobalListeners = true;
+    const wake = () => {
+      if (!this._desiredOpen) return;
+      // Probe an open socket; if it isn't actually alive, the
+      // watchdog (or the next send) will catch it.
+      if (this.ws?.readyState !== 1) {
+        this._reconnectAttempt = 0;  // immediate retry
+        this._scheduleReconnect();
+      }
+    };
+    window.addEventListener('online', wake);
+    window.addEventListener('focus', wake);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') wake();
+    });
+  }
+
   disconnect() {
-    this.ws?.close();
+    this._desiredOpen = false;
+    clearTimeout(this._reconnectTimer); this._reconnectTimer = null;
+    this._stopHeartbeat();
+    try { this.ws?.close(); } catch (_) {}
     this.ws = null;
     this.stopVoice();
   }
@@ -83,13 +210,20 @@ class WebSocketTransport {
 
     this.voiceWs.onopen = () => {
       this.onVoiceEvent?.({type: 'status', status: 'connected'});
-      this._startMicCapture();
+      // Mic capture is started independently via startMic() — the WS
+      // can be open without the OS-level mic indicator burning.
     };
     this.voiceWs.onclose = () => {
       this.stopVoice();
+      // Notify the UI layer so it can reset its own state flags
+      // (voiceActive, button classes) — otherwise the next PTT press
+      // sees voiceActive=true, skips startVoice(), and tries to
+      // forward audio over a dead WS that silently drops everything.
+      this.onVoiceClose?.();
     };
     this.voiceWs.onerror = () => {
       this.stopVoice();
+      this.onVoiceClose?.();
     };
     this.voiceWs.onmessage = e => {
       if (e.data instanceof ArrayBuffer) {
@@ -102,8 +236,45 @@ class WebSocketTransport {
   }
 
   stopVoice() {
-    this._stopMicCapture();
+    this.stopMic();
     if (this.voiceWs) { this.voiceWs.close(); this.voiceWs = null; }
+  }
+
+  // End-of-utterance for PTT: ask the server to commit the buffered
+  // audio and request a response, but keep the WS open for the next
+  // press.
+  commitVoice() {
+    if (this.voiceWs?.readyState === 1) {
+      this.voiceWs.send(JSON.stringify({type: 'commit'}));
+    }
+  }
+
+  // PTT released without speech: discard whatever's in Grok's input
+  // buffer instead of committing, so the model doesn't transcribe
+  // noise and respond to it.
+  clearVoice() {
+    if (this.voiceWs?.readyState === 1) {
+      this.voiceWs.send(JSON.stringify({type: 'clear'}));
+    }
+  }
+
+  // Mic capture lifecycle. Public so the UI can gate the mic on the
+  // PTT key, independently of the WS lifetime. Calling startMic() when
+  // already running just resumes the AudioContext if it auto-suspended
+  // between turns (typically after Grok's response audio finished
+  // playing) — without that the ScriptProcessor stops firing and no
+  // mic frames are forwarded for subsequent turns.
+  startMic() {
+    if (this._audioCtx?.state === 'suspended') {
+      this._audioCtx.resume().catch(() => {});
+    }
+    if (this._mediaStream || this._micStarting) return;
+    this._micStarting = true;
+    this._startMicCapture().finally(() => { this._micStarting = false; });
+  }
+
+  stopMic() {
+    this._stopMicCapture();
   }
 
   sendAudio(buffer) {
@@ -230,6 +401,22 @@ class NativeTransport {
 
   stopVoice() {
     this._post({action: 'stopVoice'});
+  }
+
+  commitVoice() {
+    this._post({action: 'commitVoice'});
+  }
+
+  clearVoice() {
+    this._post({action: 'clearVoice'});
+  }
+
+  startMic() {
+    this._post({action: 'startMic'});
+  }
+
+  stopMic() {
+    this._post({action: 'stopMic'});
   }
 
   sendAudio(handle) {

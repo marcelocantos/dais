@@ -1,0 +1,12 @@
+{
+  "name": "browser-loop-test",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Headless browser PTT loop test for jevons /ws/voice (🎯T18 phase 1c diagnostic).",
+  "scripts": {
+    "test": "node test.js"
+  },
+  "dependencies": {
+    "playwright": "^1.48.0"
+  }
+}

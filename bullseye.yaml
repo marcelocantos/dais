@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 4
 last_evaluated: afe8751
 targets:
   T1:
@@ -17,7 +17,6 @@ targets:
     status: converging
     value: 13.0
     cost: 13.0
-    observable: true
     acceptance:
     - WebSocket carries only sqlpipe peer messages — no application-level JSON messages
     - Server writes to transcript/sessions/scripts/state tables; changes stream to client automatically
@@ -136,7 +135,6 @@ targets:
     status: converging
     value: 13.0
     cost: 5.0
-    observable: true
     acceptance:
     - Speak in browser → Grok transcribes → response spoken aloud
     - Speak on iPad (WKWebView) → same flow via native audio bridge
@@ -203,8 +201,28 @@ targets:
       jevonsd generates persistent device secret; app stores secret in iOS
       Keychain. Subsequent connections use device fingerprint
       (identifierForVendor) + stored secret.
+    depends_on:
+    - T14.1
     origin: manual
     discovered: 2026-03-21
+  T14.1:
+    name: Adopt pigeon's PairingArtifact / PairingHost / CredentialStore primitives
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - jevonsd no longer carries bespoke X25519 key management — internal/server/pairing.go is deleted and serverKP/pubKeyBase64 are removed from Server
+    - Pairing flow uses pigeon.PairingHost.Mint and emits artifact.MarshalText() in the QR (or via `pigeon pair` for out-of-band deploy)
+    - Server-side crypto.PairingRecord set is persisted at ~/.jevons/credentials.json and loaded on startup; incoming relay connections look up the matching record and reject unknown/expired peers
+    - jevonsd accepts server records out-of-band via `--add-credential <path>` (or watched ~/.jevons/credentials.d/) so deploy scripts can register peers without a daemon restart
+    - iOS Transport / JevonsBridge use PigeonConn.connect(artifact:) with the artifact persisted via KeychainCredentialStore
+    - iOS QR scanner decodes via PairingArtifact.unmarshalText and drops the legacy {id,relay,pub} JSON + jevons:// parsers
+    - App launch checks PIGEON_PAIRING_ARTIFACT env var first (decode + persist), then loads from credential store → connectWithArtifact, falls back to QR scanner on ErrPairingExpired / ErrNoCredential
+    - 'End-to-end smoke (developer flow): `xcrun devicectl ... process launch --environment-variables PIGEON_PAIRING_ARTIFACT=$(pigeon pair ...)` works zero-touch on the iPad'
+    - 'End-to-end smoke (user flow): pair via QR on iPad → send chat message → force-expire artifact → re-pair UI fires'
+    context: Pigeon v0.19.0 ships PairingArtifact + PairingHost + CredentialStore + ConnectWithArtifact across Go/Swift/Kotlin, plus Swift PigeonConn.connect(artifact:) and a `pigeon pair` subcommand. This sub-target adopts those primitives, deleting the bespoke key/QR/pairing code in jevonsd and the manual PigeonConn.connect plumbing in the iOS app. The developer-flow deploy path uses `pigeon pair` to mint an artifact, passes it to the iOS app via PIGEON_PAIRING_ARTIFACT env var on launch (no QR scan needed), and registers the server record with jevonsd via --add-credential. End-user pairing remains QR-driven. See docs/plans/pigeon-migration.md for the 13-step migration.
+    origin: manual
+    discovered: 2026-04-25
   T15:
     name: Protocol state machines are formally verifiable
     status: achieved
@@ -251,7 +269,6 @@ targets:
     status: achieved
     value: 8.0
     cost: 5.0
-    observable: true
     actual_cost: 5.0
     acceptance:
     - Tool queries memory DB for recent interactive sessions, groups by repo
@@ -319,42 +336,78 @@ targets:
     origin: manual
     discovered: 2026-03-29
   T18:
-    name: Grok is a first-class agent
+    name: Grok is the jevons overseer
     status: converging
     value: 13.0
     cost: 8.0
-    observable: true
     acceptance:
-    - '`Agent` interface in Go with Claude and Grok implementations'
-    - Grok agent receives all MCP tools as function definitions
-    - Grok agent can be started, sent messages, and emits events in the same format as Claude agents
-    - Registry supports mixed agent types
-    - '`--jevons-model grok` starts Grok as the overseer with native voice'
-    - '`--jevons-model claude` (default) preserves current behavior'
-    - 'Voice works end-to-end when Grok is the overseer: speak → Grok hears → tool calls → spoken response'
-    context: |
-      Desired state: Grok can operate in any role in the agent hierarchy,
-      including as the root jevons overseer. The agent system is
-      model-agnostic — Claude and Grok agents are interchangeable via a
-      common interface. When Grok is the overseer, voice is native (no
-      STT/TTS bridge layer); it hears the user directly and calls MCP tools
-      as Grok functions.
-
-      Architecture:
-      - Agent interface: abstract `Agent` with `Start`, `Send`, `OnEvent`, `Stop`. Claude implementation wraps the existing PTY process. Grok implementation connects via xAI Realtime WebSocket with function calling.
-      - MCP-to-function mapping: jevonsd's MCP tool definitions automatically mapped to Grok function definitions.
-      - Voice collapse: when Grok is overseer, voice bridge collapses into the agent's I/O — no `send_to_jevons` indirection.
-      - Registry supports both Claude and Grok agent types. Agent definitions specify model type. Jevons overseer's model configurable at startup.
-
-      Status: Grok Realtime voice bridge built and working (voice I/O,
-      function calling, `send_to_jevons` tool). Transport abstraction and
-      native iOS bridge in place. Claudia library extraction (v0.2.0) now
-      provides the Agent/Task abstraction foundation — the `Agent` interface
-      this target needs is partially realised. Remaining: unify Grok and
-      Claude under claudia's Agent interface, wire MCP→function mapping,
-      add `--jevons-model grok` path.
+    - The jevons root agent is Grok (xAI Realtime). Voice and text input both route through the same Grok session.
+    - Grok session lifetime is server-owned, not tied to /ws/voice. Lazily opened on first input (voice, text, or upload); 30s idle timeout reset on any activity; survives across PTT presses, page reloads, and text-only periods.
+    - /ws/voice is the audio-I/O sub-protocol on the Grok session (mic frames in, PCM audio out). /ws/chat is the text-I/O sub-protocol on the same session (typed text in; text responses appear in the chat panel by tailing the JSONL).
+    - 'Per-turn response modality follows input modality: voice in → modalities=["text","audio"]; text in → modalities=["text"] (no wasted audio generation, no audio readback when the user typed).'
+    - 'Grok''s tool surface is overseer-shaped: delegate(agent_name, task, attachments?), list_agents(), task_status(task_id), and a small handful of read-only inspection tools as identified during implementation. No code-level MCP tools wired into Grok directly.'
+    - delegate is ASYNCHRONOUS. The tool call returns immediately with {task_id, status:dispatched}. Grok acknowledges to the user ("on it" or similar) and continues the conversation. When the worker eventually completes, jevonsd appends a synthetic system message to the Grok JSONL describing the result and triggers response.create so Grok speaks/writes the summary. Multiple workers can run concurrently.
+    - If a completion notification arrives while Grok is mid-response (response.created without response.done), jevonsd queues it and dispatches after response.done. Multiple queued completions are emitted as separate system messages, one response.create per notification (Grok may batch in its response if it chooses).
+    - 'System prompt makes the async model explicit to Grok: "you supervise a team of workers; dispatched tasks run in the background; you receive completion notifications as system messages; surface them to the user conversationally."'
+    - 'Two classes of agent in the registry. PROJECT agents (jevons, jevons-po, ...) are user-facing and project-scoped; the user can list/manage them; list_agents() exposes them. SYSTEM agents (e.g. vision, ocr) are hidden capability-extension workers Grok dispatches to behind the scenes when a task needs a capability Grok-the-model lacks (image analysis, etc.). System agents do not appear in list_agents() and the user doesn''t see explicit delegations to them — Grok presents the result as its own. Implementation: an `agent_class` field on AgentDef, default project; system agents reachable via the same delegate tool but excluded from the user-visible listing.'
+    - Claude agents in the registry remain unchanged as workers reachable via Grok's delegate tool. Their own JSONLs and MCP servers are untouched.
+    - Grok's conversation is persisted as JSONL at ~/.jevons/grok/<session>.jsonl. Every Realtime event we care about (user item, assistant item, tool call, tool result, async system notification) is appended. The chat panel renders by tailing this file — voice transcripts survive page reloads because the JSONL is the source of truth.
+    - On Realtime reconnect (network blip, dev hot-reload), prior conversation is replayed into the new session via conversation.item.create so context resumes.
+    - 'Image paste / drop in the chat UI uploads bytes to jevonsd, stored at ~/.jevons/images/<id>.<ext>. Server appends a synthetic user turn [image: <id>] <caption> to the Grok JSONL. UI renders the marker as an inline <img>. For project-scoped image work Grok delegates to a project agent (e.g. jevons-po) explicitly. For image questions with no project owner ("what''s in this picture?"), Grok dispatches to the hidden vision system agent and presents the result as its own answer. (Phase 2 — ship after Phase 1 lands.)'
+    - send_to_jevons, InjectAssistantText and VoiceBridge.InjectResponse are removed — Grok IS the agent, no bridge indirection.
+    context: 'Today: Claude is the root agent, Grok is a voice frontend that calls send_to_jevons to delegate user prompts to Claude. This inverts: Grok becomes the root overseer. Claude agents in the registry remain as workers, accessed through an asynchronous delegate tool. Why now: the bridge architecture has tension around voice transcripts not being persisted (Grok''s conversational replies are DOM-only, killed on every page reload). The cleanest fix is to make Grok''s conversation canonical — and once it is, Grok logically IS the agent, not a bridge. Aligns with the previously-noted intent that T13''s full-duplex voice \"collapses into T18 — no send_to_jevons indirection.\" Persistence: Grok-side JSONL, mirroring Claude Code''s shape so mnemo can index it. Justification for not using SQLite documented in conversation 2026-05-14 (recent commit collapsed parallel stores onto JSONL; append-only workload; mnemo compatibility). Text mode design (conversation 2026-05-14): the iPad will be voice-only by deployment context, but on the laptop the user wants to drop to text when entering code (STT mangles syntax). Both modalities route through the same Grok session; response modality matches input modality. Image handling (Phase 2, same conversation): UI-construct rather than Realtime-API-construct — images uploaded to a stable path, referenced by ID in the JSONL as text markers, delegated to Claude workers (whose vision is stronger) via a delegate attachments parameter; UI renders markers as inline images. Async delegation (conversation 2026-05-14): worker invocation is asynchronous all the way down. delegate() returns immediately; completion notifications arrive later via system messages injected into the Grok session, triggering a response.create. Rejected the layered \"sync to first-tier, async beneath\" model — relocates rather than eliminates async complexity and adds a fragile must-respond-fast guarantee on first-tier workers. Implementation order: (1) Grok system prompt + tool surface (async delegate, list_agents, task_status); (2) text chat input routed to Grok; (3) JSONL persistence + replay-on-reconnect; (4) async completion notification path; (5) drop dead bridge code; (6) image upload + render (Phase 2).'
     origin: manual
     discovered: 2026-03-30
+  T19:
+    name: jevonsd runs cleanly under `brew services` with a service block, gh dependency, and PATH augmentation so launchd-spawned daemon resolves all external tools
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - Formula at `~/work/github.com/marcelocantos/homebrew-tap/Formula/jevons.rb` gains a `service do` block running `[opt_bin/"jevonsd"]` (the daemon binary), with `keep_alive true` and log paths configured
+    - Service block sets `environment_variables PATH:` to `"/opt/homebrew/bin:/opt/homebrew/sbin:#{Dir.home}/.cargo/bin:#{Dir.home}/.local/bin:#{Dir.home}/.py/bin:#{Dir.home}/go/bin:/usr/bin:/bin:/usr/sbin:/sbin"`
+    - Formula declares `depends_on "gh"` (the only brew-installable tool the daemon shells out to)
+    - '`brew services start jevons` (or `restart` after install) launches jevonsd successfully and the active-work MCP feature can resolve `gh` without manual PATH setup'
+    - The CLI `remote` binary remains terminal-launched and unaffected
+    context: |-
+      Background: launchd-spawned MCP daemons (started via `brew services`) inherit a minimal PATH (`/usr/bin:/bin:/usr/sbin:/sbin`). Any external tool the daemon shells out to that lives in `/opt/homebrew/bin`, `~/.cargo/bin`, `~/.local/bin`, `~/.py/bin`, or `~/go/bin` fails to resolve at runtime. Cross-repo design decision was made in ~/think on 2026-04-27. Sibling targets exist on mnemo (🎯T47), sawmill (🎯T33), vellum (🎯T8), and pageflip (🎯T32).
+
+      Two distinct gaps in jevons (both addressable in this target):
+
+      **Gap 1: Formula has no `service do` block.**
+      Per `docs/vision-v2.md:61`, jevonsd is intended to run as a brew service. The formula at `homebrew-tap/Formula/jevons.rb` currently installs the binaries but doesn't define service metadata. Until this is added, `brew services start jevons` is a no-op.
+
+      **Gap 2: Daemon shells out to `gh` without PATH augmentation.**
+      Once Gap 1 is fixed and jevonsd runs under launchd, the spartan PATH bug activates. Audit found `gh` is the only brew-installable tool used by the daemon code path.
+
+      Audit findings for jevons (from ~/think investigation 2026-04-27):
+      - `cmd/jevonsd/main.go:846,848,854` — calls `security` (system, /usr/bin/security; fine)
+      - `internal/discovery/discovery.go:247` — calls `pgrep` (system; fine)
+      - `internal/discovery/discovery.go:262` — calls `ps` (system; fine)
+      - `internal/discovery/discovery.go:340` — calls `lsof` (system; fine)
+      - `internal/mcpserver/activework.go:274,289` — calls `git` (system; fine)
+      - `internal/mcpserver/activework.go:324` — calls `gh` (brew-installable; needs depends_on AND PATH)
+
+      The CLI `remote` binary is terminal-launched, inherits shell PATH, and is not affected.
+
+      Design decision (from ~/think 2026-04-27): fix at the formula's `service` block, not in code, not via global `launchctl setenv`, not via wrapper script. Reasons: per-daemon scope, regenerated by `brew services` on every install/upgrade, no code change.
+
+      Formula additions (template):
+      ```ruby
+      depends_on "gh"
+
+      service do
+        run [opt_bin/"jevonsd"]
+        environment_variables PATH: "/opt/homebrew/bin:/opt/homebrew/sbin:#{Dir.home}/.cargo/bin:#{Dir.home}/.local/bin:#{Dir.home}/.py/bin:#{Dir.home}/go/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        keep_alive true
+        log_path var/"log/jevonsd.log"
+        error_log_path var/"log/jevonsd.log"
+      end
+      ```
+
+      If a shared PATH constant is later defined in the tap (sibling formulas will need the same string), refactor to reference it.
+    origin: forked-from spyder PATH-bug investigation in ~/think on 2026-04-27 (homebrew-tap-wide audit)
+    discovered: 2026-04-27
   T2:
     name: Conversational interaction model works end-to-end
     status: achieved
@@ -367,6 +420,46 @@ targets:
     origin: manual
     discovered: 2026-04-09
     achieved: 2026-04-09
+  T20:
+    name: jevons_agent_start can adopt an existing Claude Code session
+    status: set_aside
+    value: 0.0
+    cost: 0.0
+    set_aside_reason: Duplicate of 🎯T16.2 "Session grandfathering", which already covers session adoption via jevons_agent_start with broader acceptance (memory DB linking, list/send visibility, promotion to PO, idle retirement). Created in error before scanning existing targets.
+    acceptance:
+    - jevons_agent_start accepts an optional session_id (or resume/continue flag) that attaches to an existing Claude Code session instead of spawning a fresh one
+    - Adopted agent preserves prior conversation history and can be messaged via jevons_agent_send like any other agent
+    - Documented in the MCP tool description and jevons CLAUDE.md
+    context: Marcelo is migrating existing workloads (e.g. an active crosshair session 4c9ee9f1-25f9-458a-8bb9-44b253df3f4d) into Jevons. Currently jevons_agent_start only spawns fresh processes, so adopting an in-flight session means losing its context. This blocks low-friction migration of existing Claude Code work into the overseer.
+    origin: manual
+    discovered: 2026-05-14
+  T21:
+    name: Wispr Flow dictation into the Jevons UI produces full sentences
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - Dictating into the empty Jevons UI input via Wispr Flow produces capitalised, punctuated sentences matching its behaviour in the Claude CLI
+    - Behaviour is consistent regardless of whether the field is empty or has draft text
+    context: "Wispr Flow currently outputs lowercase, unpunctuated fragments when dictating into the empty Jevons UI input (\"are you able to track jevons po progress\") but produces full sentences in the Claude CLI (\"Are you able to track Jevons PO progress?\"). \n\nDiagnostic finding: if the Jevons UI input contains ANY sentence-shaped text (even a single full stop), Wispr Flow flips to document mode and produces proper sentences. Empty field → chat-casual; non-empty sentence-shaped field → document. So Wispr Flow reads the focused field's accessibility context and matches its existing style.\n\nThis explains the CLI: terminal scrollback is one text buffer where prior turns (full sentences) form the visible context. The Jevons UI input is a DOM element separated from the message history, so empty-field dictation has no anchor.\n\nLikely fix shapes:\n1. Bridge the accessibility context — `aria-describedby` on the input pointing at the history, or render the input inside the same scrolling region. Native chat-UI pattern.\n2. Pre-seed the input with an invisible/zero-width sentence-shaped string Wispr Flow reads as continuation context. Hacky but trivial.\n\nEarlier hypothesis (single-line input vs. textarea) is NOT the dominant cause; can be evaluated separately for UX reasons but won't fix the dictation issue on its own."
+    origin: manual
+    discovered: 2026-05-14
+  T22:
+    name: Voice traffic flows browser-to-Grok directly, bypassing jevonsd
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - Browser opens its own WebSocket to wss://api.x.ai/v1/realtime
+    - xAI auth works without exposing a long-lived key — either ephemeral-token endpoint on jevonsd that mints short-lived keys, or the subprotocol scheme acceptable for the personal-device deployment
+    - Grok event loop (audio in/out, transcripts, response.done, function calls) handled in JS
+    - send_to_jevons tool calls received by the browser are routed to jevonsd over the existing /ws chat connection
+    - Claude/jevon responses arriving from jevonsd over the chat connection are injected into the browser's Grok session via conversation.item.create + response.create
+    - On the iPad-in-car deployment, voice audio does not transit the home ngrok tunnel — verified by inspecting bandwidth on the home uplink during a voice exchange
+    - Server-side VoiceBridge can be deleted (or kept only as a debug-relay opt-in)
+    context: 'Currently /ws/voice is proxied through jevonsd: browser to jevonsd to Grok via two WebSockets. For the laptop dev path that''s fine — jevonsd is on localhost and the only WAN hop is jevonsd-to-Grok. For the iPad-in-car deployment (the primary target, exposed via ngrok), audio bounces through the home Mac: phone to ngrok to home jevonsd to Grok and back, doubling residential uplink consumption (~64 KB/s × 2 = ~128 KB/s through home ISP per active voice session). Direct path lets the iPad talk to Grok over its own cellular/wifi; home ISP only carries small Claude/jevon control messages. Also reduces latency by avoiding the home network as an intermediate stop and makes voice resilient to home Wi-Fi flakiness. Approach: reimplement claudia/grok in JS (~200 lines: WS open, session config, audio framing, JSON event switch). Add ephemeral-token endpoint on jevonsd (or accept subprotocol-baked key for personal devices). Move send_to_jevons round-tripping to the browser, with the chat WS as the jevon/browser link. Not urgent — laptop dev path works fine via the proxy. Raise once iPad becomes the primary deployment again.'
+    origin: manual
+    discovered: 2026-05-14
   T3:
     name: Test coverage exists for core packages
     status: achieved
@@ -394,18 +487,24 @@ targets:
     achieved: 2026-04-09
   T5:
     name: Authentication implemented
-    status: identified
+    status: converging
     value: 8.0
     cost: 13.0
-    observable: true
     acceptance:
     - mTLS is enforced on all jevonsd endpoints (HTTP, WebSocket, MCP)
     - QR-based device provisioning flow works end-to-end (scan QR on phone, device gets a client certificate)
     - internal/auth package has tests covering the provisioning and verification paths
     - Unauthenticated requests are rejected
-    context: |
+    context: |-
       Desired state: mTLS with QR-based device provisioning secures all surfaces.
-      The `internal/auth` package is fully implemented.
+
+      The `internal/auth` package is fully implemented and tested (CA management, cert issuance, mTLS config, Ed25519 keys). The provisioning endpoint (`POST /api/provision`) is wired into jevonsd. The `--tls` flag enables mTLS on the HTTP listener with `ClientCertMiddleware` exempting `/health` and `/api/provision`.
+
+      Remaining:
+      - Wire provisioning into the QR-based pairing flow (handlePairing in pairing.go)
+      - Test end-to-end: scan QR → provision → mTLS connection
+      - Add tests for the provisioning endpoint
+      - Verify unauthenticated requests are rejected when --tls is enabled
     depends_on:
     - T4
     origin: manual
@@ -489,7 +588,6 @@ targets:
     status: achieved
     value: 8.0
     cost: 5.0
-    observable: true
     actual_cost: 5.0
     acceptance:
     - '`jwork` MCP tool accepts task text, optional cwd and model'
@@ -544,7 +642,6 @@ targets:
     status: converging
     value: 13.0
     cost: 13.0
-    observable: true
     acceptance:
     - Lua runtime embedded in iOS app, running view scripts locally
     - jevonsd pushes script updates over WebSocket; client caches and executes them
@@ -553,28 +650,18 @@ targets:
     - Generic SwiftUI renderer maps Lua-produced view trees to native views
     - No business logic in Swift — all view logic in Lua scripts
     - Smoke test; Jevons writes path abbreviation via conversation, pushes script update, phone re-renders without app rebuild
-    context: |
+    context: |-
       Desired state: the iOS app is a programmable thin client. Lua view
       scripts run on the device, rendering native SwiftUI from local state.
       jevonsd pushes script updates and state changes; the phone renders
       locally. Jevons (the AI agent) can modify scripts at runtime to
       reshape the UI without app rebuilds or redeployment.
 
-      Architecture:
-      - Client-side Lua (C Lua, ~25KB) on device against local state.
-      - Script distribution: jevonsd holds canonical scripts, pushes on connect/change.
-      - State protocol: structured state updates over WebSocket, merged into local state.
-      - Primitives, not components: fine-grained view schema (text, vstack, hstack, spacer, image, padding, background, etc.).
-      - Inline assets via SF Symbols, data URIs, or bundled assets.
-      - Dev flow: edit on server → push draft → preview → approve → promote.
-      - Reserved `embed` component for future ge wire protocol integration.
+      Most criteria met. Dead server-side rendering code removed (viewstate.go, schema.go deleted). Draft/preview/promote MCP tools implemented (jevons_preview_script, jevons_promote_script, jevons_discard_draft).
 
-      Current status: server-side Lua rendering works end-to-end. Pivoting to
-      client-side Lua execution. Go side has Lua runtime (gopher-lua), view
-      state manager, view schema, MCP reload tool. iOS side has generic
-      recursive SwiftUI renderer (`ServerView`). Remaining: embed C Lua in
-      iOS, port view builders to Swift bindings, change WebSocket protocol to
-      state updates not view trees, add draft/preview/promote flow.
+      Remaining:
+      - Run smoke test on device (edit script → reload → verify phone re-renders)
+      - Verify draft overlay works end-to-end via MCP tools
     tags:
     - visual
     origin: manual

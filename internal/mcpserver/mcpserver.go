@@ -17,19 +17,14 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/marcelocantos/claudia"
-	"github.com/marcelocantos/jevons/internal/db"
+	
 	"github.com/marcelocantos/jevons/internal/discovery"
 	"github.com/marcelocantos/jevons/internal/manager"
+	
 )
 
 // EventCallback is called when a worker finishes a command.
 type EventCallback func(workerID, workerName, result string, failed bool)
-
-// ReloadViewsFunc reloads Lua view scripts and pushes updated views.
-type ReloadViewsFunc func() error
-
-// ExecLuaFunc sends Lua code to connected clients for execution.
-type ExecLuaFunc func(code string)
 
 // ScreenshotFunc requests a screenshot from connected clients and returns the file path.
 type ScreenshotFunc func() (string, error)
@@ -38,8 +33,7 @@ type ScreenshotFunc func() (string, error)
 type TranscriptOps struct {
 	Read     func(sessionID string) ([]map[string]any, error)
 	Truncate func(sessionID string, keepTurns int) error
-	ResetID  func()                    // clear the jevon claude session ID
-	GetID    func() string             // get the current jevon claude session ID
+	GetID    func() string // current Jevon claude session ID (from claudia registry)
 }
 
 // Server wraps an MCP server that provides worker management tools.
@@ -49,11 +43,9 @@ type Server struct {
 	scanner      *discovery.Scanner
 	workerWD     string
 	onDone       EventCallback
-	reloadViews  ReloadViewsFunc
-	execLua      ExecLuaFunc
 	screenshot   ScreenshotFunc
 	transcript   *TranscriptOps
-	db           *db.DB
+
 	mcpSrv       *server.MCPServer
 	transport    *server.StreamableHTTPServer
 
@@ -62,16 +54,12 @@ type Server struct {
 }
 
 // New creates an MCP server with jevon tools wired to the given manager.
-// reloadViews may be nil if server-driven UI is not active.
 // transcript may be nil if transcript ops are not available.
-func New(mgr *manager.Manager, workerWD string, database *db.DB, onDone EventCallback, reloadViews ReloadViewsFunc, execLua ExecLuaFunc, screenshot ScreenshotFunc, transcript *TranscriptOps) *Server {
+func New(mgr *manager.Manager, workerWD string, onDone EventCallback, screenshot ScreenshotFunc, transcript *TranscriptOps) *Server {
 	s := &Server{
 		mgr:         mgr,
 		workerWD:    workerWD,
-		db:          database,
 		onDone:      onDone,
-		reloadViews: reloadViews,
-		execLua:     execLua,
 		screenshot:  screenshot,
 		transcript:  transcript,
 	}
@@ -122,25 +110,6 @@ func New(mgr *manager.Manager, workerWD string, database *db.DB, onDone EventCal
 		),
 		s.handleKillSession,
 	)
-
-	if s.reloadViews != nil {
-		mcpSrv.AddTool(
-			mcp.NewTool("jevons_reload_views",
-				mcp.WithDescription("Reload Lua view scripts and push updated UI to connected clients. Call this after editing files in ~/.jevons/lua/views/."),
-			),
-			s.handleReloadViews,
-		)
-	}
-
-	if s.execLua != nil {
-		mcpSrv.AddTool(
-			mcp.NewTool("jevons_exec_lua",
-				mcp.WithDescription("Execute Lua code on connected mobile clients. The code runs in the client's Lua runtime which has access to client-side functions like disconnect(). Use this for client interactions that don't need UI."),
-				mcp.WithString("code", mcp.Required(), mcp.Description("Lua code to execute on the client")),
-			),
-			s.handleExecLua,
-		)
-	}
 
 	if s.screenshot != nil {
 		mcpSrv.AddTool(
@@ -217,8 +186,8 @@ func (s *Server) handleSessionStatus(_ context.Context, req mcp.CallToolRequest)
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "Worker: %s (%s)\n", sess.TaskName(), sess.TaskID())
-	fmt.Fprintf(&b, "Status: %s\n", sess.TaskStatus())
+	fmt.Fprintf(&b, "Worker: %s (%s)\n", sess.Name(), sess.ID())
+	fmt.Fprintf(&b, "Status: %s\n", sess.Status())
 	if lr := sess.LastResult(); lr != "" {
 		fmt.Fprintf(&b, "Last result:\n%s\n", lr)
 	}
@@ -245,7 +214,7 @@ func (s *Server) handleCreateSession(_ context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultError(fmt.Sprintf("failed to create session: %v", err)), nil
 	}
 
-	return mcp.NewToolResultText(fmt.Sprintf("Created session %s (%s)", sess.TaskID(), sess.TaskName())), nil
+	return mcp.NewToolResultText(fmt.Sprintf("Created session %s (%s)", sess.ID(), sess.Name())), nil
 }
 
 func (s *Server) handleSendCommand(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -281,7 +250,7 @@ func (s *Server) handleSendCommand(ctx context.Context, req mcp.CallToolRequest)
 	}
 
 	// Synchronous: run and return the result.
-	events, err := sess.RunTask(ctx, text)
+	events, err := sess.Run(ctx, text)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("run failed: %v", err)), nil
 	}
@@ -319,11 +288,11 @@ func (s *Server) handleKillSession(_ context.Context, req mcp.CallToolRequest) (
 
 // runAndNotify runs a command asynchronously and fires the event callback.
 func (s *Server) runAndNotify(id string, sess *claudia.Task, text string) {
-	events, err := sess.RunTask(context.Background(), text)
+	events, err := sess.Run(context.Background(), text)
 	if err != nil {
 		slog.Error("worker run failed", "worker", id, "err", err)
 		if s.onDone != nil {
-			s.onDone(id, sess.TaskName(), err.Error(), true)
+			s.onDone(id, sess.Name(), err.Error(), true)
 		}
 		return
 	}
@@ -342,18 +311,8 @@ func (s *Server) runAndNotify(id string, sess *claudia.Task, text string) {
 
 	failed := strings.HasPrefix(result, "error: ")
 	if s.onDone != nil {
-		s.onDone(id, sess.TaskName(), truncate(result, 2000), failed)
+		s.onDone(id, sess.Name(), truncate(result, 2000), failed)
 	}
-}
-
-func (s *Server) handleReloadViews(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	if s.reloadViews == nil {
-		return mcp.NewToolResultError("view reload not configured"), nil
-	}
-	if err := s.reloadViews(); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("reload failed: %v", err)), nil
-	}
-	return mcp.NewToolResultText("Views reloaded and pushed to connected clients."), nil
 }
 
 func (s *Server) handleScreenshot(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -362,16 +321,6 @@ func (s *Server) handleScreenshot(_ context.Context, _ mcp.CallToolRequest) (*mc
 		return mcp.NewToolResultError(fmt.Sprintf("screenshot failed: %v", err)), nil
 	}
 	return mcp.NewToolResultText(path), nil
-}
-
-func (s *Server) handleExecLua(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	args := req.GetArguments()
-	code, _ := args["code"].(string)
-	if code == "" {
-		return mcp.NewToolResultError("code is required"), nil
-	}
-	s.execLua(code)
-	return mcp.NewToolResultText("Lua code sent to connected clients."), nil
 }
 
 func (s *Server) handleTranscriptRead(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -411,8 +360,7 @@ func (s *Server) handleTranscriptRewind(_ context.Context, req mcp.CallToolReque
 	}
 
 	if keepTurns == 0 {
-		s.transcript.ResetID()
-		return mcp.NewToolResultText("Session reset. Next message will start a fresh conversation."), nil
+		return mcp.NewToolResultText("Truncated session to zero turns. Restart the Jevon agent to begin a fresh conversation."), nil
 	}
 
 	return mcp.NewToolResultText(fmt.Sprintf("Rewound to %d turns. The truncated context will be used on the next message.", keepTurns)), nil
