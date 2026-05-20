@@ -462,7 +462,7 @@ targets:
     discovered: 2026-05-14
   T23:
     name: Chat panel visually differentiates user / assistant / worker (system) messages
-    status: identified
+    status: achieved
     value: 0.0
     cost: 0.0
     acceptance:
@@ -475,6 +475,7 @@ targets:
     - visual
     origin: manual
     discovered: 2026-05-20
+    achieved: 2026-05-20
   T24:
     name: Worker agents survive Claude Code's stale-session resume prompt
     status: identified
@@ -488,6 +489,35 @@ targets:
     context: 'Observed 2026-05-19/20 in the Grok JSONL transcript: jevons-po dispatches failed twice with ''send to worker failed: claude not ready: ready pattern did not match within 30s''. Manual investigation of the agent''s tmux window revealed the Claude Code TUI parked at a resume-session prompt for a 5-day, 105k-token session, offering Resume from summary / Resume full session / Don''t ask me again. Pressing Enter (default option 1) unsticks it but every long-running registered agent eventually hits the same wall. The bug is in claudia''s agent-launch handshake, not jevonsd''s voice path. Fix lives in claudia.Agent.WaitReady (recognise the prompt as a transient menu, not as not-ready) and/or in Registry.Launch (auto-confirm the default option). May also want a jevonsd-side recovery: if Send returns not-ready, inspect the agent''s terminal output for known menu patterns and either retry with auto-confirmation or surface a clearer error.'
     origin: manual
     discovered: 2026-05-20
+  T25:
+    name: Grok used as voice I/O layer; overseer agent runs outside xAI's session model
+    status: identified
+    value: 0.0
+    cost: 0.0
+    acceptance:
+    - 'The xAI Grok Realtime session is used only as a stateless STT/TTS bridge. Each utterance round-trip is: mic audio in → STT transcript out → server-side overseer processes → text response in → Grok TTS → audio out. Grok holds no conversation continuity across utterances; each user turn is one xAI session interaction or even a series of stateless calls.'
+    - The overseer agent (the entity that decides whether to chat or delegate to a worker) is a Claude agent — a registered claudia.Agent in the jevons registry — not Grok-the-model. The existing delegate / list_agents / task_status tool surface is reimplemented for the Claude overseer (function calling / Skills / however Claude exposes tools in its agent harness).
+    - Conversation continuity lives entirely in the overseer's session (Claude Code's own JSONL handles this natively) and in our chat panel render. No replay-on-reconnect into xAI is needed — Grok stays stateless.
+    - 'Removal of the xAI-side machinery that was working around the session-lifetime mismatch: per-session JSONL replay into Grok''s conversation, the FSM state COMMITTING-waits-for-xAI-STT (because STT becomes synchronous in the new flow), the worker-completion injection back into Grok''s conversation as a system note.'
+    - 'Salvageable: the FSM shape (states, transitions, pendingAudio buffering on session start), the bridgeDeps adapter pattern, the JSONL persistence (now repurposed for chat-panel rendering and Claude overseer''s own session continuity), the worker-delegate plumbing (now invoked from the Claude overseer rather than from Grok tool calls), the three test harnesses (xai-loop, jevons-loop, browser-loop) — all still useful for the new shape with light changes.'
+    - 'Voice latency target: end-to-end (user-stops-speaking → first audio byte back) under ~3 s for typical chat responses; longer is acceptable for delegated work where Claude is also waiting on a worker.'
+    - '🎯T18 is updated or retired: its ''Grok is the jevons overseer'' framing is superseded by this target.'
+    context: |-
+      After ten days of fighting xAI Grok Realtime to behave as a long-running overseer agent (🎯T18), we accumulated six distinct workarounds for a fundamental architectural mismatch: xAI Realtime is designed for ephemeral phone-call-style voice interactions, while we want a persistent overseer that survives hours and reconnects on demand. Symptoms: replay-on-reconnect costing tokens and occasionally breaking STT, silent transcription failures requiring fallback timers, conversation-state assumptions baked into multiple layers, worker-completion injection as a workaround for async events arriving in a synchronous-feeling chat.
+
+      The pragmatic resolution surfaced in conversation 2026-05-21: stop asking Grok to be the brain. Use it for what it's genuinely good at — sub-second voice STT/TTS. Move the overseer logic to a Claude agent which already has the right shape: persistent sessions, robust tool calling, good reasoning, the existing claudia.Agent infrastructure.
+
+      Salvage rate is high: FSM, deps adapter, JSONL persistence, worker-delegate plumbing, three test harnesses all reusable. The wholesale changes are concentrated in startGrokSession (no more Grok tools, no more replay), the FSM transition table (COMMITTING and RESPONDING simplify since they become synchronous round-trips), and the bridge between transcript and Claude overseer (new code, but tracks an existing pattern).
+
+      Phased implementation suggested:
+        Phase 2a — strip Grok's overseer role: remove tools, remove system prompt instructions about delegation, remove replay-on-reconnect. Grok becomes a vanilla STT/TTS endpoint. Verify voice still works as a dumb echo.
+        Phase 2b — wire Claude overseer: register a 'jevons-overseer' claudia.Agent (or repurpose the existing 'jevons' agent), give it tools (delegate, list_agents), route transcripts through it.
+        Phase 2c — close the loop: pipe Claude's text response back through Grok TTS for spoken playback.
+        Phase 2d — remove dead xAI continuity code: replay path, system-note injection, the FSM's worker-completion queue (workers now report to Claude's own conversation).
+
+      Trade-offs explicit: voice latency goes up by Claude's response time (often 2-5s for non-trivial turns vs Grok's 1-2s). Acceptable given the user prefers reliability over snappiness for an overseer agent. Per-turn cost may go up (Claude tokens) or down (no xAI conversation context being reprocessed every turn) — net effect TBD.
+    origin: manual
+    discovered: 2026-05-22
   T3:
     name: Test coverage exists for core packages
     status: achieved
