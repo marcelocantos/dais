@@ -422,7 +422,10 @@ func (f *voiceFSM) dispatchWorkerNote(ev voiceEvent) error {
 		slog.Error("voice fsm: inject system note failed", "err", err)
 		return nil
 	}
-	f.deps.LogSystem(ev.workerNote, nil)
+	// Note: the caller (completeTask) already persisted this event to
+	// the JSONL log with full metadata. Don't log again here — that's
+	// what produced the duplicate "raw result + wrapped note" pairs in
+	// the transcript.
 	return f.transition(stateResponding, ev, nil)
 }
 
