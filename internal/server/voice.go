@@ -751,6 +751,30 @@ func (vb *VoiceBridge) completeTask(pt *pendingTask, result string, taskErr erro
 		},
 	})
 
+	// Broadcast a worker_note event to the chat panel so the user sees
+	// the worker's output rendered distinctly (centred, dim, collapsible)
+	// rather than mistaking it for an assistant turn (🎯T23). The
+	// content is the raw worker output (success) or error message
+	// (failure) — NOT the wrapped directive prose that Grok consumes.
+	displayContent := result
+	if taskErr != nil {
+		displayContent = fmt.Sprintf("%v", taskErr)
+	}
+	vb.mu.Lock()
+	ws := vb.voiceWS
+	wsCtx := vb.voiceCtx
+	vb.mu.Unlock()
+	if ws != nil {
+		vb.sendJSON(ws, wsCtx, map[string]any{
+			"type":    "worker_note",
+			"kind":    logKind,
+			"agent":   pt.agent,
+			"task_id": pt.id,
+			"task":    pt.task,
+			"content": displayContent,
+		})
+	}
+
 	vb.mu.Lock()
 	fsm := vb.fsm
 	wsOpen := vb.voiceWS != nil
