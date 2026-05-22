@@ -258,9 +258,11 @@ func (vb *VoiceBridge) HandleVoiceWS(w http.ResponseWriter, r *http.Request) {
 // stateCommitting after sending input_audio_buffer.commit. xAI's
 // transcription is async; in normal operation it lands in 200–600 ms,
 // but observed silently-stuck commits (no completed AND no failed
-// event) have wedged the bridge in production. 15 s is comfortably
-// past the worst legitimate latency we've measured.
-const commitTranscriptTimeout = 15 * time.Second
+// event) have wedged the bridge in production. 6 s is comfortably
+// past the worst legitimate latency we've measured and short enough
+// that subsequent PTT attempts aren't lost for long while the FSM
+// is wedged in COMMITTING.
+const commitTranscriptTimeout = 6 * time.Second
 
 // bridgeDeps adapts the bridge's per-connection resources (xAI client,
 // browser WS, JSONL log) to the voiceDeps interface the FSM consumes.

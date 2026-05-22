@@ -127,6 +127,11 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg.worker.worker-failed { border-color: var(--red); }
 .msg.worker.worker-failed .worker-kind { color: var(--red); }
 
+/* Transient status notice — e.g., "didn't catch that" when an
+   utterance fails to transcribe. Quieter than worker notes and
+   doesn't carry a header/badge. */
+.msg.status { align-self: center; max-width: 70%; background: transparent; border: none; padding: 4px 12px; font-size: 11px; color: var(--text-muted); font-style: italic; text-align: center; margin: 4px auto; }
+
 /* Visually hidden but accessible to screen readers and STT tools
    that read surrounding context to infer dictation style. */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
@@ -352,6 +357,18 @@ function addMsg(role, text, when) {
   ts.dataset.ts = ms;
   ts.textContent = relTime(ms);
   d.appendChild(ts);
+  msgs.appendChild(d);
+  scrollDown();
+  return d;
+}
+
+// Render a transient status note (centred, dim italic) — used for
+// inline conditions like "didn't catch that" when a turn fails to
+// transcribe. Distinct from worker notes (no header, no collapse).
+function addStatusMsg(text) {
+  const d = document.createElement('div');
+  d.className = 'msg status';
+  d.textContent = text;
   msgs.appendChild(d);
   scrollDown();
   return d;
@@ -897,6 +914,13 @@ transport.onVoiceEvent = msg => {
     startVoice._assistantBuf = '';
   } else if (msg.type === 'worker_note') {
     addWorkerMsg(msg);
+  } else if (msg.type === 'transcript_failed') {
+    // FSM unstuck from a wedged COMMITTING (xAI silent after commit).
+    // Surface a brief inline note so the user knows the turn was lost
+    // and they should retry, rather than waiting forever for a
+    // response that's never coming.
+    addStatusMsg('Sorry — didn\'t catch that. Try again.');
+    voiceStatusText.textContent = 'listening';
   } else if (msg.type === 'error') {
     console.error('voice error:', msg.error);
     voiceStatusText.textContent = 'error';
