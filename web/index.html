@@ -110,6 +110,28 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg.jevons a { color: var(--accent); text-decoration: none; }
 .msg.jevons a:hover { text-decoration: underline; }
 
+/* Worker notes — out-of-band system messages from a delegated agent.
+   Centred, dim, collapsible. Distinct from both user (right) and
+   jevons (left) so the user can't mistake them for either side of
+   the conversation. 🎯T23. */
+.msg.worker { align-self: center; max-width: 78%; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; font-size: 12px; color: var(--text-dim); margin: 6px auto; }
+.msg.worker[open] { padding-bottom: 10px; }
+.msg.worker summary { cursor: pointer; list-style: none; font-weight: 500; display: flex; gap: 8px; align-items: baseline; }
+.msg.worker summary::-webkit-details-marker { display: none; }
+.msg.worker summary::before { content: '▸'; color: var(--text-muted); font-size: 10px; transition: transform 0.15s; }
+.msg.worker[open] summary::before { transform: rotate(90deg); }
+.msg.worker .worker-agent { color: var(--accent); }
+.msg.worker .worker-kind { color: var(--text-muted); font-size: 11px; }
+.msg.worker .worker-task { color: var(--text-muted); font-family: var(--mono); font-size: 10px; margin-left: auto; }
+.msg.worker .worker-body { white-space: pre-wrap; margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--border); font-family: var(--mono); font-size: 11px; color: var(--text); max-height: 40vh; overflow-y: auto; }
+.msg.worker.worker-failed { border-color: var(--red); }
+.msg.worker.worker-failed .worker-kind { color: var(--red); }
+
+/* Transient status notice — e.g., "didn't catch that" when an
+   utterance fails to transcribe. Quieter than worker notes and
+   doesn't carry a header/badge. */
+.msg.status { align-self: center; max-width: 70%; background: transparent; border: none; padding: 4px 12px; font-size: 11px; color: var(--text-muted); font-style: italic; text-align: center; margin: 4px auto; }
+
 /* Visually hidden but accessible to screen readers and STT tools
    that read surrounding context to infer dictation style. */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
@@ -338,6 +360,53 @@ function addMsg(role, text, when) {
   msgs.appendChild(d);
   scrollDown();
   return d;
+}
+
+// Render a transient status note (centred, dim italic) — used for
+// inline conditions like "didn't catch that" when a turn fails to
+// transcribe. Distinct from worker notes (no header, no collapse).
+function addStatusMsg(text) {
+  const d = document.createElement('div');
+  d.className = 'msg status';
+  d.textContent = text;
+  msgs.appendChild(d);
+  scrollDown();
+  return d;
+}
+
+// Render an out-of-band worker note (system-role entry). Collapsible
+// <details> with a header showing the agent name + status + task id.
+// Long results are scrollable inside a max-height body. 🎯T23.
+function addWorkerMsg(msg) {
+  const det = document.createElement('details');
+  det.className = 'msg worker';
+  const failed = msg.kind === 'task_failed';
+  if (failed) det.classList.add('worker-failed');
+  // Short notes (one-line) auto-expand; long results stay collapsed.
+  const content = String(msg.content || '');
+  det.open = content.length < 120;
+
+  const sum = document.createElement('summary');
+  const agentEl = document.createElement('span');
+  agentEl.className = 'worker-agent';
+  agentEl.textContent = msg.agent || 'worker';
+  const kindEl = document.createElement('span');
+  kindEl.className = 'worker-kind';
+  kindEl.textContent = failed ? 'failed' : 'replied';
+  const taskEl = document.createElement('span');
+  taskEl.className = 'worker-task';
+  taskEl.textContent = msg.task_id || '';
+  sum.append(agentEl, kindEl, taskEl);
+  det.appendChild(sum);
+
+  const body = document.createElement('div');
+  body.className = 'worker-body';
+  body.textContent = content;
+  det.appendChild(body);
+
+  msgs.appendChild(det);
+  scrollDown();
+  return det;
 }
 
 // Agent tree
@@ -843,6 +912,15 @@ transport.onVoiceEvent = msg => {
     }
     startVoice._assistantEl = null;
     startVoice._assistantBuf = '';
+  } else if (msg.type === 'worker_note') {
+    addWorkerMsg(msg);
+  } else if (msg.type === 'transcript_failed') {
+    // FSM unstuck from a wedged COMMITTING (xAI silent after commit).
+    // Surface a brief inline note so the user knows the turn was lost
+    // and they should retry, rather than waiting forever for a
+    // response that's never coming.
+    addStatusMsg('Sorry — didn\'t catch that. Try again.');
+    voiceStatusText.textContent = 'listening';
   } else if (msg.type === 'error') {
     console.error('voice error:', msg.error);
     voiceStatusText.textContent = 'error';

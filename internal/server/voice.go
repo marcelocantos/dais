@@ -155,6 +155,7 @@ func (vb *VoiceBridge) HandleVoiceWS(w http.ResponseWriter, r *http.Request) {
 	vc := &voiceConn{conn: conn, connCtx: ctx, grokCtx: grokCtx}
 	deps := &bridgeDeps{bridge: vb, vc: vc}
 	fsm := newVoiceFSM(deps)
+	deps.fsm = fsm // back-ref for timer callbacks that dispatch events
 
 	// Register the FSM on the bridge so out-of-band events (worker
 	// completions) can find it. Tear down any prior session that
@@ -169,6 +170,7 @@ func (vb *VoiceBridge) HandleVoiceWS(w http.ResponseWriter, r *http.Request) {
 	vb.conn = vc
 	vb.mu.Unlock()
 	defer func() {
+		deps.cancelCommitTimeout()
 		_ = fsm.Handle(voiceEvent{kind: evClose})
 		vb.mu.Lock()
 		if vb.fsm == fsm {
@@ -252,12 +254,26 @@ func (vb *VoiceBridge) HandleVoiceWS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// commitTranscriptTimeout bounds how long the FSM waits in
+// stateCommitting after sending input_audio_buffer.commit. xAI's
+// transcription is async; in normal operation it lands in 200–600 ms,
+// but observed silently-stuck commits (no completed AND no failed
+// event) have wedged the bridge in production. 6 s is comfortably
+// past the worst legitimate latency we've measured and short enough
+// that subsequent PTT attempts aren't lost for long while the FSM
+// is wedged in COMMITTING.
+const commitTranscriptTimeout = 6 * time.Second
+
 // bridgeDeps adapts the bridge's per-connection resources (xAI client,
 // browser WS, JSONL log) to the voiceDeps interface the FSM consumes.
 // All side effects route through one place; the FSM stays pure logic.
 type bridgeDeps struct {
 	bridge *VoiceBridge
 	vc     *voiceConn
+	fsm    *voiceFSM // set after FSM construction so timer callbacks can dispatch
+
+	commitTimerMu sync.Mutex
+	commitTimer   *time.Timer
 }
 
 func (d *bridgeDeps) SendAudioToGrok(pcm []byte) error {
@@ -268,6 +284,7 @@ func (d *bridgeDeps) SendAudioToGrok(pcm []byte) error {
 }
 
 func (d *bridgeDeps) CommitGrok() error {
+	d.scheduleCommitTimeout()
 	if d.vc.client == nil {
 		return nil
 	}
@@ -275,6 +292,7 @@ func (d *bridgeDeps) CommitGrok() error {
 }
 
 func (d *bridgeDeps) ClearGrokBuffer() error {
+	d.cancelCommitTimeout()
 	if d.vc.client == nil {
 		return nil
 	}
@@ -282,10 +300,38 @@ func (d *bridgeDeps) ClearGrokBuffer() error {
 }
 
 func (d *bridgeDeps) RequestGrokResponse(m grok.ResponseModalities) error {
+	d.cancelCommitTimeout()
 	if d.vc.client == nil {
 		return nil
 	}
 	return d.vc.client.RequestResponse(d.vc.grokCtx, m)
+}
+
+// scheduleCommitTimeout starts (or replaces) the stale-commit timer.
+// If xAI doesn't return a transcription event within
+// commitTranscriptTimeout, the timer fires evTranscriptFailed so the
+// FSM falls back to IDLE rather than wedging forever.
+func (d *bridgeDeps) scheduleCommitTimeout() {
+	d.commitTimerMu.Lock()
+	defer d.commitTimerMu.Unlock()
+	if d.commitTimer != nil {
+		d.commitTimer.Stop()
+	}
+	d.commitTimer = time.AfterFunc(commitTranscriptTimeout, func() {
+		slog.Warn("voice: transcript timeout — xAI silent after commit; unsticking FSM")
+		if d.fsm != nil {
+			_ = d.fsm.Handle(voiceEvent{kind: evTranscriptFailed})
+		}
+	})
+}
+
+func (d *bridgeDeps) cancelCommitTimeout() {
+	d.commitTimerMu.Lock()
+	defer d.commitTimerMu.Unlock()
+	if d.commitTimer != nil {
+		d.commitTimer.Stop()
+		d.commitTimer = nil
+	}
 }
 
 func (d *bridgeDeps) InjectSystemNote(text string, m grok.ResponseModalities) error {
@@ -665,27 +711,10 @@ func (vb *VoiceBridge) completeTask(pt *pendingTask, result string, taskErr erro
 	delete(vb.tasks, pt.id)
 	vb.tasksMu.Unlock()
 
-	// Persist the worker's full output to the log as a system entry.
-	// The chat panel renders this collapsed-by-default with the worker
-	// name as a header (UI work lands in 1d); Grok sees it as part of
-	// its conversation context on replay.
-	logRole := "system"
 	logKind := "task_complete"
-	logContent := result
 	if taskErr != nil {
 		logKind = "task_failed"
-		logContent = fmt.Sprintf("error: %v", taskErr)
 	}
-	vb.logAppend(GrokLogEntry{
-		Role:    logRole,
-		Content: logContent,
-		Meta: map[string]any{
-			"kind":     logKind,
-			"agent":    pt.agent,
-			"task_id":  pt.id,
-			"task":     pt.task,
-		},
-	})
 
 	var note string
 	if taskErr != nil {
@@ -707,6 +736,45 @@ func (vb *VoiceBridge) completeTask(pt *pendingTask, result string, taskErr erro
 				"user asked for a list, give them the list.\n\n"+
 				"---\n%s\n---",
 			pt.agent, pt.id, pt.task, result)
+	}
+
+	// Persist as a single system entry with rich metadata. The FSM
+	// will dispatch the same `note` into Grok's conversation; it must
+	// NOT log again or we get the duplicate-system-entry pattern that
+	// 🎯T18-related transcripts revealed.
+	vb.logAppend(GrokLogEntry{
+		Role:    "system",
+		Content: note,
+		Meta: map[string]any{
+			"kind":    logKind,
+			"agent":   pt.agent,
+			"task_id": pt.id,
+			"task":    pt.task,
+		},
+	})
+
+	// Broadcast a worker_note event to the chat panel so the user sees
+	// the worker's output rendered distinctly (centred, dim, collapsible)
+	// rather than mistaking it for an assistant turn (🎯T23). The
+	// content is the raw worker output (success) or error message
+	// (failure) — NOT the wrapped directive prose that Grok consumes.
+	displayContent := result
+	if taskErr != nil {
+		displayContent = fmt.Sprintf("%v", taskErr)
+	}
+	vb.mu.Lock()
+	ws := vb.voiceWS
+	wsCtx := vb.voiceCtx
+	vb.mu.Unlock()
+	if ws != nil {
+		vb.sendJSON(ws, wsCtx, map[string]any{
+			"type":    "worker_note",
+			"kind":    logKind,
+			"agent":   pt.agent,
+			"task_id": pt.id,
+			"task":    pt.task,
+			"content": displayContent,
+		})
 	}
 
 	vb.mu.Lock()

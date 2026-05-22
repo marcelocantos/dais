@@ -322,9 +322,20 @@ func (f *voiceFSM) handleCommitting(ev voiceEvent) error {
 		return f.transition(stateResponding, ev, nil)
 
 	case evTranscriptFailed:
-		// xAI couldn't transcribe the audio (silence, noise, etc).
-		// Drop back to idle without generating a response.
+		// xAI couldn't transcribe the audio (silence, noise, or just
+		// silently dropped). Drop back to idle without generating a
+		// response. Discard any audio that was buffered during the
+		// wedged COMMITTING period — it belongs to attempted next-
+		// turn presses that were rejected; we don't want it flushed
+		// into the next legitimate utterance.
 		slog.Info("voice fsm: transcript failed — returning to idle")
+		f.pendingAudio = nil
+		// Tell the browser the turn was lost so the user knows to
+		// retry, rather than waiting forever for a response that's
+		// never coming.
+		f.deps.NotifyBrowser(map[string]any{
+			"type": "transcript_failed",
+		})
 		return f.transition(stateIdle, ev, nil)
 
 	case evAudioFrame:
@@ -422,7 +433,10 @@ func (f *voiceFSM) dispatchWorkerNote(ev voiceEvent) error {
 		slog.Error("voice fsm: inject system note failed", "err", err)
 		return nil
 	}
-	f.deps.LogSystem(ev.workerNote, nil)
+	// Note: the caller (completeTask) already persisted this event to
+	// the JSONL log with full metadata. Don't log again here — that's
+	// what produced the duplicate "raw result + wrapped note" pairs in
+	// the transcript.
 	return f.transition(stateResponding, ev, nil)
 }
 
