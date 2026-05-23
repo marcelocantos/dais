@@ -13,17 +13,9 @@ struct ConnectView: View {
             QRScannerView(
                 onScanArtifact: { artifact in
                     // Persist for the next launch — the production
-                    // artifact-driven WKWebView path picks it up. Full
-                    // Connection-level artifact integration is the
-                    // remaining T14.1 work; for now Keychain hand-off
-                    // covers the developer flow.
+                    // artifact-driven WKWebView path picks it up at
+                    // ContentView's PigeonAccount.shared.load().
                     try? PigeonAccount.shared.save(artifact)
-                },
-                onScan: { host, port in
-                    connection.connect(to: host, port: port)
-                },
-                onScanURL: { url in
-                    connection.connect(to: url)
                 }
             )
             .ignoresSafeArea()

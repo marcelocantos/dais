@@ -11,10 +11,10 @@ private let logger = Logger(subsystem: "com.marcelocantos.jevons", category: "Je
 
 /// Connection mode determines how the bridge communicates with jevond.
 enum BridgeMode {
-    /// Direct LAN connection via WebSocket (http://host:port).
+    /// Direct LAN connection via WebSocket (http://host:port). Used by
+    /// the simulator and any fallback debug flow that wants a plain
+    /// WebSocket without pigeon framing.
     case direct(URL)
-    /// Relay connection via pigeon QUIC (legacy raw host/port form).
-    case relay(host: String, port: UInt16, instanceID: String)
     /// Artifact-driven relay connection (the production pigeon flow):
     /// PigeonConn.connect(artifact:) extracts host/port/instance from
     /// the artifact and derives the matching E2E channel.
@@ -144,8 +144,6 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
         switch mode {
         case .direct(let serverURL):
             connectChatWebSocket(serverURL)
-        case .relay(let host, let port, let instanceID):
-            connectChatTern(host: host, port: port, instanceID: instanceID)
         case .relayArtifact(let artifact):
             connectChatArtifact(artifact)
         }
@@ -228,23 +226,6 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
 
     // MARK: Relay mode: PigeonConn
 
-    private func connectChatTern(host: String, port: UInt16, instanceID: String) {
-        Task {
-            do {
-                let conn = try await PigeonConn.connect(
-                    host: host, port: port, instanceID: instanceID
-                )
-                self.pigeonConn = conn
-                logger.info("Chat connected via tern relay (instance: \(instanceID))")
-                injectJS("window._jevonsTransport._onOpen()")
-                await ternReceiveLoop(conn)
-            } catch {
-                logger.error("Tern connect failed: \(error.localizedDescription)")
-                injectError("Relay connection failed: \(error.localizedDescription)")
-            }
-        }
-    }
-
     private func ternReceiveLoop(_ conn: PigeonConn) async {
         while !Task.isCancelled {
             let data: Data
@@ -299,7 +280,7 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
                     logger.error("Chat send failed: \(error.localizedDescription)")
                 }
             }
-        case .relay, .relayArtifact:
+        case .relayArtifact:
             guard let conn = pigeonConn else { return }
             Task {
                 do {
@@ -329,7 +310,7 @@ final class JevonsBridge: NSObject, WKScriptMessageHandler {
         switch mode {
         case .direct(let serverURL):
             startVoiceWebSocket(serverURL)
-        case .relay, .relayArtifact:
+        case .relayArtifact:
             // TODO: Route voice through pigeon StreamChannel.
             // For now, voice only works in direct mode.
             injectVoiceEvent(["type": "error", "error": "Voice over relay not yet supported. Connect directly to use voice."])

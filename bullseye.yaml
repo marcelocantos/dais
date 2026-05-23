@@ -207,7 +207,7 @@ targets:
     discovered: 2026-03-21
   T14.1:
     name: Adopt pigeon's PairingArtifact / PairingHost / CredentialStore primitives
-    status: identified
+    status: converging
     value: 0.0
     cost: 0.0
     acceptance:
@@ -220,7 +220,10 @@ targets:
     - App launch checks PIGEON_PAIRING_ARTIFACT env var first (decode + persist), then loads from credential store → connectWithArtifact, falls back to QR scanner on ErrPairingExpired / ErrNoCredential
     - 'End-to-end smoke (developer flow): `xcrun devicectl ... process launch --environment-variables PIGEON_PAIRING_ARTIFACT=$(pigeon pair ...)` works zero-touch on the iPad'
     - 'End-to-end smoke (user flow): pair via QR on iPad → send chat message → force-expire artifact → re-pair UI fires'
-    context: Pigeon v0.19.0 ships PairingArtifact + PairingHost + CredentialStore + ConnectWithArtifact across Go/Swift/Kotlin, plus Swift PigeonConn.connect(artifact:) and a `pigeon pair` subcommand. This sub-target adopts those primitives, deleting the bespoke key/QR/pairing code in jevonsd and the manual PigeonConn.connect plumbing in the iOS app. The developer-flow deploy path uses `pigeon pair` to mint an artifact, passes it to the iOS app via PIGEON_PAIRING_ARTIFACT env var on launch (no QR scan needed), and registers the server record with jevonsd via --add-credential. End-user pairing remains QR-driven. See docs/plans/pigeon-migration.md for the 13-step migration.
+    context: |
+      Pigeon v0.19.0 ships PairingArtifact + PairingHost + CredentialStore + ConnectWithArtifact across Go/Swift/Kotlin, plus Swift PigeonConn.connect(artifact:) and a `pigeon pair` subcommand. This sub-target adopts those primitives, deleting the bespoke key/QR/pairing code in jevonsd and the manual PigeonConn.connect plumbing in the iOS app. The developer-flow deploy path uses `pigeon pair` to mint an artifact, passes it to the iOS app via PIGEON_PAIRING_ARTIFACT env var on launch (no QR scan needed), and registers the server record with jevonsd via --add-credential. End-user pairing remains QR-driven. See docs/plans/pigeon-migration.md for the 13-step migration.
+
+      Status (2026-05-23): code-side migration complete. Server uses PairingHost.Mint + CredentialStore; relay derives the E2E channel from the persisted PairingRecord. iOS has PigeonAccount (KeychainCredentialStore wrapper), env-var ingestion at launch, artifact-only QR scanner, and JevonsBridge collapsed to {direct, relayArtifact}. Legacy Transport.swift, BridgeMode.relay, connectChatTern, and the jevons://+ws:// QR parsers are gone. Remaining: device smoke tests (developer-flow xcrun deploy + user-flow QR pair-expire-repair).
     origin: manual
     discovered: 2026-04-25
   T15:

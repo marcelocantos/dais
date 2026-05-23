@@ -8,18 +8,13 @@ import UIKit
 import Vision
 
 /// A camera-based scanner that detects pigeon PairingArtifacts (QR or
-/// text via OCR fallback). Legacy host/port and ws:// callbacks remain
-/// for the simulator/dev path until the WebSocket fallback is removed.
+/// text via OCR fallback).
 struct QRScannerView: UIViewControllerRepresentable {
     var onScanArtifact: ((PairingArtifact) -> Void)?
-    var onScan: ((_ host: String, _ port: Int) -> Void)?
-    var onScanURL: ((_ url: URL) -> Void)?
 
     func makeUIViewController(context: Context) -> QRScannerViewController {
         let vc = QRScannerViewController()
         vc.onScanArtifact = onScanArtifact
-        vc.onScan = onScan
-        vc.onScanURL = onScanURL
         return vc
     }
 
@@ -28,8 +23,6 @@ struct QRScannerView: UIViewControllerRepresentable {
 
 final class QRScannerViewController: UIViewController {
     var onScanArtifact: ((PairingArtifact) -> Void)?
-    var onScan: ((_ host: String, _ port: Int) -> Void)?
-    var onScanURL: ((_ url: URL) -> Void)?
 
     private let captureSession = AVCaptureSession()
     private var previewLayer: AVCaptureVideoPreviewLayer?
@@ -125,7 +118,7 @@ final class QRScannerViewController: UIViewController {
         }
     }
 
-    private func handleResult(_ result: ScanResult) {
+    private func handleResult(_ artifact: PairingArtifact) {
         guard !hasScanned else { return }
         hasScanned = true
         captureSession.stopRunning()
@@ -133,31 +126,16 @@ final class QRScannerViewController: UIViewController {
         let generator = UINotificationFeedbackGenerator()
         generator.notificationOccurred(.success)
 
-        switch result {
-        case .artifact(let artifact):
-            onScanArtifact?(artifact)
-        case .hostPort(let host, let port):
-            onScan?(host, port)
-        case .url(let url):
-            onScanURL?(url)
-        }
+        onScanArtifact?(artifact)
     }
-}
-
-// MARK: - Scan Result
-
-private enum ScanResult {
-    case artifact(PairingArtifact)
-    case hostPort(String, Int)
-    case url(URL)
 }
 
 // MARK: - QR Metadata Delegate
 
 private final class MetadataDelegate: NSObject, AVCaptureMetadataOutputObjectsDelegate {
-    private let onResult: (ScanResult) -> Void
+    private let onResult: (PairingArtifact) -> Void
 
-    init(onResult: @escaping (ScanResult) -> Void) {
+    init(onResult: @escaping (PairingArtifact) -> Void) {
         self.onResult = onResult
     }
 
@@ -169,10 +147,10 @@ private final class MetadataDelegate: NSObject, AVCaptureMetadataOutputObjectsDe
         guard let object = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
               object.type == .qr,
               let value = object.stringValue,
-              let result = parseURL(value) else {
+              let artifact = parseArtifact(value) else {
             return
         }
-        onResult(result)
+        onResult(artifact)
     }
 }
 
@@ -182,11 +160,11 @@ private final class MetadataDelegate: NSObject, AVCaptureMetadataOutputObjectsDe
 /// All state is accessed only from the video output queue — no
 /// main actor isolation issues.
 private final class OCRVideoDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
-    private let onResult: (ScanResult) -> Void
+    private let onResult: (PairingArtifact) -> Void
     private var lastTime: CFAbsoluteTime = 0
     private var found = false
 
-    init(onResult: @escaping (ScanResult) -> Void) {
+    init(onResult: @escaping (PairingArtifact) -> Void) {
         self.onResult = onResult
     }
 
@@ -206,9 +184,9 @@ private final class OCRVideoDelegate: NSObject, AVCaptureVideoDataOutputSampleBu
             for observation in results {
                 guard let candidate = observation.topCandidates(1).first else { continue }
                 let text = candidate.string.trimmingCharacters(in: .whitespaces)
-                if let result = parseURL(text) {
+                if let artifact = parseArtifact(text) {
                     self.found = true
-                    self.onResult(result)
+                    self.onResult(artifact)
                     return
                 }
             }
@@ -221,33 +199,16 @@ private final class OCRVideoDelegate: NSObject, AVCaptureVideoDataOutputSampleBu
     }
 }
 
-// MARK: - URL Parsing
+// MARK: - Artifact Parsing
 
-private func parseURL(_ string: String) -> ScanResult? {
+/// Decodes a pigeon PairingArtifact from its canonical base64url text
+/// encoding — the form emitted by `pigeon pair --format=text` and by
+/// jevonsd's `--pair` flag. Returns nil if the input does not look
+/// like a token or fails to decode.
+private func parseArtifact(_ string: String) -> PairingArtifact? {
     let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-
-    // Pigeon PairingArtifact (canonical base64url text encoding from
-    // `pigeon pair --format=text` or jevonsd's --pair flag). Matches
-    // a long alphanumeric token; let the decoder validate.
-    if trimmed.count >= 64,
-       trimmed.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }),
-       let artifact = try? PairingArtifact.fromText(trimmed) {
-        return .artifact(artifact)
-    }
-
-    // Legacy jevon:// scheme (kept until simulator/dev path is migrated).
-    if let url = URLComponents(string: trimmed),
-       url.scheme == "jevons",
-       let host = url.host, !host.isEmpty,
-       let port = url.port {
-        return .hostPort(host, port)
-    }
-
-    // Legacy ws:// or wss:// relay URL.
-    if let url = URL(string: trimmed),
-       (url.scheme == "ws" || url.scheme == "wss") {
-        return .url(url)
-    }
-
-    return nil
+    guard trimmed.count >= 64,
+          trimmed.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" })
+    else { return nil }
+    return try? PairingArtifact.fromText(trimmed)
 }
