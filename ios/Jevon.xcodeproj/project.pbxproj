@@ -15,7 +15,6 @@
 		11130BDE794C601348043619 /* llex.c in Sources */ = {isa = PBXBuildFile; fileRef = 1D651B93285F81BC87BCE2A6 /* llex.c */; settings = {COMPILER_FLAGS = "-w"; }; };
 		147768426229A9249833D097 /* lfunc.c in Sources */ = {isa = PBXBuildFile; fileRef = 277306B452F6936E83EF941F /* lfunc.c */; settings = {COMPILER_FLAGS = "-w"; }; };
 		19A88755100E996AB4F9FC9A /* VoiceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DF3E0AF96541F84BE854A71 /* VoiceManager.swift */; };
-		19FA16A8F00BB2160548CC49 /* Transport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 401D834680E912FCDB905BF9 /* Transport.swift */; };
 		1B1B00CE30C39F1B201694F5 /* JevonsApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4938C85E06FC23370A01E1E0 /* JevonsApp.swift */; };
 		1B28C489BE42CEB5BA3A3FE5 /* LuaRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02031B5F0DB6FF33848B61E0 /* LuaRuntime.swift */; };
 		20F257D130EB53F10D2B5272 /* ldblib.c in Sources */ = {isa = PBXBuildFile; fileRef = 9801BF014B0D2CA0FAC739F0 /* ldblib.c */; settings = {COMPILER_FLAGS = "-w"; }; };
@@ -85,7 +84,6 @@
 		2B72703EC33591AE9BE6329B /* lua.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = lua.h; sourceTree = "<group>"; };
 		2D76EA1D218EFD6A4B4121FD /* lgc.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = lgc.h; sourceTree = "<group>"; };
 		32CCA0A2734DF00E8974EE7A /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
-		401D834680E912FCDB905BF9 /* Transport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Transport.swift; sourceTree = "<group>"; };
 		42C10E5A9F7CAEBF3C7E9E90 /* lundump.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = lundump.c; sourceTree = "<group>"; };
 		4444AC4DF2B123416F2DAFA8 /* lstate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = lstate.h; sourceTree = "<group>"; };
 		451F1BA6F92FCE68B784C589 /* lobject.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = lobject.c; sourceTree = "<group>"; };
@@ -270,7 +268,6 @@
 				51D98B6D4193CCFF5327F735 /* SessionService.swift */,
 				76A7C913DA907C26DFCB07BE /* SessionSummary.swift */,
 				EF9D3D79BB07B91D322731C5 /* SyncPeer.swift */,
-				401D834680E912FCDB905BF9 /* Transport.swift */,
 				D9A55D0E81BA40F9048296D3 /* ViewNode.swift */,
 				5DF3E0AF96541F84BE854A71 /* VoiceManager.swift */,
 			);
@@ -419,7 +416,6 @@
 				3790B003B6721505C7EE80E5 /* SessionService.swift in Sources */,
 				71916510B2BDB7A1D72BF877 /* SessionSummary.swift in Sources */,
 				DD2008437EAF5D4B7FDB3903 /* SyncPeer.swift in Sources */,
-				19FA16A8F00BB2160548CC49 /* Transport.swift in Sources */,
 				786E8DE692F4B5EEACF73105 /* ViewNode.swift in Sources */,
 				19A88755100E996AB4F9FC9A /* VoiceManager.swift in Sources */,
 				0A894C21B2C9E40F57E05AE7 /* WebUIView.swift in Sources */,
