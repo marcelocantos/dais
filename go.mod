@@ -9,6 +9,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834
 	github.com/coder/websocket v1.8.14
 	github.com/fsnotify/fsnotify v1.9.0
+	github.com/gen2brain/malgo v0.11.25
 	github.com/google/uuid v1.6.0
 	github.com/marcelocantos/claudia v0.12.0
 	github.com/marcelocantos/pigeon v0.19.0
